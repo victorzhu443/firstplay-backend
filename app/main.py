@@ -13,8 +13,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "http://localhost:3001", 
-        "https://*.vercel.app"  # Allow all Vercel preview deployments
+        "http://localhost:3001",
+        "https://firstplay-frontend.vercel.app",  # Your production domain
+        "https://*.vercel.app"  # All Vercel preview deployments
     ],
     allow_credentials=True,
     allow_methods=["*"],
