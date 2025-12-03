@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import resume, job, analysis, pipeline
+from app.db import engine, Base
+from app.models import Resume, JobDescription, GapAnalysis, ProjectPlan, ImprovedResume
 
 app = FastAPI(
     title="FirstPlay Coach API",
@@ -8,19 +10,26 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# CORS middleware for frontend communication
+# Create tables on startup
+@app.on_event("startup")
+async def startup_event():
+    Base.metadata.create_all(bind=engine)
+    print("✅ Database tables created!")
+
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
-        "https://firstplay-frontend.vercel.app",  # Your production domain
-        "https://*.vercel.app"  # All Vercel preview deployments
+        "https://firstplay-frontend.vercel.app",
+        "https://*.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # Include routers
 app.include_router(resume.router)
 app.include_router(job.router)
