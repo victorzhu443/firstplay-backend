@@ -3,8 +3,12 @@ LangChain chain for generating project ideas based on skill gaps.
 """
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from app.llm_client import get_llm
+from app.llm_client import get_llm, invoke_with_retry
 from app.schemas import ProjectPlanParsed
+
+# Deliberately creative: project ideas benefit from variety. Retries escalate
+# from here rather than from 0.0, so the chain keeps its intended character.
+GENERATION_TEMPERATURE = 0.7
 from typing import Dict
 
 # Create the parser
@@ -39,14 +43,18 @@ Each project should be practical, portfolio-worthy, and teach real-world develop
 Please generate 3-5 project ideas that will help this student develop the missing skills, especially the required ones.""")
 ])
 
-def create_project_generation_chain():
+def create_project_generation_chain(temperature: float = GENERATION_TEMPERATURE):
     """
     Creates a LangChain runnable for generating project ideas.
-    
+
+    Args:
+        temperature: Sampling temperature; raised on retry when the model's
+            output fails validation
+
     Returns:
         A chain that takes gap analysis and returns ProjectPlanParsed
     """
-    llm = get_llm(temperature=0.7)  # Higher temperature for more creative ideas
+    llm = get_llm(temperature=temperature)  # Higher default for creative ideas
     
     # Create the chain: prompt | llm | parser
     chain = (
@@ -69,23 +77,22 @@ def generate_projects(gap_analysis: Dict) -> ProjectPlanParsed:
     
     Returns:
         ProjectPlanParsed: List of project ideas
-    
+
     Raises:
-        Exception: If generation fails
+        LLMError: If generation fails; see app.exceptions for the subtypes
     """
-    chain = create_project_generation_chain()
-    
     # Format skills for the prompt
     overlapping = ", ".join(gap_analysis.get("overlapping_skills", [])) or "None"
     missing_required = ", ".join(gap_analysis.get("missing_required_skills", [])) or "None"
     missing_preferred = ", ".join(gap_analysis.get("missing_preferred_skills", [])) or "None"
     
-    try:
-        result = chain.invoke({
+    return invoke_with_retry(
+        create_project_generation_chain,
+        {
             "overlapping_skills": overlapping,
             "missing_required_skills": missing_required,
-            "missing_preferred_skills": missing_preferred
-        })
-        return result
-    except Exception as e:
-        raise Exception(f"Failed to generate projects: {str(e)}")
+            "missing_preferred_skills": missing_preferred,
+        },
+        description="Failed to generate projects",
+        base_temperature=GENERATION_TEMPERATURE,
+    )

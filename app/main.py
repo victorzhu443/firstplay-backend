@@ -16,15 +16,19 @@ async def startup_event():
     Base.metadata.create_all(bind=engine)
     print("✅ Database tables created!")
 
-# CORS middleware
+# CORS middleware.
+# `allow_origins` is matched by exact string comparison, so the previous
+# "https://*.vercel.app" entry matched nothing and every Vercel preview
+# deployment was silently blocked. Wildcards belong in allow_origin_regex.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:3001",
         "https://firstplay-frontend.vercel.app",
-        "https://*.vercel.app"
     ],
+    # Vercel preview deployments: <project>-<hash>-<scope>.vercel.app
+    allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

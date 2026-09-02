@@ -16,7 +16,7 @@ class AnalyzeRequest(BaseModel):
     job_id: int
 
 @router.post("/analyze")
-async def analyze(
+def analyze(
     request: AnalyzeRequest,
     db: Session = Depends(get_db)
 ):
@@ -88,7 +88,7 @@ async def analyze(
         "gap_analysis": gap_result
     }
 @router.post("/projects")
-async def generate_project_ideas(
+def generate_project_ideas(
     analysis_id: int,
     db: Session = Depends(get_db)
 ):

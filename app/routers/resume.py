@@ -10,8 +10,14 @@ import json
 
 router = APIRouter(prefix="/api/resume", tags=["resume"])
 
+# NOTE: these handlers are deliberately sync (`def`, not `async def`).
+# They do blocking work — PDF extraction, synchronous SQLAlchemy queries, and
+# LangChain's blocking `.invoke()` — and FastAPI runs sync handlers in a
+# threadpool. Declared `async def`, the same code would run *on the event
+# loop*, so one 30s LLM call would stall every other request in the worker,
+# including /health.
 @router.post("/upload")
-async def upload_resume(
+def upload_resume(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -43,16 +49,19 @@ async def upload_resume(
             text = ""
             for page in pdf.pages:
                 text += page.extract_text() or ""
-        
-        if not text.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="Could not extract text from PDF. File may be corrupted or empty."
-            )
     except Exception as e:
         raise HTTPException(
             status_code=400,
             detail=f"Error processing PDF: {str(e)}"
+        )
+
+    # Checked outside the try: raised inside, this HTTPException was caught by
+    # the `except Exception` above and re-wrapped, so the client saw the
+    # doubly-nested "Error processing PDF: 400: Could not extract text...".
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract text from PDF. File may be corrupted or empty."
         )
     
     # Save to database
@@ -73,7 +82,7 @@ async def upload_resume(
     }
 
 @router.post("/parse")
-async def parse_resume(
+def parse_resume(
     resume_id: int,
     db: Session = Depends(get_db)
 ):
@@ -122,7 +131,7 @@ async def parse_resume(
         )
 
 @router.post("/improve")
-async def improve_resume_endpoint(
+def improve_resume_endpoint(
     resume_id: int,
     job_id: int,
     db: Session = Depends(get_db)
@@ -166,11 +175,15 @@ async def improve_resume_endpoint(
             detail="Job description must be parsed first. Call POST /api/job/parse"
         )
     
-    # Load gap analysis
+    # Load gap analysis. Ordered explicitly: POST /api/analyze inserts a new
+    # row every time it runs, so a re-analysed pair has several. Without an
+    # order_by, SQLite returns the lowest rowid — the *oldest* analysis — so
+    # improving a resume after re-running the analysis silently used stale
+    # gap data.
     gap_analysis = db.query(GapAnalysis).filter(
         GapAnalysis.resume_id == resume_id,
         GapAnalysis.job_id == job_id
-    ).first()
+    ).order_by(GapAnalysis.created_at.desc(), GapAnalysis.id.desc()).first()
     
     if not gap_analysis:
         raise HTTPException(
