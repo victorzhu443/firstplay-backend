@@ -78,6 +78,11 @@ Computer Science". Nothing in a resume's skills list can ever match those, so
 they would sit in `missing_required_skills` permanently, and that list is what
 the project generator is asked to build a portfolio project around.
 
+It also reads beyond the skills section. A tool named only in an experience
+bullet or a project description counts as `weak_skills` — weaker evidence than a
+declared skill, but enough that the candidate is not told to go and learn
+something they have demonstrably used.
+
 **Failure behaviour.** Failures are an append-only list of
 `{node, error_type, message}` on the state, and a conditional edge after each
 node ends the run at the point of failure. A run that breaks at node 1 does not
@@ -120,7 +125,7 @@ Full interactive docs at `/docs`. The frontend uses the four endpoints marked �
 
 | Endpoint | Description |
 |---|---|
-| ★ `POST /api/resume/upload` | `multipart/form-data` with `file` (PDF). Extracts text with `pdfplumber`. → `{resume_id, original_filename, raw_text_preview}` |
+| ★ `POST /api/resume/upload` | `multipart/form-data` with `file` (PDF), **max 5 MB**. Extracts text with `pdfplumber`. → `{resume_id, original_filename, raw_text_preview}` |
 | `POST /api/resume/parse?resume_id=` | Runs node 1 alone. → `ResumeParsed` |
 | `POST /api/resume/improve?resume_id=&job_id=` | Runs node 5 alone. Requires both to be parsed and the gap analysis to exist. → `ImprovedResumeParsed` |
 
@@ -129,7 +134,7 @@ Full interactive docs at `/docs`. The frontend uses the four endpoints marked �
 | Endpoint | Description |
 |---|---|
 | ★ `POST /api/job/description/manual` | `{jd_text}`, minimum 50 characters. → `{job_id, text_preview}` |
-| `POST /api/job/url` | `{url}`. Fetches and strips the posting with BeautifulSoup. → `{job_id, text_preview}` |
+| `POST /api/job/url` | `{url}`. Fetches and strips the posting with BeautifulSoup. Response body capped at 2 MB, at most 5 redirects, and each hop is re-checked against private address ranges — otherwise the endpoint is a proxy into localhost and the internal network for anyone who can call it. → `{job_id, text_preview}` |
 | `POST /api/job/parse?job_id=` | Runs node 2 alone. → `JobParsed` |
 
 ### Analysis
@@ -221,16 +226,20 @@ cd firstplay-backend
 
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 
 cp .env.example .env               # then add your OPENAI_API_KEY
+
+alembic upgrade head               # create the schema
 
 uvicorn app.main:app --reload
 ```
 
 The API serves on http://localhost:8000, docs on http://localhost:8000/docs.
-Tables are created on startup, so `firstplay.db` appears on first run and needs
-no migration step.
+
+The schema is managed by Alembic, not created at startup, so `alembic upgrade
+head` is a required step on a fresh checkout and after any model change. It is
+idempotent, and production runs it on every start.
 
 To run the frontend against it, set `NEXT_PUBLIC_API_URL=http://localhost:8000`
 in the frontend's `.env.local`. Ports 3000 and 3001 are already in the CORS
@@ -241,52 +250,49 @@ allowlist in `app/main.py`.
 | Variable | Required | Notes |
 |---|---|---|
 | `OPENAI_API_KEY` | yes | Four of the five pipeline nodes need it |
-| `DATABASE_URL` | no | **Currently ignored** — see [Known limitations](#known-limitations) |
-| `DEBUG` | no | Read from `.env` but not yet consumed |
-| `ALLOWED_ORIGINS` | no | Not consumed; origins are hardcoded in `app/main.py` |
+| `DATABASE_URL` | no | Defaults to `sqlite:///./firstplay.db`. Production sets a managed Postgres URL. Render emits a `postgres://` scheme, which SQLAlchemy 2.x rejects; `app/db.py` normalises it |
+| `LOG_LEVEL` | no | Level for the stdout handler. Defaults to `INFO` |
+
+CORS origins are not configurable by environment: production origins are listed
+in `app/main.py`, with Vercel previews admitted by `allow_origin_regex`.
 
 ---
 
 ## Running the tests
 
-**179 tests.** One setup step is needed, because the PDF fixture is generated
-rather than committed:
+**234 tests, no setup required.**
 
 ```bash
 source .venv/bin/activate
-
-# The test PDF is gitignored (tests/fixtures/*.pdf), so a fresh clone does not
-# have it and 6 tests fail plus 5 skip without it. reportlab is not in
-# requirements.txt because only this script needs it.
-pip install reportlab
-python tests/fixtures/create_test_pdf.py
-
 pytest tests/ -v
 ```
 
-Expected, on a cold database with no `OPENAI_API_KEY` set:
+Expected, on a fresh clone with a cold database and no `OPENAI_API_KEY` set:
 
 ```
-179 passed
+234 passed
 ```
 
 The suite mocks every LLM call, so it runs in about a second, costs nothing, and
-needs no credentials. `conftest.py` handles both of the things that used to make
-that untrue:
+needs no credentials. `conftest.py` removes each thing that used to be a manual
+prerequisite:
 
 - It seeds a dummy `OPENAI_API_KEY` at import time, before `app.llm_client`
-  calls `load_dotenv()`. Five tests construct a `ChatOpenAI` client without
+  calls `load_dotenv()`. Several tests construct a `ChatOpenAI` client without
   ever calling it, and `get_llm()` raises when the variable is unset. Seeding it
   here also stops a developer's real key in `.env` from being picked up.
-- A session-scoped autouse fixture creates the schema before any test runs.
-  Without it, the first run on a fresh clone failed 5 tests in
-  `test_analysis.py` with `OperationalError`, and the second run passed with
-  nothing changed: nothing reliably created tables (`main.py` creates them in a
-  startup event that never fires, because the tests build `TestClient(app)` at
-  module level rather than as a context manager), and alphabetical collection
-  put `test_analysis.py` before the `create_all()` in `test_db.py`. The run then
-  left `firstplay.db` on disk with the tables in place, hiding the failure
+- A session-scoped fixture creates the schema before any test runs, so a cold
+  database is fine. Previously the first run on a fresh clone failed 5 tests in
+  `test_analysis.py` with `OperationalError` and the second run passed with
+  nothing changed — the run itself left the tables behind, hiding the failure
   locally while breaking CI, which always starts cold.
+- A session-scoped fixture generates the sample resume PDF. It is gitignored, so
+  a fresh clone does not have it; `reportlab` is now declared in
+  `requirements-dev.txt` rather than left as an undeclared dependency of a
+  script someone had to know to run.
+
+Test-only dependencies live in `requirements-dev.txt`, so `requirements.txt`
+stays what production installs.
 
 | File | Covers |
 |---|---|
@@ -306,8 +312,9 @@ that untrue:
 
 ```
 app/
-├── main.py              FastAPI app, CORS, startup table creation
-├── db.py                SQLAlchemy engine and session
+├── main.py              FastAPI app, CORS, lifespan
+├── db.py                Engine and session; resolves DATABASE_URL
+├── logging_config.py    Stdout logging, level from LOG_LEVEL
 ├── models.py            Five ORM tables
 ├── schemas.py           Pydantic models for structured LLM output
 ├── exceptions.py        Typed LLM/pipeline failures
@@ -319,8 +326,9 @@ app/
     ├── state.py         PipelineState TypedDict, NodeFailure
     ├── nodes.py         The five node functions
     └── graph.py         Graph wiring and run_pipeline()
-conftest.py              Dummy API key + schema creation for the suite
-tests/                   179 tests
+conftest.py              Dummy API key, schema and PDF fixture for the suite
+migrations/              Alembic revisions
+tests/                   234 tests
 ```
 
 `app/pipeline/graphy.py` is not imported anywhere. It is an abandoned variant of
@@ -335,7 +343,18 @@ definitions side by side invites editing the wrong one.
 ## Deployment
 
 Deployed on Render from `render.yaml`, auto-deploying on push to `main`.
-`OPENAI_API_KEY` is set in the Render dashboard, not in the repo.
+`OPENAI_API_KEY` is set in the Render dashboard, not in the repo; `DATABASE_URL`
+is wired from the managed Postgres instance the blueprint declares, and the
+Python version is pinned so production does not drift from local.
+
+The start command is `alembic upgrade head && uvicorn ...`. Migrations run there
+rather than in a `preDeployCommand`, which is not available on every instance
+type; `alembic upgrade head` is idempotent and a no-op once the schema is
+current.
+
+`healthCheckPath` is `/health`. That is only meaningful now that blocking LLM
+calls no longer run on the event loop — previously a slow pipeline run could
+fail the check and have the platform restart the service mid-request.
 
 The frontend is on Vercel and reaches this service through
 `NEXT_PUBLIC_API_URL`. Production origins are listed in `allow_origins` in
@@ -348,31 +367,18 @@ all, so patterns belong in the regex, never the list.
 
 ## Known limitations
 
-**SQLite on an ephemeral filesystem.** Render's free tier does not persist the
-container's disk, so `firstplay.db` is wiped on every restart and redeploy.
-Uploaded resumes and past analyses do not survive. Fine for a demo; a real
-deployment needs Postgres.
-
-**`DATABASE_URL` is ignored.** `app/db.py` hardcodes
-`sqlite:///./firstplay.db`. `render.yaml` and `.env.example` both set
-`DATABASE_URL`, which reads as though it were configurable — it is not. Pointing
-this at Postgres means changing `db.py` first.
+**Render's free Postgres instance expires.** Storage is a managed instance
+rather than a file on the container's disk, so it now survives restarts — but
+free instances are removed after a trial period. Move to a paid plan before this
+holds anything worth keeping.
 
 **Cold starts.** Measured at 47 seconds from sleep. The frontend gives no
 indication that a first request may take this long.
 
-**`weak_skills` is always empty.** `compute_gap()` returns the key as a
-placeholder. It is in the API response and in the frontend's types, but nothing
-populates it.
-
-**Skill matching is exact after normalisation.** `normalize_skill()` handles a
-short alias list (`javascript`→`js`, `postgresql`→`postgres`, and a few others)
-and then compares for equality. "Python 3" does not match "Python", and no
-alias outside that list is recognised, so the gap analysis still reports some
-skills as missing when the resume does list them. Separately, `is_skill_like()`
-rejects non-skills by pattern (years-of-experience, credentials, and anything
-longer than a few words), which is a heuristic — a genuinely long technology
-name would be dropped with them.
+**Skill filtering is a heuristic.** `is_skill_like()` rejects entries that name
+a requirement rather than a technology — years of experience, credentials, and
+anything longer than four words. A genuinely long technology name is dropped
+along with them.
 
 **No authentication or rate limiting.** Every endpoint is open, and each
 pipeline run spends four LLM calls against the deployment's API key.
