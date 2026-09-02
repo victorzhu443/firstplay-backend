@@ -11,6 +11,15 @@ from typing import Optional
 
 router = APIRouter(prefix="/api/job", tags=["job"])
 
+# The fetch was unbounded: any URL could stream arbitrarily much into the
+# worker's memory. A job posting page is far smaller than this.
+MAX_HTML_BYTES = 2 * 1024 * 1024
+
+# raw_html stored the entire scraped page, forever, for every submission. It
+# is kept only for debugging extraction, so a prefix is enough; the full text
+# that actually gets used is stored separately in extracted_text.
+MAX_STORED_HTML_BYTES = 64 * 1024
+
 class JobUrlRequest(BaseModel):
     """Request model for job URL submission"""
     url: str
@@ -46,7 +55,31 @@ async def fetch_html(url: str, timeout: int = 10) -> str:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=timeout, follow_redirects=True)
             response.raise_for_status()
+
+            # Reject an oversized body before touching response.text, which
+            # would decode the whole thing into memory first.
+            declared = response.headers.get("content-length")
+            if declared and int(declared) > MAX_HTML_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"Job posting page is too large "
+                        f"({int(declared) // 1024} KB). "
+                        f"Maximum is {MAX_HTML_BYTES // 1024} KB."
+                    )
+                )
+
+            # Servers may omit or understate content-length, so cap regardless.
+            if len(response.content) > MAX_HTML_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Job posting page exceeds {MAX_HTML_BYTES // 1024} KB."
+                )
+
             return response.text
+    except HTTPException:
+        # Ours, raised above — must not be recaught and relabelled below.
+        raise
     except httpx.TimeoutException:
         raise HTTPException(
             status_code=504,
@@ -122,7 +155,7 @@ async def submit_job_url(
     # Save to database
     job_desc = JobDescription(
         url=request.url,
-        raw_html=html,
+        raw_html=html[:MAX_STORED_HTML_BYTES],
         extracted_text=extracted_text
     )
     db.add(job_desc)
