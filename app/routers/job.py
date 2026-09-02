@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, field_validator
 from app.db import get_db
+from app.rate_limit import ingest_limit, llm_limit
 from app.models import JobDescription
 import httpx
 import ipaddress
@@ -204,7 +205,7 @@ def extract_job_text(html: str) -> str:
     
     return text
 
-@router.post("/url")
+@router.post("/url", dependencies=[Depends(ingest_limit)])
 async def submit_job_url(
     request: JobUrlRequest,
     db: Session = Depends(get_db)
@@ -267,7 +268,7 @@ class ManualJdRequest(BaseModel):
         
         return v.strip()
 
-@router.post("/description/manual")
+@router.post("/description/manual", dependencies=[Depends(ingest_limit)])
 def submit_manual_jd(
     request: ManualJdRequest,
     db: Session = Depends(get_db)
@@ -301,7 +302,7 @@ def submit_manual_jd(
     }
 
 
-@router.post("/parse")
+@router.post("/parse", dependencies=[Depends(llm_limit)])
 def parse_job(
     job_id: int,
     db: Session = Depends(get_db)

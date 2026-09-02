@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 import os
 import pdfplumber
 from app.db import get_db
+from app.rate_limit import ingest_limit, llm_limit
 from app.models import Resume, JobDescription, GapAnalysis, ImprovedResume
 from app.chains.resume_parser import parse_resume_text
 from app.chains.resume_improver import improve_resume
@@ -30,7 +31,7 @@ def _upload_size(file: UploadFile) -> int:
 # threadpool. Declared `async def`, the same code would run *on the event
 # loop*, so one 30s LLM call would stall every other request in the worker,
 # including /health.
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(ingest_limit)])
 def upload_resume(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -109,7 +110,7 @@ def upload_resume(
         "raw_text_preview": preview
     }
 
-@router.post("/parse")
+@router.post("/parse", dependencies=[Depends(llm_limit)])
 def parse_resume(
     resume_id: int,
     db: Session = Depends(get_db)
@@ -158,7 +159,7 @@ def parse_resume(
             detail=f"Error parsing resume: {str(e)}"
         )
 
-@router.post("/improve")
+@router.post("/improve", dependencies=[Depends(llm_limit)])
 def improve_resume_endpoint(
     resume_id: int,
     job_id: int,

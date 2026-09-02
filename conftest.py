@@ -64,6 +64,27 @@ def test_database_url(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def reset_rate_limiters():
+    """Clear rate-limit counters between tests.
+
+    The limiters are module-level, so without this they accumulate across the
+    whole session: the suite would pass only while it happened to stay under
+    the limits, and adding tests later would trip them as confusing 429s in
+    unrelated places. Tests for the limiter itself build their own.
+    """
+    from app import rate_limit
+
+    for dependency in (
+        rate_limit.pipeline_limit,
+        rate_limit.llm_limit,
+        rate_limit.ingest_limit,
+    ):
+        dependency.limiter.reset()
+
+    yield
+
+
+@pytest.fixture(autouse=True)
 def stub_dns_resolution(monkeypatch):
     """Resolve every hostname to a public address, without touching the network.
 
