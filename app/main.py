@@ -3,7 +3,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import resume, job, analysis, pipeline
 from app.db import engine, Base, SQLALCHEMY_DATABASE_URL
@@ -165,10 +165,50 @@ def read_root():
     return {
         "message": "Welcome to FirstPlay Coach API",
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
+        "ready": "/ready"
     }
 
 @app.get("/health")
 def health_check():
+    """Liveness. The process is running and serving.
+
+    Deliberately does not touch the database, and deliberately never fails
+    while the process is up: it is what makes a broken deployment reachable
+    and diagnosable from outside. Readiness is a separate question — see
+    /ready.
+    """
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness_check(response: Response):
+    """Readiness. The app can actually serve requests that use the database.
+
+    Separate from /health because the platform's health check gates a deploy.
+    Reporting healthy while the database is unusable means a broken build
+    passes its check and replaces a working one — which is how a deployment
+    with no schema went live and returned 500 on every request that touched a
+    table. Pointing the health check here makes that deploy fail instead, so
+    the previous version stays live.
+
+    Not a crash: the process keeps running, so the logs stay reachable and it
+    recovers on its own when the database comes back.
+    """
+    try:
+        missing = _missing_tables()
+    except Exception as e:
+        logger.warning("Readiness check could not reach the database: %s", e)
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "unavailable", "reason": "database unreachable"}
+
+    if missing:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {
+            "status": "unavailable",
+            "reason": "schema incomplete",
+            "missing_tables": sorted(missing),
+        }
+
+    return {"status": "ready", "tables": len(Base.metadata.tables)}
 
