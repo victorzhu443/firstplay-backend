@@ -1,20 +1,40 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import resume, job, analysis, pipeline
-from app.db import engine, Base
+from app.db import engine, Base, SQLALCHEMY_DATABASE_URL
+from app.logging_config import configure_logging
 from app.models import Resume, JobDescription, GapAnalysis, ProjectPlan, ImprovedResume
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown. Replaces the deprecated @app.on_event hooks."""
+    configure_logging()
+
+    # Log the backend, never the URL itself — a managed Postgres connection
+    # string carries the password.
+    backend = SQLALCHEMY_DATABASE_URL.split("://", 1)[0]
+    logger.info("Starting FirstPlay Coach API (database backend: %s)", backend)
+
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables ready")
+
+    yield
+
+    logger.info("Shutting down")
+
 
 app = FastAPI(
     title="FirstPlay Coach API",
     description="Resume analysis and project planning for early-career CS students",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan,
 )
-
-# Create tables on startup
-@app.on_event("startup")
-async def startup_event():
-    Base.metadata.create_all(bind=engine)
-    print("✅ Database tables created!")
 
 # CORS middleware.
 # `allow_origins` is matched by exact string comparison, so the previous
