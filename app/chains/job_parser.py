@@ -3,7 +3,7 @@ LangChain chain for parsing job description text into structured format.
 """
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from app.llm_client import get_llm
+from app.llm_client import get_llm, invoke_chain
 from app.schemas import JobParsed
 
 # Create the parser
@@ -55,14 +55,14 @@ def parse_jd_text(job_text: str) -> JobParsed:
     
     Returns:
         JobParsed: Structured job data
-    
+
     Raises:
-        Exception: If parsing fails
+        LLMError: If parsing fails; see app.exceptions for the subtypes
     """
     chain = create_job_parsing_chain()
-    
-    try:
-        result = chain.invoke({"job_text": job_text})
-        return result
-    except Exception as e:
-        raise Exception(f"Failed to parse job description: {str(e)}")
+
+    return invoke_chain(
+        chain,
+        {"job_text": job_text},
+        description="Failed to parse job description",
+    )

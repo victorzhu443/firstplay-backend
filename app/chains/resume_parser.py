@@ -3,7 +3,7 @@ LangChain chain for parsing resume text into structured format.
 """
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from app.llm_client import get_llm
+from app.llm_client import get_llm, invoke_chain
 from app.schemas import ResumeParsed
 
 # Create the parser
@@ -48,14 +48,14 @@ def parse_resume_text(resume_text: str) -> ResumeParsed:
     
     Returns:
         ResumeParsed: Structured resume data
-    
+
     Raises:
-        Exception: If parsing fails
+        LLMError: If parsing fails; see app.exceptions for the subtypes
     """
     chain = create_resume_parsing_chain()
-    
-    try:
-        result = chain.invoke({"resume_text": resume_text})
-        return result
-    except Exception as e:
-        raise Exception(f"Failed to parse resume: {str(e)}")
+
+    return invoke_chain(
+        chain,
+        {"resume_text": resume_text},
+        description="Failed to parse resume",
+    )

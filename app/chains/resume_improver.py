@@ -4,7 +4,7 @@ Rewrites bullets to follow: Action Verb + Technical Context + Metric/Impact
 """
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from app.llm_client import get_llm
+from app.llm_client import get_llm, invoke_chain
 from app.schemas import ResumeParsed, JobParsed, ImprovedResumeParsed
 from typing import Dict
 
@@ -89,9 +89,9 @@ def improve_resume(
     
     Returns:
         ImprovedResumeParsed: Improved resume with Jake-style bullets
-    
+
     Raises:
-        Exception: If improvement fails
+        LLMError: If improvement fails; see app.exceptions for the subtypes
     """
     chain = create_resume_improvement_chain()
     
@@ -106,15 +106,15 @@ def improve_resume(
         gap_analysis.get("missing_preferred_skills", [])
     )
     
-    try:
-        result = chain.invoke({
+    return invoke_chain(
+        chain,
+        {
             "resume_data": resume_data,
             "job_title": job_title,
             "required_skills": required_skills,
             "preferred_skills": preferred_skills,
             "overlapping_skills": overlapping_skills,
-            "missing_skills": missing_skills
-        })
-        return result
-    except Exception as e:
-        raise Exception(f"Failed to improve resume: {str(e)}")
+            "missing_skills": missing_skills,
+        },
+        description="Failed to improve resume",
+    )

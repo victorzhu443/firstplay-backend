@@ -3,7 +3,7 @@ LangChain chain for generating project ideas based on skill gaps.
 """
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from app.llm_client import get_llm
+from app.llm_client import get_llm, invoke_chain
 from app.schemas import ProjectPlanParsed
 from typing import Dict
 
@@ -69,9 +69,9 @@ def generate_projects(gap_analysis: Dict) -> ProjectPlanParsed:
     
     Returns:
         ProjectPlanParsed: List of project ideas
-    
+
     Raises:
-        Exception: If generation fails
+        LLMError: If generation fails; see app.exceptions for the subtypes
     """
     chain = create_project_generation_chain()
     
@@ -80,12 +80,12 @@ def generate_projects(gap_analysis: Dict) -> ProjectPlanParsed:
     missing_required = ", ".join(gap_analysis.get("missing_required_skills", [])) or "None"
     missing_preferred = ", ".join(gap_analysis.get("missing_preferred_skills", [])) or "None"
     
-    try:
-        result = chain.invoke({
+    return invoke_chain(
+        chain,
+        {
             "overlapping_skills": overlapping,
             "missing_required_skills": missing_required,
-            "missing_preferred_skills": missing_preferred
-        })
-        return result
-    except Exception as e:
-        raise Exception(f"Failed to generate projects: {str(e)}")
+            "missing_preferred_skills": missing_preferred,
+        },
+        description="Failed to generate projects",
+    )
