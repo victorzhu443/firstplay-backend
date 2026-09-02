@@ -41,19 +41,29 @@ def test_resume_parsed_validates_with_complete_data():
     assert len(resume.experience) == 1
     assert resume.experience[0].company == "StartupXYZ"
 
-def test_resume_parsed_fails_with_missing_required_fields():
-    """Test T 4.2.2: missing fields fail"""
+def test_resume_parsed_tolerates_missing_sections():
+    """
+    Test T 4.2.2 (revised): missing sections degrade to empty, they do not fail.
+
+    This test previously asserted the opposite — that an incomplete document
+    raises ValidationError. That strictness is what broke the live pipeline: the
+    model returns null for sections a sparse resume genuinely lacks, the parser
+    rejected the whole document, and the run died at node 1 of 5. Rejecting a
+    resume for having no projects is not the behaviour we want, so the contract
+    is now "parse what is there, leave the rest empty".
+    """
     incomplete_data = {
         "name": "John Doe",
-        # Missing required fields: skills, experience, projects, education
+        # No skills, experience, projects or education sections.
     }
-    
-    with pytest.raises(ValidationError) as exc_info:
-        ResumeParsed(**incomplete_data)
-    
-    # Check that validation errors mention the missing fields
-    error_msg = str(exc_info.value)
-    assert "skills" in error_msg or "field required" in error_msg.lower()
+
+    resume = ResumeParsed(**incomplete_data)
+
+    assert resume.name == "John Doe"
+    assert resume.skills == []
+    assert resume.experience == []
+    assert resume.projects == []
+    assert resume.education == []
 
 def test_resume_parsed_with_optional_fields():
     """Test that optional fields (email, phone) work"""
@@ -298,12 +308,22 @@ def test_improved_project_item():
     assert "React" in project.technologies
     assert "Socket.io" in project.bullets[0]
 
-def test_improved_resume_missing_fields():
-    """Test that missing required fields fail validation"""
+def test_improved_resume_tolerates_missing_fields():
+    """
+    Test that missing fields degrade to empty rather than failing validation.
+
+    Inverted for the same reason as test_resume_parsed_tolerates_missing_sections:
+    node 5 raising here aborts a run that has already made four successful LLM
+    calls, and the frontend renders these fields with plain falsy checks.
+    """
     incomplete_data = {
         "name": "Test User",
-        # Missing: contact, skills, experience, projects, education
+        # No contact, skills, experience, projects or education.
     }
-    
-    with pytest.raises(ValidationError):
-        ImprovedResumeParsed(**incomplete_data)
+
+    improved = ImprovedResumeParsed(**incomplete_data)
+
+    assert improved.name == "Test User"
+    assert improved.contact == ""
+    assert improved.skills == []
+    assert improved.experience == []
