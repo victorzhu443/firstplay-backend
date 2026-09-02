@@ -6,6 +6,7 @@ from app.db import get_db
 from app.models import JobDescription
 import httpx
 from bs4 import BeautifulSoup
+from starlette.concurrency import run_in_threadpool
 from typing import Optional
 
 router = APIRouter(prefix="/api/job", tags=["job"])
@@ -105,9 +106,12 @@ async def submit_job_url(
     """
     # Step 5.2: Fetch HTML
     html = await fetch_html(request.url)
-    
-    # Step 5.3: Extract job description text
-    extracted_text = extract_job_text(html)
+
+    # Step 5.3: Extract job description text.
+    # This handler stays `async def` because fetch_html genuinely awaits, but
+    # BeautifulSoup parsing of a full page is CPU-bound and would block the
+    # event loop, so it is pushed to the threadpool explicitly.
+    extracted_text = await run_in_threadpool(extract_job_text, html)
     
     if not extracted_text.strip():
         raise HTTPException(
@@ -149,7 +153,7 @@ class ManualJdRequest(BaseModel):
         return v.strip()
 
 @router.post("/description/manual")
-async def submit_manual_jd(
+def submit_manual_jd(
     request: ManualJdRequest,
     db: Session = Depends(get_db)
 ):
@@ -183,7 +187,7 @@ async def submit_manual_jd(
 
 
 @router.post("/parse")
-async def parse_job(
+def parse_job(
     job_id: int,
     db: Session = Depends(get_db)
 ):

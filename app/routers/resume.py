@@ -10,8 +10,14 @@ import json
 
 router = APIRouter(prefix="/api/resume", tags=["resume"])
 
+# NOTE: these handlers are deliberately sync (`def`, not `async def`).
+# They do blocking work — PDF extraction, synchronous SQLAlchemy queries, and
+# LangChain's blocking `.invoke()` — and FastAPI runs sync handlers in a
+# threadpool. Declared `async def`, the same code would run *on the event
+# loop*, so one 30s LLM call would stall every other request in the worker,
+# including /health.
 @router.post("/upload")
-async def upload_resume(
+def upload_resume(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -73,7 +79,7 @@ async def upload_resume(
     }
 
 @router.post("/parse")
-async def parse_resume(
+def parse_resume(
     resume_id: int,
     db: Session = Depends(get_db)
 ):
@@ -122,7 +128,7 @@ async def parse_resume(
         )
 
 @router.post("/improve")
-async def improve_resume_endpoint(
+def improve_resume_endpoint(
     resume_id: int,
     job_id: int,
     db: Session = Depends(get_db)
