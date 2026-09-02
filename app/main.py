@@ -1,7 +1,9 @@
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import resume, job, analysis, pipeline
 from app.db import engine, Base, SQLALCHEMY_DATABASE_URL
@@ -11,28 +13,101 @@ from app.models import Resume, JobDescription, GapAnalysis, ProjectPlan, Improve
 logger = logging.getLogger(__name__)
 
 
-def _warn_if_schema_missing() -> None:
-    """Fail loudly at startup rather than per-request if migrations never ran.
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-    Without this, a deployment that skipped `alembic upgrade head` starts
-    healthy and then returns OperationalError on the first request that
-    touches a table.
-    """
+# Migrating at startup is belt-and-braces for a start command that is supposed
+# to have done it already. It exists because the alternative failed in
+# production: a service whose start command is configured in the hosting
+# dashboard never runs the one in render.yaml, so `alembic upgrade head` was
+# silently skipped and the app served /health happily while every request that
+# touched a table returned 500.
+#
+# Safe for a single instance, which is what this app runs. Concurrent
+# migrations from several instances starting at once can race, so set
+# MIGRATE_ON_STARTUP=false and migrate from a release step when scaling out.
+MIGRATE_ON_STARTUP = os.getenv("MIGRATE_ON_STARTUP", "true").lower() not in (
+    "false",
+    "0",
+    "no",
+)
+
+
+def _missing_tables() -> set:
+    """Tables the models expect that the database does not have."""
     from sqlalchemy import inspect
 
-    present = set(inspect(engine).get_table_names())
-    expected = set(Base.metadata.tables)
-    missing = expected - present
+    return set(Base.metadata.tables) - set(inspect(engine).get_table_names())
 
-    if missing:
+
+def _ensure_schema() -> None:
+    """Bring the database up to head, and say plainly what happened.
+
+    Running `alembic upgrade head` here is idempotent: it is a no-op when the
+    schema is already current, so the normal case costs one query.
+    """
+    try:
+        missing = _missing_tables()
+    except Exception:
+        # Inspecting can fail outright when the database is unreachable. That
+        # must not stop the app booting: a process that exits here leaves no
+        # way to reach the logs, and /health answering is what makes the
+        # failure diagnosable from outside.
+        logger.exception(
+            "Could not inspect the database. The API will start, but requests "
+            "touching it will return errors until this is resolved."
+        )
+        return
+
+    if not missing:
+        logger.info(
+            "Database schema is present (%d tables)", len(Base.metadata.tables)
+        )
+        return
+
+    logger.warning(
+        "Database is missing %d table(s): %s", len(missing), ", ".join(sorted(missing))
+    )
+
+    if not MIGRATE_ON_STARTUP:
         logger.error(
-            "Database is missing %d table(s): %s. "
-            "Run `alembic upgrade head`.",
-            len(missing),
-            ", ".join(sorted(missing)),
+            "MIGRATE_ON_STARTUP is disabled and the schema is incomplete. "
+            "Run `alembic upgrade head`; requests touching these tables will fail."
+        )
+        return
+
+    logger.info("Applying migrations")
+
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        config = Config(str(BASE_DIR / "alembic.ini"))
+        config.set_main_option("script_location", str(BASE_DIR / "migrations"))
+        # Keep our logging handler; see the guard in migrations/env.py.
+        config.attributes["configure_logger"] = False
+        command.upgrade(config, "head")
+    except Exception:
+        # Logged rather than raised: a service that refuses to start gives no
+        # way to reach the logs on some platforms, and /health still answering
+        # makes the failure diagnosable.
+        logger.exception(
+            "Migrations failed. The API will start, but requests touching the "
+            "database will return errors until this is resolved."
+        )
+        return
+
+    still_missing = _missing_tables()
+
+    if still_missing:
+        logger.error(
+            "Migrations ran but %d table(s) are still missing: %s",
+            len(still_missing),
+            ", ".join(sorted(still_missing)),
         )
     else:
-        logger.info("Database schema is present (%d tables)", len(expected))
+        logger.info(
+            "Database schema is ready (%d tables)", len(Base.metadata.tables)
+        )
 
 
 @asynccontextmanager
@@ -45,11 +120,9 @@ async def lifespan(app: FastAPI):
     backend = SQLALCHEMY_DATABASE_URL.split("://", 1)[0]
     logger.info("Starting FirstPlay Coach API (database backend: %s)", backend)
 
-    # Schema is owned by Alembic; the deployment runs `alembic upgrade head`
-    # before this process starts. create_all() used to run here, which cannot
-    # apply a change to an existing table and would silently diverge from the
-    # migrations once both existed.
-    _warn_if_schema_missing()
+    # Schema is owned by Alembic. The start command is meant to have migrated
+    # already; this makes the app correct even when it hasn't.
+    _ensure_schema()
 
     yield
 
@@ -92,10 +165,50 @@ def read_root():
     return {
         "message": "Welcome to FirstPlay Coach API",
         "docs": "/docs",
-        "health": "/health"
+        "health": "/health",
+        "ready": "/ready"
     }
 
 @app.get("/health")
 def health_check():
+    """Liveness. The process is running and serving.
+
+    Deliberately does not touch the database, and deliberately never fails
+    while the process is up: it is what makes a broken deployment reachable
+    and diagnosable from outside. Readiness is a separate question — see
+    /ready.
+    """
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness_check(response: Response):
+    """Readiness. The app can actually serve requests that use the database.
+
+    Separate from /health because the platform's health check gates a deploy.
+    Reporting healthy while the database is unusable means a broken build
+    passes its check and replaces a working one — which is how a deployment
+    with no schema went live and returned 500 on every request that touched a
+    table. Pointing the health check here makes that deploy fail instead, so
+    the previous version stays live.
+
+    Not a crash: the process keeps running, so the logs stay reachable and it
+    recovers on its own when the database comes back.
+    """
+    try:
+        missing = _missing_tables()
+    except Exception as e:
+        logger.warning("Readiness check could not reach the database: %s", e)
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "unavailable", "reason": "database unreachable"}
+
+    if missing:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {
+            "status": "unavailable",
+            "reason": "schema incomplete",
+            "missing_tables": sorted(missing),
+        }
+
+    return {"status": "ready", "tables": len(Base.metadata.tables)}
 

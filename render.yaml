@@ -26,10 +26,12 @@ services:
     # once the schema is current.
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
-    # Now meaningful: /health used to sit behind blocking LLM calls on the
-    # event loop, so a slow pipeline run could fail the check and have the
-    # platform restart the service mid-request.
-    healthCheckPath: /health
+    # Points at readiness, not liveness. This check gates the deploy, so it
+    # must fail when the app cannot actually serve — /health reports only that
+    # the process is up, and a deployment with no schema passed it happily
+    # while returning 500 on every request that touched a table. /ready fails
+    # in that state, so the previous version stays live instead.
+    healthCheckPath: /ready
 
     envVars:
       # Pinned so production stops drifting from local. Left unset, Render

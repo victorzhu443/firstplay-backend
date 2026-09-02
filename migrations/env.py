@@ -21,7 +21,13 @@ config = context.config
 # must not carry a database password.
 config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URL)
 
-if config.config_file_name is not None:
+# fileConfig() reconfigures the root logger from alembic.ini, which removes
+# handlers the application installed. When the app runs a migration itself at
+# startup, that silences its own logging for the rest of the process, so it
+# passes configure_logger=False and keeps its handler.
+if config.config_file_name is not None and config.attributes.get(
+    "configure_logger", True
+):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
