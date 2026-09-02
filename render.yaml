@@ -1,11 +1,46 @@
+# Render blueprint.
+#
+# The previous configuration set DATABASE_URL to a SQLite file on the
+# service's own disk. Render's filesystem is ephemeral, so every deploy and
+# every restart destroyed all user data -- and the startup create_all() hid
+# it, because the tables always existed, just empty. Storage now lives in a
+# managed Postgres instance.
+databases:
+  - name: firstplay-db
+    databaseName: firstplay
+    user: firstplay
+    # Render's free Postgres instances are removed after a limited trial
+    # period; move to a paid plan before this holds anything worth keeping.
+    plan: free
+
 services:
   - type: web
     name: firstplay-backend
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    # Now meaningful: /health used to sit behind blocking LLM calls on the
+    # event loop, so a slow pipeline run could fail the check and have the
+    # platform restart the service mid-request.
+    healthCheckPath: /health
+
     envVars:
+      # Pinned so production stops drifting from local. Left unset, Render
+      # picks its current default and the interpreter changes underneath you.
+      - key: PYTHON_VERSION
+        value: 3.11.9
+
       - key: OPENAI_API_KEY
         sync: false
+
+      # Supplied by the managed instance above. Render emits a postgres://
+      # URL, which SQLAlchemy 2.x rejects; app/db.py normalises it.
       - key: DATABASE_URL
-        value: sqlite:///./firstplay.db
+        fromDatabase:
+          name: firstplay-db
+          property: connectionString
+
+      - key: LOG_LEVEL
+        value: INFO

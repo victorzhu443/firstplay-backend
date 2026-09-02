@@ -1,0 +1,13 @@
+# Development and CI dependencies.
+#   pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+
+pytest==8.3.4
+pytest-asyncio==0.24.0
+
+# Generates the sample resume PDF the upload tests read. Previously the
+# fixture was gitignored and its generator's dependency was undeclared, so a
+# fresh clone could not run the suite.
+reportlab==4.2.5
+
+ruff==0.8.4
