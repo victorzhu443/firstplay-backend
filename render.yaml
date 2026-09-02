@@ -19,7 +19,12 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    # Migrations run in the start command rather than a preDeployCommand,
+    # which is not available on every instance type. `alembic upgrade head`
+    # is idempotent, so running it on each start is safe, and it is a no-op
+    # once the schema is current.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
     # Now meaningful: /health used to sit behind blocking LLM calls on the
     # event loop, so a slow pipeline run could fail the check and have the
