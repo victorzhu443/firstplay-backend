@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
+import os
 import pdfplumber
 from app.db import get_db
 from app.models import Resume, JobDescription, GapAnalysis, ImprovedResume
@@ -9,6 +10,19 @@ from app.schemas import ResumeParsed, JobParsed
 import json
 
 router = APIRouter(prefix="/api/resume", tags=["resume"])
+
+# pdfplumber loads the whole document into memory, and the upload was
+# previously unbounded: a large file could exhaust the worker. A resume that
+# does not fit in this is not a resume.
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+def _upload_size(file: UploadFile) -> int:
+    """Size of an upload without reading it into memory."""
+    file.file.seek(0, os.SEEK_END)
+    size = file.file.tell()
+    file.file.seek(0)
+    return size
 
 # NOTE: these handlers are deliberately sync (`def`, not `async def`).
 # They do blocking work — PDF extraction, synchronous SQLAlchemy queries, and
@@ -42,7 +56,21 @@ def upload_resume(
             status_code=400,
             detail="Only PDF files are supported"
         )
-    
+
+    size = _upload_size(file)
+    if size > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File is too large ({size // 1024} KB). "
+                f"Maximum is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+            )
+        )
+
+    if size == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+
     # Extract text from PDF
     try:
         with pdfplumber.open(file.file) as pdf:
