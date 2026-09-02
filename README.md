@@ -110,10 +110,12 @@ that fails to parse, raising the temperature on each attempt — a retry at
 temperature 0.0 resamples the identical completion and fails identically, so the
 sampling has to change for the retry to be worth anything.
 
-Every stage is persisted to SQLite (`app/models.py`): `resumes`,
-`job_descriptions`, `gap_analyses`, `project_plans`, `improved_resumes`. Parsed
-output is cached on the row, so re-running against the same resume skips its
-LLM call.
+Every stage is persisted (`app/models.py`): `resumes`, `job_descriptions`,
+`gap_analyses`, `project_plans`, `improved_resumes`. Parsed output is cached on
+the row, so re-running against the same resume skips its LLM call. The backend
+is whatever `DATABASE_URL` names — SQLite locally, a managed Postgres instance
+in production. The schema is owned by Alembic, not by `create_all()`, which can
+only create tables that do not exist and cannot alter one that does.
 
 ---
 
@@ -176,9 +178,28 @@ renders whatever is present rather than branching on a separate error format:
 }
 ```
 
-### Health
+### Health and readiness
 
-`GET /` returns a service banner, `GET /health` returns `{"status": "ok"}`.
+Two endpoints, answering different questions. The distinction matters because
+the platform's health check gates a deploy — pass it and the new build replaces
+the running one.
+
+`GET /health` is **liveness**: the process is up. It never touches the database
+and never fails while the process is running, which is what makes a broken
+deployment reachable and diagnosable from outside.
+
+`GET /ready` is **readiness**: the app can actually serve. It checks the
+connection and the schema, and returns `503` naming what is missing:
+
+```json
+{"status": "unavailable", "reason": "schema incomplete",
+ "missing_tables": ["gap_analyses", "improved_resumes", "resumes"]}
+```
+
+`render.yaml` points `healthCheckPath` at `/ready`, so a build that cannot serve
+fails its check and the previous version stays live. This is not theoretical: a
+deployment once went live with no schema at all, passed its `/health` check, and
+returned `500` on every request that touched a table.
 
 ### Errors
 
@@ -252,6 +273,11 @@ allowlist in `app/main.py`.
 | `OPENAI_API_KEY` | yes | Four of the five pipeline nodes need it |
 | `DATABASE_URL` | no | Defaults to `sqlite:///./firstplay.db`. Production sets a managed Postgres URL. Render emits a `postgres://` scheme, which SQLAlchemy 2.x rejects; `app/db.py` normalises it |
 | `LOG_LEVEL` | no | Level for the stdout handler. Defaults to `INFO` |
+| `MIGRATE_ON_STARTUP` | no | Defaults to `true`. The app runs `alembic upgrade head` itself when tables are missing. Set `false` when running several instances, where concurrent migrations on boot could race |
+| `RATE_LIMIT_PIPELINE` | no | Pipeline runs per hour per client. Defaults to `10` — each is four LLM calls |
+| `RATE_LIMIT_LLM` | no | Single-LLM-call endpoints per hour. Defaults to `30` |
+| `RATE_LIMIT_INGEST` | no | Uploads and page fetches per hour. Defaults to `60` |
+| `TRUSTED_PROXY_HOPS` | no | Proxies in front of the app that append to `X-Forwarded-For`. Defaults to `1` (Render). Decides which entry of that header is believed — too high trusts a spoofed one |
 
 CORS origins are not configurable by environment: production origins are listed
 in `app/main.py`, with Vercel previews admitted by `allow_origin_regex`.
@@ -260,7 +286,7 @@ in `app/main.py`, with Vercel previews admitted by `allow_origin_regex`.
 
 ## Running the tests
 
-**234 tests, no setup required.**
+**259 tests, no setup required.**
 
 ```bash
 source .venv/bin/activate
@@ -328,15 +354,18 @@ app/
     └── graph.py         Graph wiring and run_pipeline()
 conftest.py              Dummy API key, schema and PDF fixture for the suite
 migrations/              Alembic revisions
-tests/                   234 tests
+tests/                   259 tests
 ```
 
-`app/pipeline/graphy.py` is not imported anywhere. It is an abandoned variant of
-`graph.py` in which nodes 4 and 5 branch from `analyze_gap` and run in parallel,
-rather than 5 following 4. Both genuinely depend only on the gap analysis, so
-the idea is sound and would cut a run by roughly one LLM call's latency — it was
-just never wired up. Either revive it or delete it; leaving two graph
-definitions side by side invites editing the wrong one.
+`app/pipeline/graphy.py` has been deleted. It was an abandoned variant of
+`graph.py` in which nodes 4 and 5 branched from `analyze_gap` and ran in
+parallel rather than in sequence. The idea is sound — both depend only on the
+gap analysis, so it would cut a run by roughly one LLM call's latency — but the
+file as written would no longer work: nodes now record progress into shared
+state, and two of them writing the same keys concurrently is exactly what
+LangGraph rejects without a reducer. Worth doing properly one day; not worth
+keeping a second, silently-wrong graph definition next to the real one in the
+meantime.
 
 ---
 
@@ -352,9 +381,18 @@ rather than in a `preDeployCommand`, which is not available on every instance
 type; `alembic upgrade head` is idempotent and a no-op once the schema is
 current.
 
-`healthCheckPath` is `/health`. That is only meaningful now that blocking LLM
-calls no longer run on the event loop — previously a slow pipeline run could
-fail the check and have the platform restart the service mid-request.
+`healthCheckPath` is `/ready`, not `/health`. The check gates the deploy, so it
+has to fail when the app cannot serve — `/health` reports only that the process
+is up. Either way it is only meaningful now that blocking LLM calls no longer
+run on the event loop; previously a slow pipeline run could fail the check and
+have the platform restart the service mid-request.
+
+The app also runs `alembic upgrade head` itself at startup when tables are
+missing. That is deliberate redundancy: `render.yaml`'s start command only
+applies on a blueprint sync, so a service created through the dashboard keeps
+its own, and the migration silently never runs. That is not hypothetical — it
+took production down. Set `MIGRATE_ON_STARTUP=false` when running more than one
+instance.
 
 The frontend is on Vercel and reaches this service through
 `NEXT_PUBLIC_API_URL`. Production origins are listed in `allow_origins` in
@@ -380,8 +418,17 @@ a requirement rather than a technology — years of experience, credentials, and
 anything longer than four words. A genuinely long technology name is dropped
 along with them.
 
-**No authentication or rate limiting.** Every endpoint is open, and each
-pipeline run spends four LLM calls against the deployment's API key.
+**No authentication.** Every endpoint is open. Rate limiting bounds what an
+open endpoint can cost — 10 pipeline runs per hour per client, and the limits
+are keyed on the caller's real address rather than the proxy's — but it does
+not close it. Anyone who finds the URL can still spend the deployment's OpenAI
+credit, just slowly.
+
+**DNS rebinding.** The job fetcher resolves each URL and rejects non-public
+addresses, per redirect hop. Resolution here and the connection inside `httpx`
+are separate lookups, so a DNS entry that changes between them still gets
+through. Closing that means pinning the connection to the validated address, or
+egress controls.
 
 **Resume IDs are sequential integers.** Anyone can request another user's
 `resume_id`.
