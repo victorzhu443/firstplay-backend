@@ -63,6 +63,28 @@ def test_database_url(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
 
 
+@pytest.fixture(autouse=True)
+def stub_dns_resolution(monkeypatch):
+    """Resolve every hostname to a public address, without touching the network.
+
+    The job fetcher resolves each URL to check it is not pointing at
+    localhost, the private network, or the cloud metadata service. Left
+    unstubbed, that makes the suite depend on working DNS — the same class of
+    hidden environment dependency as the database and the PDF fixture.
+
+    An SSRF test overrides this to return the address it wants to exercise.
+    """
+    import ipaddress
+
+    from app.routers import job as job_router
+
+    monkeypatch.setattr(
+        job_router,
+        "_resolved_addresses",
+        lambda hostname: [ipaddress.ip_address("93.184.216.34")],
+    )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def sample_resume_pdf():
     """Ensure the sample resume PDF the upload tests read exists.

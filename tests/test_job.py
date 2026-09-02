@@ -58,6 +58,7 @@ def test_fetch_html_success(mock_client):
     # measures the body to enforce a size cap, and an AsyncMock header value
     # is truthy but not an int.
     mock_response.headers = {"content-length": str(len(body))}
+    mock_response.is_redirect = False
     mock_response.content = body.encode()
     # httpx.Response.raise_for_status is synchronous. Mocked as an AsyncMock
     # it returned an un-awaited coroutine, so the call under test did nothing
@@ -99,6 +100,7 @@ def test_fetch_html_404(mock_client):
     """Test T 5.2.2: 404 handled"""
     # Create a proper mock for HTTPStatusError
     mock_response = AsyncMock()
+    mock_response.is_redirect = False
     mock_response.status_code = 404
     
     # Create the exception with proper request object

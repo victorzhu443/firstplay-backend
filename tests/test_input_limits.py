@@ -57,6 +57,7 @@ def _mock_response(body: bytes, declared_length=None):
     response.text = body.decode(errors="ignore")
     response.content = body
     response.status_code = 200
+    response.is_redirect = False
     response.raise_for_status = Mock()
     length = declared_length if declared_length is not None else str(len(body))
     response.headers = {"content-length": length} if length is not None else {}
