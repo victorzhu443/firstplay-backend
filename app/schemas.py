@@ -2,28 +2,44 @@
 Pydantic schemas for structured LLM outputs.
 These models define the structure we expect from LangChain parsing.
 """
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Union
+from pydantic import BaseModel, Field, ConfigDict, BeforeValidator
+from typing import Annotated, List, Optional, Union
+
+
+def _none_to_empty(value: object) -> object:
+    """Coerce a null coming back from the LLM into an empty string."""
+    return "" if value is None else value
+
+
+# Resumes are not uniformly detailed. A student resume routinely omits the dates
+# on a job, the description of a project, or a graduation date, and when a field
+# is absent the model correctly reports it as null rather than inventing a value.
+# Typed as a bare `str`, that null fails validation and PydanticOutputParser
+# rejects the whole document, which takes down the entire pipeline run over one
+# missing date. Accepting the null and normalising it to "" keeps the outward
+# contract a string — no consumer has to start handling None — while letting a
+# sparse resume through.
+NullableStr = Annotated[str, BeforeValidator(_none_to_empty)]
 
 class ExperienceItem(BaseModel):
     """Single work experience entry"""
-    company: str = Field(description="Company name")
-    title: str = Field(description="Job title")
-    duration: str = Field(description="Time period (e.g., 'Jan 2020 - Present')")
-    bullets: List[str] = Field(description="List of responsibility/achievement bullets")
+    company: NullableStr = Field(default="", description="Company name")
+    title: NullableStr = Field(default="", description="Job title")
+    duration: NullableStr = Field(default="", description="Time period (e.g., 'Jan 2020 - Present')")
+    bullets: List[str] = Field(default_factory=list, description="List of responsibility/achievement bullets")
 
 class ProjectItem(BaseModel):
     """Single project entry"""
-    name: str = Field(description="Project name")
-    description: str = Field(description="Brief project description")
-    technologies: List[str] = Field(description="Technologies/tools used")
-    highlights: List[str] = Field(description="Key achievements or features")
+    name: NullableStr = Field(default="", description="Project name")
+    description: NullableStr = Field(default="", description="Brief project description")
+    technologies: List[str] = Field(default_factory=list, description="Technologies/tools used")
+    highlights: List[str] = Field(default_factory=list, description="Key achievements or features")
 
 class EducationItem(BaseModel):
     """Single education entry"""
-    institution: str = Field(description="School/University name")
-    degree: str = Field(description="Degree type and major")
-    graduation_date: str = Field(description="Graduation date or expected date")
+    institution: NullableStr = Field(default="", description="School/University name")
+    degree: NullableStr = Field(default="", description="Degree type and major")
+    graduation_date: NullableStr = Field(default="", description="Graduation date or expected date")
     gpa: Optional[str] = Field(default=None, description="GPA if mentioned")
 
 class ResumeParsed(BaseModel):
@@ -31,13 +47,13 @@ class ResumeParsed(BaseModel):
     Structured representation of a parsed resume.
     This is the target output format for LLM resume parsing.
     """
-    name: str = Field(description="Candidate's full name")
+    name: NullableStr = Field(default="", description="Candidate's full name")
     email: Optional[str] = Field(default=None, description="Email address")
     phone: Optional[str] = Field(default=None, description="Phone number")
-    skills: List[str] = Field(description="List of technical skills")
-    experience: List[ExperienceItem] = Field(description="Work experience entries")
-    projects: List[ProjectItem] = Field(description="Personal/academic projects")
-    education: List[EducationItem] = Field(description="Education history")
+    skills: List[str] = Field(default_factory=list, description="List of technical skills")
+    experience: List[ExperienceItem] = Field(default_factory=list, description="Work experience entries")
+    projects: List[ProjectItem] = Field(default_factory=list, description="Personal/academic projects")
+    education: List[EducationItem] = Field(default_factory=list, description="Education history")
     
     model_config = ConfigDict(
         json_schema_extra={
@@ -197,26 +213,28 @@ class ProjectPlanParsed(BaseModel):
 
 class ImprovedExperienceItem(BaseModel):
     """Improved work experience entry with Jake-style bullets"""
-    company: str = Field(description="Company name")
-    title: str = Field(description="Job title")
-    duration: str = Field(description="Time period")
-    bullets: List[str] = Field(description="Achievement bullets using action verbs, tech/context, and metrics")
+    company: NullableStr = Field(default="", description="Company name")
+    title: NullableStr = Field(default="", description="Job title")
+    duration: NullableStr = Field(default="", description="Time period")
+    bullets: List[str] = Field(default_factory=list, description="Achievement bullets using action verbs, tech/context, and metrics")
 
 class ImprovedProjectItem(BaseModel):
     """Improved project entry with Jake-style bullets"""
-    name: str = Field(description="Project name")
-    technologies: List[str] = Field(description="Technologies used")
-    bullets: List[str] = Field(description="Achievement bullets using action verbs, tech/context, and metrics")
+    name: NullableStr = Field(default="", description="Project name")
+    technologies: List[str] = Field(default_factory=list, description="Technologies used")
+    bullets: List[str] = Field(default_factory=list, description="Achievement bullets using action verbs, tech/context, and metrics")
 
 class ImprovedResumeParsed(BaseModel):
     """Improved resume in Jake's template format"""
-    name: str
-    contact: str
+    # `name` and `contact` reach the browser as strings the client calls
+    # .replace() and jsPDF doc.text() on, so they must never arrive as null.
+    name: NullableStr = ""
+    contact: NullableStr = ""
     summary: Optional[str] = None
-    skills: List[str]
-    experience: List[ImprovedExperienceItem]
-    projects: List[ImprovedProjectItem]
-    education: List[Union[str, dict]]  # Accept both string and dict format
+    skills: List[str] = Field(default_factory=list)
+    experience: List[ImprovedExperienceItem] = Field(default_factory=list)
+    projects: List[ImprovedProjectItem] = Field(default_factory=list)
+    education: List[Union[str, dict]] = Field(default_factory=list)  # Accept both string and dict format
     
     model_config = ConfigDict(
         json_schema_extra={
