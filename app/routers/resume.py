@@ -49,16 +49,19 @@ def upload_resume(
             text = ""
             for page in pdf.pages:
                 text += page.extract_text() or ""
-        
-        if not text.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="Could not extract text from PDF. File may be corrupted or empty."
-            )
     except Exception as e:
         raise HTTPException(
             status_code=400,
             detail=f"Error processing PDF: {str(e)}"
+        )
+
+    # Checked outside the try: raised inside, this HTTPException was caught by
+    # the `except Exception` above and re-wrapped, so the client saw the
+    # doubly-nested "Error processing PDF: 400: Could not extract text...".
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract text from PDF. File may be corrupted or empty."
         )
     
     # Save to database
@@ -172,11 +175,15 @@ def improve_resume_endpoint(
             detail="Job description must be parsed first. Call POST /api/job/parse"
         )
     
-    # Load gap analysis
+    # Load gap analysis. Ordered explicitly: POST /api/analyze inserts a new
+    # row every time it runs, so a re-analysed pair has several. Without an
+    # order_by, SQLite returns the lowest rowid — the *oldest* analysis — so
+    # improving a resume after re-running the analysis silently used stale
+    # gap data.
     gap_analysis = db.query(GapAnalysis).filter(
         GapAnalysis.resume_id == resume_id,
         GapAnalysis.job_id == job_id
-    ).first()
+    ).order_by(GapAnalysis.created_at.desc(), GapAnalysis.id.desc()).first()
     
     if not gap_analysis:
         raise HTTPException(
