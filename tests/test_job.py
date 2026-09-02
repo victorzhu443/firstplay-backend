@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import app
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, Mock
 from app.db import SessionLocal
 from app.models import JobDescription
 import httpx
@@ -53,7 +53,10 @@ def test_fetch_html_success(mock_client):
     mock_response = AsyncMock()
     mock_response.text = "<html><body>Job Description</body></html>"
     mock_response.status_code = 200
-    mock_response.raise_for_status = AsyncMock()
+    # httpx.Response.raise_for_status is synchronous. Mocked as an AsyncMock
+    # it returned an un-awaited coroutine, so the call under test did nothing
+    # and the error path was never actually exercised.
+    mock_response.raise_for_status = Mock()
     
     # Mock the client context manager
     mock_client_instance = AsyncMock()
