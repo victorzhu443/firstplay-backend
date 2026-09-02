@@ -4,8 +4,12 @@ Rewrites bullets to follow: Action Verb + Technical Context + Metric/Impact
 """
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from app.llm_client import get_llm, invoke_chain
+from app.llm_client import get_llm, invoke_with_retry
 from app.schemas import ResumeParsed, JobParsed, ImprovedResumeParsed
+
+# Low, for consistency, but not zero: rewriting needs some latitude.
+# Retries escalate from here.
+IMPROVEMENT_TEMPERATURE = 0.3
 from typing import Dict
 
 # Create the parser
@@ -56,14 +60,18 @@ Please rewrite this resume to be highly tailored for this job. Focus on:
 4. Prioritizing job-required skills""")
 ])
 
-def create_resume_improvement_chain():
+def create_resume_improvement_chain(temperature: float = IMPROVEMENT_TEMPERATURE):
     """
     Creates a LangChain runnable for improving resumes.
-    
+
+    Args:
+        temperature: Sampling temperature; raised on retry when the model's
+            output fails validation
+
     Returns:
         A chain that takes resume, job, and gap data and returns ImprovedResumeParsed
     """
-    llm = get_llm(temperature=0.3)  # Low temperature for consistency but some creativity
+    llm = get_llm(temperature=temperature)
     
     # Create the chain: prompt | llm | parser
     chain = (
@@ -93,8 +101,6 @@ def improve_resume(
     Raises:
         LLMError: If improvement fails; see app.exceptions for the subtypes
     """
-    chain = create_resume_improvement_chain()
-    
     # Format data for the prompt
     resume_data = resume.model_dump_json(indent=2)
     job_title = job.job_title
@@ -106,8 +112,8 @@ def improve_resume(
         gap_analysis.get("missing_preferred_skills", [])
     )
     
-    return invoke_chain(
-        chain,
+    return invoke_with_retry(
+        create_resume_improvement_chain,
         {
             "resume_data": resume_data,
             "job_title": job_title,
@@ -117,4 +123,5 @@ def improve_resume(
             "missing_skills": missing_skills,
         },
         description="Failed to improve resume",
+        base_temperature=IMPROVEMENT_TEMPERATURE,
     )

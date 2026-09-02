@@ -3,8 +3,11 @@ LangChain chain for parsing job description text into structured format.
 """
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from app.llm_client import get_llm, invoke_chain
+from app.llm_client import get_llm, invoke_with_retry
 from app.schemas import JobParsed
+
+# Extraction should be deterministic; retries escalate from here.
+PARSER_TEMPERATURE = 0.0
 
 # Create the parser
 parser = PydanticOutputParser(pydantic_object=JobParsed)
@@ -28,14 +31,18 @@ If information is not present, use empty lists.
 {job_text}""")
 ])
 
-def create_job_parsing_chain():
+def create_job_parsing_chain(temperature: float = PARSER_TEMPERATURE):
     """
     Creates a LangChain runnable for parsing job descriptions.
-    
+
+    Args:
+        temperature: Sampling temperature; raised on retry when the model's
+            output fails validation
+
     Returns:
         A chain that takes job_text and returns JobParsed
     """
-    llm = get_llm()
+    llm = get_llm(temperature=temperature)
     
     # Create the chain: prompt | llm | parser
     chain = (
@@ -59,10 +66,9 @@ def parse_jd_text(job_text: str) -> JobParsed:
     Raises:
         LLMError: If parsing fails; see app.exceptions for the subtypes
     """
-    chain = create_job_parsing_chain()
-
-    return invoke_chain(
-        chain,
+    return invoke_with_retry(
+        create_job_parsing_chain,
         {"job_text": job_text},
         description="Failed to parse job description",
+        base_temperature=PARSER_TEMPERATURE,
     )

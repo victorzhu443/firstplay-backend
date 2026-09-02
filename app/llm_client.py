@@ -4,7 +4,7 @@ Uses LangChain ChatOpenAI instead of direct OpenAI SDK calls.
 """
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 import openai
 from dotenv import load_dotenv
@@ -32,6 +32,18 @@ DEFAULT_TIMEOUT_SECONDS = 30
 # errors, 429s and upstream 5xx. This is a different concern from retrying a
 # call that *succeeded* but returned unusable content — see LLMOutputError.
 DEFAULT_MAX_RETRIES = 2
+
+# Attempts for a call whose output fails validation, including the first.
+DEFAULT_MAX_OUTPUT_ATTEMPTS = 3
+
+# How much to raise temperature per retry. Re-sending an identical prompt at
+# temperature 0.0 is near-greedy decoding: the model tends to reproduce the
+# same unusable completion, so a naive retry buys three identical failures and
+# the backoff between them. Escalating forces the model off that trajectory.
+TEMPERATURE_ESCALATION_STEP = 0.2
+
+# Temperature is only meaningful up to 1.0 for chat completions.
+MAX_TEMPERATURE = 1.0
 
 
 def get_llm(
@@ -126,3 +138,78 @@ def invoke_chain(chain: Runnable, payload: Dict[str, Any], *, description: str) 
         # bare Exception the way it used to be.
         logger.exception("%s: unclassified failure", description)
         raise LLMError(f"{description}: {e}") from e
+
+
+def invoke_with_retry(
+    chain_factory: Callable[..., Runnable],
+    payload: Dict[str, Any],
+    *,
+    description: str,
+    base_temperature: float = 0.0,
+    max_attempts: int = DEFAULT_MAX_OUTPUT_ATTEMPTS,
+) -> Any:
+    """
+    Invoke a chain, retrying only when the model's *output* was unusable.
+
+    Takes a factory rather than a built chain because each retry raises the
+    temperature, which means rebuilding the model. Retrying the identical
+    prompt at temperature 0.0 mostly reproduces the identical bad output, so
+    an escalating retry is the difference between a fix and wasted latency.
+
+    Only LLMOutputError is retried:
+      - LLMServiceError is already retried by the OpenAI SDK at the transport
+        layer; retrying again here would compound the two.
+      - LLMConfigurationError is fatal by definition. Retrying a bad API key
+        just burns the backoff before failing anyway.
+
+    Args:
+        chain_factory: Callable taking a temperature and returning a runnable
+        payload: Input variables for the chain
+        description: Human-readable prefix for the error message
+        base_temperature: The chain's normal temperature; retries escalate
+            from here, so a deliberately creative chain stays creative
+        max_attempts: Total attempts, including the first
+
+    Returns:
+        Whatever the chain's output parser produced
+
+    Raises:
+        LLMOutputError: Output failed validation on every attempt
+        LLMError: Any non-retryable failure, raised on the first attempt
+    """
+    last_error = None
+
+    for attempt in range(1, max_attempts + 1):
+        temperature = min(
+            base_temperature + (attempt - 1) * TEMPERATURE_ESCALATION_STEP,
+            MAX_TEMPERATURE,
+        )
+
+        try:
+            result = invoke_chain(
+                chain_factory(temperature), payload, description=description
+            )
+        except LLMOutputError as e:
+            last_error = e
+            logger.warning(
+                "%s: attempt %d/%d produced invalid output at temperature %.2f",
+                description,
+                attempt,
+                max_attempts,
+                temperature,
+            )
+            continue
+
+        if attempt > 1:
+            logger.info(
+                "%s: attempt %d succeeded at temperature %.2f",
+                description,
+                attempt,
+                temperature,
+            )
+        return result
+
+    logger.error(
+        "%s: all %d attempts produced invalid output", description, max_attempts
+    )
+    raise last_error
