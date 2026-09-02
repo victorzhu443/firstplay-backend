@@ -83,8 +83,19 @@ class JobParsed(BaseModel):
     """
     job_title: str = Field(description="Job title/position")
     company: Optional[str] = Field(default=None, description="Company name if mentioned")
-    required_skills: List[str] = Field(description="Required/must-have skills and qualifications")
-    preferred_skills: List[str] = Field(description="Preferred/nice-to-have skills")
+    required_skills: List[str] = Field(
+        description=(
+            "Required/must-have technical skills: languages, frameworks, tools, "
+            "platforms. Named technologies only — put experience durations and "
+            "degrees in `qualifications`, not here"
+        )
+    )
+    preferred_skills: List[str] = Field(
+        description=(
+            "Preferred/nice-to-have technical skills, in the same form as "
+            "required_skills: named technologies only"
+        )
+    )
     keywords: List[str] = Field(description="Important keywords and technical terms from the JD")
     responsibilities: List[str] = Field(description="Key job responsibilities")
     qualifications: List[str] = Field(description="Educational or experience requirements")
@@ -94,11 +105,16 @@ class JobParsed(BaseModel):
             "example": {
                 "job_title": "Senior Software Engineer",
                 "company": "Tech Corp",
+                # Only named technologies here. This example is sent to the
+                # model as part of the parser's format instructions, so
+                # listing "5+ years experience" here taught it to put
+                # requirements in this field — where they could never match a
+                # resume skill, and were then handed to the project generator
+                # as something to build a portfolio project around.
                 "required_skills": [
                     "Python",
                     "FastAPI",
-                    "PostgreSQL",
-                    "5+ years experience"
+                    "PostgreSQL"
                 ],
                 "preferred_skills": [
                     "AWS",

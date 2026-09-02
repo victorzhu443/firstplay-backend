@@ -17,11 +17,32 @@ job_parsing_prompt = ChatPromptTemplate.from_messages([
     ("system", """You are an expert at analyzing job descriptions. Extract key information from the job posting and return it in the specified JSON format.
 
 Be thorough and extract:
-- All required skills and qualifications (must-haves)
+- All required skills (must-haves)
 - All preferred skills (nice-to-haves)
 - Important keywords and technical terms
 - Key responsibilities
 - Educational and experience requirements
+
+**Critical distinction between skills and qualifications:**
+`required_skills` and `preferred_skills` must contain ONLY named technologies —
+programming languages, frameworks, libraries, databases, tools, platforms,
+and specific technical practices. Each entry should be a short noun phrase
+that could appear in the skills section of a resume.
+
+Everything else belongs in `qualifications`: years of experience, academic
+degrees, certifications, and sentence-shaped requirements.
+
+  Correct:   required_skills: ["Python", "FastAPI", "PostgreSQL", "Docker"]
+             qualifications:  ["5+ years of professional experience",
+                               "Bachelor's degree in Computer Science"]
+
+  Incorrect: required_skills: ["Python", "5+ years experience",
+                               "Bachelor's degree", "Strong communication"]
+
+A skill list entry that is not a technology cannot be matched against a
+candidate's skills, and downstream steps treat these entries as things the
+candidate should learn — so "5+ years experience" would become a suggested
+portfolio project.
 
 If information is not present, use empty lists.
 
