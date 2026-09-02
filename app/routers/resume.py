@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
+import os
 import pdfplumber
 from app.db import get_db
+from app.rate_limit import ingest_limit, llm_limit
 from app.models import Resume, JobDescription, GapAnalysis, ImprovedResume
 from app.chains.resume_parser import parse_resume_text
 from app.chains.resume_improver import improve_resume
@@ -10,13 +12,26 @@ import json
 
 router = APIRouter(prefix="/api/resume", tags=["resume"])
 
+# pdfplumber loads the whole document into memory, and the upload was
+# previously unbounded: a large file could exhaust the worker. A resume that
+# does not fit in this is not a resume.
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+def _upload_size(file: UploadFile) -> int:
+    """Size of an upload without reading it into memory."""
+    file.file.seek(0, os.SEEK_END)
+    size = file.file.tell()
+    file.file.seek(0)
+    return size
+
 # NOTE: these handlers are deliberately sync (`def`, not `async def`).
 # They do blocking work — PDF extraction, synchronous SQLAlchemy queries, and
 # LangChain's blocking `.invoke()` — and FastAPI runs sync handlers in a
 # threadpool. Declared `async def`, the same code would run *on the event
 # loop*, so one 30s LLM call would stall every other request in the worker,
 # including /health.
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(ingest_limit)])
 def upload_resume(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -42,7 +57,21 @@ def upload_resume(
             status_code=400,
             detail="Only PDF files are supported"
         )
-    
+
+    size = _upload_size(file)
+    if size > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File is too large ({size // 1024} KB). "
+                f"Maximum is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+            )
+        )
+
+    if size == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+
     # Extract text from PDF
     try:
         with pdfplumber.open(file.file) as pdf:
@@ -81,7 +110,7 @@ def upload_resume(
         "raw_text_preview": preview
     }
 
-@router.post("/parse")
+@router.post("/parse", dependencies=[Depends(llm_limit)])
 def parse_resume(
     resume_id: int,
     db: Session = Depends(get_db)
@@ -130,7 +159,7 @@ def parse_resume(
             detail=f"Error parsing resume: {str(e)}"
         )
 
-@router.post("/improve")
+@router.post("/improve", dependencies=[Depends(llm_limit)])
 def improve_resume_endpoint(
     resume_id: int,
     job_id: int,

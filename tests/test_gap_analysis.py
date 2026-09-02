@@ -8,11 +8,24 @@ from app.analysis.gap_analysis import (
 from app.schemas import ResumeParsed, JobParsed
 
 def test_normalize_skill():
-    """Test skill normalization"""
+    """Test skill normalization.
+
+    Asserts the property that matters — every spelling of a technology
+    collapses to one token — rather than which spelling was picked as the
+    canonical one. Aliases now resolve toward the full name ("js" ->
+    "javascript") rather than the abbreviation, which is arbitrary but
+    consistent; pinning the direction made the choice look load-bearing.
+    """
     assert normalize_skill("Python") == "python"
-    assert normalize_skill("JavaScript") == "js"
-    assert normalize_skill("React.js") == "react"
-    assert normalize_skill("PostgreSQL") == "postgres"
+
+    for spellings in [
+        ("JavaScript", "javascript", "JS", "js"),
+        ("React.js", "React", "reactjs", "REACT"),
+        ("PostgreSQL", "postgres", "Postgres", "psql"),
+        ("Node.js", "nodejs", "node"),
+    ]:
+        normalized = {normalize_skill(s) for s in spellings}
+        assert len(normalized) == 1, f"{spellings} normalized to {normalized}"
 
 def test_skills_match():
     """Test skill matching with normalization"""

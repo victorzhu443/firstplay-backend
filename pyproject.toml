@@ -1,0 +1,27 @@
+[project]
+name = "firstplay-backend"
+version = "0.1.0"
+description = "Resume analysis and project planning for early-career CS students"
+# The floor, not the deployment target. The code is written to run on 3.9 so
+# it works in the local virtualenv; production pins a newer interpreter via
+# PYTHON_VERSION in render.yaml.
+requires-python = ">=3.9"
+
+[tool.ruff]
+# Pinned deliberately. With no target-version, ruff infers a modern Python and
+# flags Optional[X] and List[X] as rewritable to PEP 604 / PEP 585 syntax --
+# `ruff check --fix` would then rewrite annotations to `X | None`, which
+# Pydantic evaluates at runtime and which fails on 3.9 with a TypeError.
+# Pinning to the floor makes those rules stop firing rather than relying on
+# nobody typing --fix.
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+# The codebase carries pre-existing style violations (import order, unused
+# imports, blind excepts). Gating CI on all of them would block every commit,
+# so the enforced set is the rules that indicate genuine defects:
+#   E9  syntax/IO errors      F63 bad comparisons
+#   F7  syntax misuse         F82 undefined names
+# Widen this as the backlog is cleared.
+select = ["E9", "F63", "F7", "F82"]

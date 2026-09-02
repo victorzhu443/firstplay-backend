@@ -1,20 +1,67 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import resume, job, analysis, pipeline
-from app.db import engine, Base
+from app.db import engine, Base, SQLALCHEMY_DATABASE_URL
+from app.logging_config import configure_logging
 from app.models import Resume, JobDescription, GapAnalysis, ProjectPlan, ImprovedResume
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_if_schema_missing() -> None:
+    """Fail loudly at startup rather than per-request if migrations never ran.
+
+    Without this, a deployment that skipped `alembic upgrade head` starts
+    healthy and then returns OperationalError on the first request that
+    touches a table.
+    """
+    from sqlalchemy import inspect
+
+    present = set(inspect(engine).get_table_names())
+    expected = set(Base.metadata.tables)
+    missing = expected - present
+
+    if missing:
+        logger.error(
+            "Database is missing %d table(s): %s. "
+            "Run `alembic upgrade head`.",
+            len(missing),
+            ", ".join(sorted(missing)),
+        )
+    else:
+        logger.info("Database schema is present (%d tables)", len(expected))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown. Replaces the deprecated @app.on_event hooks."""
+    configure_logging()
+
+    # Log the backend, never the URL itself — a managed Postgres connection
+    # string carries the password.
+    backend = SQLALCHEMY_DATABASE_URL.split("://", 1)[0]
+    logger.info("Starting FirstPlay Coach API (database backend: %s)", backend)
+
+    # Schema is owned by Alembic; the deployment runs `alembic upgrade head`
+    # before this process starts. create_all() used to run here, which cannot
+    # apply a change to an existing table and would silently diverge from the
+    # migrations once both existed.
+    _warn_if_schema_missing()
+
+    yield
+
+    logger.info("Shutting down")
+
 
 app = FastAPI(
     title="FirstPlay Coach API",
     description="Resume analysis and project planning for early-career CS students",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan,
 )
-
-# Create tables on startup
-@app.on_event("startup")
-async def startup_event():
-    Base.metadata.create_all(bind=engine)
-    print("✅ Database tables created!")
 
 # CORS middleware.
 # `allow_origins` is matched by exact string comparison, so the previous

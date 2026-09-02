@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import app
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, Mock
 from app.db import SessionLocal
 from app.models import JobDescription
 import httpx
@@ -50,10 +50,20 @@ def test_missing_url_field():
 def test_fetch_html_success(mock_client):
     """Test T 5.2.1: mock 200 response returns HTML string"""
     # Create mock response
+    body = "<html><body>Job Description</body></html>"
     mock_response = AsyncMock()
-    mock_response.text = "<html><body>Job Description</body></html>"
+    mock_response.text = body
     mock_response.status_code = 200
-    mock_response.raise_for_status = AsyncMock()
+    # Real attributes, not AsyncMocks: the handler reads content-length and
+    # measures the body to enforce a size cap, and an AsyncMock header value
+    # is truthy but not an int.
+    mock_response.headers = {"content-length": str(len(body))}
+    mock_response.is_redirect = False
+    mock_response.content = body.encode()
+    # httpx.Response.raise_for_status is synchronous. Mocked as an AsyncMock
+    # it returned an un-awaited coroutine, so the call under test did nothing
+    # and the error path was never actually exercised.
+    mock_response.raise_for_status = Mock()
     
     # Mock the client context manager
     mock_client_instance = AsyncMock()
@@ -90,6 +100,7 @@ def test_fetch_html_404(mock_client):
     """Test T 5.2.2: 404 handled"""
     # Create a proper mock for HTTPStatusError
     mock_response = AsyncMock()
+    mock_response.is_redirect = False
     mock_response.status_code = 404
     
     # Create the exception with proper request object

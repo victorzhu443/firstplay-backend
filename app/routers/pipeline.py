@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.db import get_db
+from app.rate_limit import pipeline_limit
 from app.pipeline.graph import run_pipeline
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
@@ -16,7 +17,7 @@ class PipelineRequest(BaseModel):
 # Sync by design: a pipeline run is five sequential nodes with up to four
 # blocking LLM calls. FastAPI runs this in a threadpool, so a long run cannot
 # stall the event loop and starve every other request in the worker.
-@router.post("/run")
+@router.post("/run", dependencies=[Depends(pipeline_limit)])
 def run_full_pipeline(
     request: PipelineRequest,
     db: Session = Depends(get_db)

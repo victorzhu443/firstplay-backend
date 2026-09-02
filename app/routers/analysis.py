@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.db import get_db
+from app.rate_limit import llm_limit
 from app.models import Resume, JobDescription, GapAnalysis, ProjectPlan
 from app.schemas import ResumeParsed, JobParsed
 from app.analysis.gap_analysis import compute_gap
@@ -87,7 +88,7 @@ def analyze(
         "job_id": request.job_id,
         "gap_analysis": gap_result
     }
-@router.post("/projects")
+@router.post("/projects", dependencies=[Depends(llm_limit)])
 def generate_project_ideas(
     analysis_id: int,
     db: Session = Depends(get_db)

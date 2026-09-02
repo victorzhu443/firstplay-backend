@@ -3,13 +3,78 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, field_validator
 from app.db import get_db
+from app.rate_limit import ingest_limit, llm_limit
 from app.models import JobDescription
 import httpx
+import ipaddress
+import socket
 from bs4 import BeautifulSoup
 from starlette.concurrency import run_in_threadpool
 from typing import Optional
+from urllib.parse import urlparse
 
 router = APIRouter(prefix="/api/job", tags=["job"])
+
+# The fetch was unbounded: any URL could stream arbitrarily much into the
+# worker's memory. A job posting page is far smaller than this.
+MAX_HTML_BYTES = 2 * 1024 * 1024
+
+# raw_html stored the entire scraped page, forever, for every submission. It
+# is kept only for debugging extraction, so a prefix is enough; the full text
+# that actually gets used is stored separately in extracted_text.
+MAX_STORED_HTML_BYTES = 64 * 1024
+
+# This endpoint fetches a URL chosen by the caller, which makes the server a
+# proxy into whatever it can reach: localhost, the private network, and the
+# cloud metadata service on 169.254.169.254 that hands out credentials.
+MAX_REDIRECTS = 5
+
+
+def _resolved_addresses(hostname: str):
+    """Every address `hostname` resolves to, as ip_address objects."""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        raise HTTPException(
+            status_code=400, detail=f"Could not resolve host: {hostname}"
+        ) from e
+
+    return [ipaddress.ip_address(info[4][0]) for info in infos]
+
+
+def assert_public_url(url: str) -> None:
+    """
+    Reject a URL that resolves to anything other than a public address.
+
+    Checked per redirect hop, not once up front: with redirects followed
+    automatically, a public URL that 302s to http://169.254.169.254/ would
+    otherwise reach the metadata service with the check already passed.
+
+    This narrows the hole rather than closing it. Resolution here and
+    connection in httpx are separate lookups, so a DNS entry that changes
+    between them still gets through. Closing that properly means pinning the
+    connection to the address that was validated, or egress controls.
+
+    Args:
+        url: The absolute URL about to be fetched
+
+    Raises:
+        HTTPException: If the host resolves to a non-public address
+    """
+    hostname = urlparse(url).hostname
+
+    if not hostname:
+        raise HTTPException(status_code=400, detail="URL has no host")
+
+    for address in _resolved_addresses(hostname):
+        if not address.is_global or address.is_multicast:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Job posting URL must point to a public address; "
+                    f"{hostname} resolves to {address}."
+                ),
+            )
 
 class JobUrlRequest(BaseModel):
     """Request model for job URL submission"""
@@ -43,10 +108,61 @@ async def fetch_html(url: str, timeout: int = 10) -> str:
         HTTPException: If fetch fails
     """
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=timeout, follow_redirects=True)
-            response.raise_for_status()
-            return response.text
+        # Redirects are followed by hand so every hop can be checked. With
+        # follow_redirects=True, a public URL that 302s to an internal address
+        # would be fetched with the check already passed.
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            current = url
+
+            for _ in range(MAX_REDIRECTS + 1):
+                assert_public_url(current)
+
+                response = await client.get(current, timeout=timeout)
+
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise HTTPException(
+                            status_code=502,
+                            detail="Job posting redirected without a destination"
+                        )
+                    # Relative Locations are legal, so resolve against the
+                    # URL that issued them before re-checking.
+                    current = str(response.url.join(location))
+                    continue
+
+                response.raise_for_status()
+
+                # Reject an oversized body before touching response.text,
+                # which would decode the whole thing into memory first.
+                declared = response.headers.get("content-length")
+                if declared and int(declared) > MAX_HTML_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Job posting page is too large "
+                            f"({int(declared) // 1024} KB). "
+                            f"Maximum is {MAX_HTML_BYTES // 1024} KB."
+                        )
+                    )
+
+                # Servers may omit or understate content-length, so cap
+                # regardless.
+                if len(response.content) > MAX_HTML_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Job posting page exceeds {MAX_HTML_BYTES // 1024} KB."
+                    )
+
+                return response.text
+
+            raise HTTPException(
+                status_code=502,
+                detail=f"Job posting exceeded {MAX_REDIRECTS} redirects"
+            )
+    except HTTPException:
+        # Ours, raised above — must not be recaught and relabelled below.
+        raise
     except httpx.TimeoutException:
         raise HTTPException(
             status_code=504,
@@ -89,7 +205,7 @@ def extract_job_text(html: str) -> str:
     
     return text
 
-@router.post("/url")
+@router.post("/url", dependencies=[Depends(ingest_limit)])
 async def submit_job_url(
     request: JobUrlRequest,
     db: Session = Depends(get_db)
@@ -122,7 +238,7 @@ async def submit_job_url(
     # Save to database
     job_desc = JobDescription(
         url=request.url,
-        raw_html=html,
+        raw_html=html[:MAX_STORED_HTML_BYTES],
         extracted_text=extracted_text
     )
     db.add(job_desc)
@@ -152,7 +268,7 @@ class ManualJdRequest(BaseModel):
         
         return v.strip()
 
-@router.post("/description/manual")
+@router.post("/description/manual", dependencies=[Depends(ingest_limit)])
 def submit_manual_jd(
     request: ManualJdRequest,
     db: Session = Depends(get_db)
@@ -186,7 +302,7 @@ def submit_manual_jd(
     }
 
 
-@router.post("/parse")
+@router.post("/parse", dependencies=[Depends(llm_limit)])
 def parse_job(
     job_id: int,
     db: Session = Depends(get_db)
