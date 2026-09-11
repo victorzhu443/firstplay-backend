@@ -68,8 +68,11 @@ TypedDict, each node reading what the previous one wrote.
                results
 ```
 
-Four of the five nodes call `gpt-4o-mini`. Node 3 is deliberately not one of
-them: comparing two lists of skills is set arithmetic, and doing it in code
+Four of the five nodes call an LLM: `gpt-4o-mini` by default, or Cohere's
+`command-a-03-2025` with `LLM_PROVIDER=cohere`. The provider is chosen once in
+`app/llm_client.py`; every chain is prompt | model | parser with the output
+schema written into the prompt, so the chains never know which one they are
+talking to. Node 3 is deliberately not one of them: comparing two lists of skills is set arithmetic, and doing it in code
 makes it deterministic, free, and testable.
 
 Before comparing, it discards job-description entries that are requirements
@@ -214,7 +217,7 @@ opaque `Exception` (`app/exceptions.py`), because the caller's options differ:
 | Type | Meaning | Retried? |
 |---|---|---|
 | `LLMOutputError` | Model replied, output failed parsing or validation | Yes, at a higher temperature |
-| `LLMServiceError` | Timeout, connection failure, rate limit, upstream 5xx | Already retried by the OpenAI SDK at the transport layer |
+| `LLMServiceError` | Timeout, connection failure, rate limit, upstream 5xx | Already retried by the provider SDK at the transport layer |
 | `LLMConfigurationError` | Bad key, no permission, malformed request | No — retrying cannot fix it |
 
 ### A full run
@@ -270,7 +273,11 @@ allowlist in `app/main.py`.
 
 | Variable | Required | Notes |
 |---|---|---|
-| `OPENAI_API_KEY` | yes | Four of the five pipeline nodes need it |
+| `LLM_PROVIDER` | no | `openai` (default) or `cohere`. Picks which client `get_llm()` builds and which key below must be set |
+| `OPENAI_API_KEY` | when provider is openai | Four of the five pipeline nodes need it |
+| `OPENAI_MODEL` | no | Defaults to `gpt-4o-mini` |
+| `COHERE_API_KEY` | when provider is cohere | Same four nodes |
+| `COHERE_MODEL` | no | Defaults to `command-a-03-2025` |
 | `DATABASE_URL` | no | Defaults to `sqlite:///./firstplay.db`. Production sets a managed Postgres URL. Render emits a `postgres://` scheme, which SQLAlchemy 2.x rejects; `app/db.py` normalises it |
 | `LOG_LEVEL` | no | Level for the stdout handler. Defaults to `INFO` |
 | `MIGRATE_ON_STARTUP` | no | Defaults to `true`. The app runs `alembic upgrade head` itself when tables are missing. Set `false` when running several instances, where concurrent migrations on boot could race |
@@ -344,7 +351,7 @@ app/
 ├── models.py            Five ORM tables
 ├── schemas.py           Pydantic models for structured LLM output
 ├── exceptions.py        Typed LLM/pipeline failures
-├── llm_client.py        ChatOpenAI factory, failure classification, retry
+├── llm_client.py        Provider switch (OpenAI / Cohere), failure classification, retry
 ├── routers/             resume, job, analysis, pipeline endpoints
 ├── chains/              One LangChain chain per LLM node
 ├── analysis/            Deterministic gap analysis (no LLM)
