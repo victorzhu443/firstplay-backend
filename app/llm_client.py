@@ -1,13 +1,22 @@
 """
 LangChain model wrapper for LLM interactions.
-Uses LangChain ChatOpenAI instead of direct OpenAI SDK calls.
+
+Every chain gets its model from `get_llm()`, so the provider is chosen in one
+place. `LLM_PROVIDER` selects it: `openai` (the default) or `cohere`. Both
+return a LangChain chat model, and every chain is prompt | model | parser with
+the schema written into the prompt, so nothing downstream knows which one it
+is talking to.
 """
 import logging
 import os
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
+import httpx
 import openai
+from cohere import errors as cohere_errors
+from cohere.core.api_error import ApiError as CohereApiError
 from dotenv import load_dotenv
+from langchain_cohere import ChatCohere
 from langchain_core.exceptions import OutputParserException
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
@@ -45,45 +54,125 @@ TEMPERATURE_ESCALATION_STEP = 0.2
 # Temperature is only meaningful up to 1.0 for chat completions.
 MAX_TEMPERATURE = 1.0
 
+# Which hosted model provider `get_llm()` builds a client for. Read from
+# LLM_PROVIDER at call time, not import time, so a test can flip it.
+PROVIDER_OPENAI = "openai"
+PROVIDER_COHERE = "cohere"
+SUPPORTED_PROVIDERS = (PROVIDER_OPENAI, PROVIDER_COHERE)
+DEFAULT_PROVIDER = PROVIDER_OPENAI
+
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+COHERE_DEFAULT_MODEL = "command-a-03-2025"
+
+
+def get_provider() -> str:
+    """
+    Which provider `get_llm()` will build, from LLM_PROVIDER.
+
+    Raises:
+        ValueError: If LLM_PROVIDER names something this module cannot build.
+            Raised here, at client construction, rather than surfacing later
+            as a confusing import or attribute error inside a chain.
+    """
+    provider = os.getenv("LLM_PROVIDER", DEFAULT_PROVIDER).strip().lower()
+
+    if provider not in SUPPORTED_PROVIDERS:
+        raise ValueError(
+            f"LLM_PROVIDER={provider!r} is not supported. "
+            f"Choose one of: {', '.join(SUPPORTED_PROVIDERS)}."
+        )
+
+    return provider
+
 
 def get_llm(
-    model: str = "gpt-4o-mini",
+    model: Optional[str] = None,
     temperature: float = 0.0,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_MAX_RETRIES,
 ):
     """
-    Returns a LangChain ChatModel instance.
+    Returns a LangChain ChatModel for the configured provider.
 
     Args:
-        model: The OpenAI model to use (default: gpt-4o-mini)
+        model: Model name. Defaults per provider: gpt-4o-mini for OpenAI,
+            command-a-03-2025 for Cohere. COHERE_MODEL / OPENAI_MODEL override
+            the default without a code change.
         temperature: Creativity level 0.0-1.0 (default: 0.0 for consistency)
         timeout: Per-request timeout in seconds
-        max_retries: Transport-level retries performed by the OpenAI SDK
+        max_retries: Transport-level retries performed by the provider SDK.
+            Honoured by the OpenAI client; the Cohere client manages its own.
 
     Returns:
-        ChatOpenAI: A LangChain chat model instance
+        ChatOpenAI or ChatCohere, depending on LLM_PROVIDER
 
     Raises:
-        ValueError: If OPENAI_API_KEY is not set
+        ValueError: If the provider's API key is not set, or LLM_PROVIDER is
+            not a supported value
     """
-    api_key = os.getenv("OPENAI_API_KEY")
+    provider = get_provider()
 
-    if not api_key:
+    if provider == PROVIDER_COHERE:
+        return _cohere_llm(model, temperature, timeout)
+
+    return _openai_llm(model, temperature, timeout, max_retries)
+
+
+def _require_env(name: str) -> str:
+    value = os.getenv(name)
+
+    if not value:
         raise ValueError(
-            "OPENAI_API_KEY environment variable is not set. "
+            f"{name} environment variable is not set. "
             "Please add it to your .env file."
         )
+
+    return value
+
+
+def _openai_llm(
+    model: Optional[str], temperature: float, timeout: float, max_retries: int
+) -> ChatOpenAI:
+    api_key = _require_env("OPENAI_API_KEY")
 
     # `timeout` is an alias for ChatOpenAI's `request_timeout` field; it is
     # forwarded to the underlying httpx client.
     return ChatOpenAI(
-        model=model,
+        model=model or os.getenv("OPENAI_MODEL", OPENAI_DEFAULT_MODEL),
         temperature=temperature,
         api_key=api_key,
         timeout=timeout,
         max_retries=max_retries,
     )
+
+
+def _cohere_llm(model: Optional[str], temperature: float, timeout: float) -> ChatCohere:
+    api_key = _require_env("COHERE_API_KEY")
+
+    return ChatCohere(
+        model=model or os.getenv("COHERE_MODEL", COHERE_DEFAULT_MODEL),
+        temperature=temperature,
+        cohere_api_key=api_key,
+        timeout_seconds=timeout,
+    )
+
+
+# Cohere's SDK raises one class per HTTP status. Grouped here so invoke_chain
+# reads as a policy rather than a list of statuses.
+_COHERE_TRANSIENT = (
+    cohere_errors.TooManyRequestsError,
+    cohere_errors.InternalServerError,
+    cohere_errors.ServiceUnavailableError,
+    cohere_errors.GatewayTimeoutError,
+)
+_COHERE_FATAL = (
+    cohere_errors.UnauthorizedError,
+    cohere_errors.ForbiddenError,
+    cohere_errors.BadRequestError,
+    cohere_errors.InvalidTokenError,
+    cohere_errors.UnprocessableEntityError,
+    cohere_errors.NotFoundError,
+)
 
 
 def invoke_chain(chain: Runnable, payload: Dict[str, Any], *, description: str) -> Any:
@@ -120,6 +209,11 @@ def invoke_chain(chain: Runnable, payload: Dict[str, Any], *, description: str) 
         openai.APIConnectionError,
         openai.RateLimitError,
         openai.InternalServerError,
+        *_COHERE_TRANSIENT,
+        # The Cohere SDK surfaces transport failures as raw httpx errors
+        # rather than wrapping them the way the OpenAI SDK does.
+        httpx.TimeoutException,
+        httpx.ConnectError,
     ) as e:
         logger.warning("%s: transient upstream failure: %s", description, e)
         raise LLMServiceError(f"{description}: {e}") from e
@@ -128,9 +222,16 @@ def invoke_chain(chain: Runnable, payload: Dict[str, Any], *, description: str) 
         openai.AuthenticationError,
         openai.PermissionDeniedError,
         openai.BadRequestError,
+        *_COHERE_FATAL,
     ) as e:
         logger.error("%s: request rejected, not retryable: %s", description, e)
         raise LLMConfigurationError(f"{description}: {e}") from e
+
+    except CohereApiError as e:
+        # Any other Cohere status we have not named. Treated as transient so a
+        # caller's retry policy gets a chance, and logged so it can be named.
+        logger.warning("%s: unrecognised Cohere API error: %s", description, e)
+        raise LLMServiceError(f"{description}: {e}") from e
 
     except Exception as e:
         # Deliberately last, and deliberately still typed: an unrecognised
@@ -157,8 +258,8 @@ def invoke_with_retry(
     an escalating retry is the difference between a fix and wasted latency.
 
     Only LLMOutputError is retried:
-      - LLMServiceError is already retried by the OpenAI SDK at the transport
-        layer; retrying again here would compound the two.
+      - LLMServiceError is already retried by the provider SDK at the
+        transport layer; retrying again here would compound the two.
       - LLMConfigurationError is fatal by definition. Retrying a bad API key
         just burns the backoff before failing anyway.
 

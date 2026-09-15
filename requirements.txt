@@ -16,3 +16,8 @@ langchain-openai==0.2.10
 langchain-community==0.3.11
 langgraph==0.2.56
 openai==1.57.2
+# Cohere provider, selected with LLM_PROVIDER=cohere. langchain-cohere 0.4.4 is
+# the newest release that resolves against the langchain pins above, and it
+# needs cohere<5.16: later SDKs removed types it imports.
+langchain-cohere==0.4.4
+cohere==5.15.0
