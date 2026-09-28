@@ -51,6 +51,39 @@ class LLMServiceError(LLMError):
     """
 
 
+class JevError(FirstPlayError):
+    """Base class for failures from the typed-decision model.
+
+    Kept separate from LLMError because the retry semantics genuinely differ.
+    An LLM call can fail by returning unparseable text, which is why
+    `invoke_with_retry` exists and escalates temperature. A Jev call
+    structurally cannot: every answer is constrained to the options supplied,
+    so there is no Jev equivalent of LLMOutputError and no temperature to vary.
+    A Jev call either reaches the service or does not.
+    """
+
+
+class JevServiceError(JevError):
+    """The decision service could not be reached, or failed transiently.
+
+    Timeouts, connection errors, 429 and upstream 5xx — including OpenRouter's
+    529 "overloaded". Retryable as-is, but note that re-sending an identical
+    request produces an identical decision, so a retry here is about reaching
+    the service rather than about getting a different answer.
+    """
+
+
+class JevConfigurationError(JevError):
+    """The request was rejected in a way retrying cannot fix.
+
+    A missing or malformed API key, or a question set the API will not accept:
+    a Choice with more than 255 options, a Score with fewer than 2 or more than
+    10 levels, or state over the context window. Raised at construction where
+    possible, so a bad key fails before a request is sent rather than surfacing
+    as a confusing 401 mid-run.
+    """
+
+
 class LLMConfigurationError(LLMError):
     """The request was rejected for a reason that retrying cannot fix.
 
