@@ -1,0 +1,25 @@
+{
+  "_note": "Captured from the live DOM of a real Ashby application form on 2026-09-23 via querySelectorAll('input,textarea,select'). The page reported 0 shadow roots. Custom-question ids are per-posting UUIDs; the two that were captured in full are kept verbatim and the rest are stable placeholders, since nothing under test depends on their value. Labels, types and required flags are as read.",
+  "posting_id": "d3bc1ced-3ce4-4086-a050-555055dbb1ff",
+  "company": "Linear",
+  "title": "Senior / Staff Fullstack Engineer",
+  "apply_url": "https://jobs.ashbyhq.com/linear/d3bc1ced-3ce4-4086-a050-555055dbb1ff/application",
+  "controls": [
+    { "tag": "input", "type": "file", "name": "", "id": "", "required": false, "label": "" },
+    { "tag": "input", "type": "text", "name": "_systemfield_name", "id": "_systemfield_name", "required": true, "label": "Name" },
+    { "tag": "input", "type": "email", "name": "_systemfield_email", "id": "_systemfield_email", "required": true, "label": "Email" },
+    { "tag": "input", "type": "file", "name": "", "id": "_systemfield_resume", "required": true, "label": "Resume" },
+    { "tag": "textarea", "type": "textarea", "name": "1ed7df4b-e6d4-484e-92c3-4a5f5e07fd0c", "id": "1ed7df4b-e6d4-484e-92c3-4a5f5e07fd0c", "required": true, "label": "Cover letter" },
+    { "tag": "input", "type": "text", "name": "1c843a13-4fe3-43df-afcf-37a69d88591b", "id": "1c843a13-4fe3-43df-afcf-37a69d88591b", "required": true, "label": "Github" },
+    { "tag": "input", "type": "text", "name": "aaaaaaa1-0000-4000-8000-000000000001", "id": "aaaaaaa1-0000-4000-8000-000000000001", "required": false, "label": "LinkedIn" },
+    { "tag": "input", "type": "text", "name": "aaaaaaa1-0000-4000-8000-000000000002", "id": "aaaaaaa1-0000-4000-8000-000000000002", "required": false, "label": "X" },
+    { "tag": "input", "type": "checkbox", "name": "", "id": "", "required": false, "label": "" },
+    { "tag": "input", "type": "text", "name": "aaaaaaa1-0000-4000-8000-000000000003", "id": "aaaaaaa1-0000-4000-8000-000000000003", "required": true, "label": "What country are you based in?" },
+    { "tag": "input", "type": "text", "name": "aaaaaaa1-0000-4000-8000-000000000004", "id": "aaaaaaa1-0000-4000-8000-000000000004", "required": true, "label": "Notice Period" },
+    { "tag": "textarea", "type": "textarea", "name": "aaaaaaa1-0000-4000-8000-000000000005", "id": "aaaaaaa1-0000-4000-8000-000000000005", "required": true, "label": "What would you want to work on? Tell us about the features you would want to build." },
+    { "tag": "textarea", "type": "textarea", "name": "aaaaaaa1-0000-4000-8000-000000000006", "id": "aaaaaaa1-0000-4000-8000-000000000006", "required": true, "label": "Tell us of a time you had to put your PM hat on to solve a complex product problem." },
+    { "tag": "textarea", "type": "textarea", "name": "aaaaaaa1-0000-4000-8000-000000000007", "id": "aaaaaaa1-0000-4000-8000-000000000007", "required": true, "label": "What are you extremely good at? What could you teach the team?" },
+    { "tag": "input", "type": "text", "name": "aaaaaaa1-0000-4000-8000-000000000008", "id": "aaaaaaa1-0000-4000-8000-000000000008", "required": false, "label": "Has someone at Linear referred you for this role? If so, please include their name." },
+    { "tag": "textarea", "type": "textarea", "name": "aaaaaaa1-0000-4000-8000-000000000009", "id": "aaaaaaa1-0000-4000-8000-000000000009", "required": false, "label": "" }
+  ]
+}
