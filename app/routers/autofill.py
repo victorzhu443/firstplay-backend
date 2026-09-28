@@ -74,11 +74,13 @@ class AutofillRequest(BaseModel):
     use_model: bool = True
 
 
-class AutofillResponse(BaseModel,
-        elapsed_ms=int((time.perf_counter() - started) * 1000),
-        model_skipped=bool(jev is not None and getattr(jev, "tripped", False)),
-    ):
+class AutofillResponse(BaseModel):
     plan: FillPlan
+    #: Wall-clock time the backend spent, so a slow fill is blamed correctly.
+    elapsed_ms: int = 0
+    #: True when a model call timed out and the rest of the plan was finished
+    #: deterministically — the fill is still complete, just with more review.
+    model_skipped: bool = False
     summary: Dict[str, int]
     jev_calls: int = 0
     cost_usd: float = 0.0
