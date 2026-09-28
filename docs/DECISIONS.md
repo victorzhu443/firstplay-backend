@@ -951,6 +951,48 @@ its tier timing so the next complaint points at a number.
 
 ---
 
+## 30. Coinbase: the speed work exposed a hydration race, and an unbounded search
+
+Victor: "now I want this to be reproducible across many many different
+Greenhouse applications … for example Coinbase doesn't work." Measured on
+`job-boards.greenhouse.io/embed/job_app?for=coinbase&token=8175459`,
+2026-09-28.
+
+**What the page said.** The plan built in 0.38 s with 24 fills. On the page,
+text fields filled; **every dropdown carried an orange note offering
+"Afghanistan+93 | Åland Islands+358 | …"** — the phone widget's country
+list. Two defects behind one symptom:
+
+1. *Hydration race.* Since §28 the plan request leaves at first sight of the
+   posting and arrives before React has hydrated the form. `widgetKind`
+   recognised react-select by finding its instance through the fiber; with
+   no fiber yet, the standard selects fell through to the autocomplete
+   path. Fix: recognise react-select from its markup (`select__input`,
+   `react-select-*` ids, the container classes) and, before the react-select
+   tier runs, wait until an instance exists — bounded at 3 s, measured as
+   already true by the time the first lookup returned.
+2. *Unbounded list search.* The autocomplete path found a field's list by
+   walking up to the nearest ancestor holding any `aria-controls`/`aria-owns`
+   — nine levels, to the `<form>` with 55 inputs, whose first pointer is the
+   phone picker's. Now at most three levels, and never a container holding
+   other fields' inputs.
+
+**Also measured.** Coinbase renders an employment block (`company-name-0`,
+`start-date-*-0`, `end-date-*-0`) and **no education dates**, so the plan's
+end-date entries are correctly "not on page" there; Scale AI renders
+`end-year--0` and no month. The id table stays as it is.
+
+**Verified after the fixes.** All three education lookups (school, degree,
+discipline) prefetched in parallel in **67 ms**; each pick selected the one
+option its loader returned.
+
+**Reproducibility, as a method.** One employer's page found two defects the
+previous ten did not. The browser-tier sample in §26 (14 hosted boards, 8
+employer pages) is the next run, and each page's `applied:` and `timing:`
+lines are the record.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
