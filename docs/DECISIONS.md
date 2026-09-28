@@ -1118,6 +1118,42 @@ nothing.
 
 ---
 
+## 35. The select driver never ran where it could work: isolated world vs. page world
+
+Round 2, Clockwork, 2026-09-28. The extension's notes said "not a
+react-select instance" on School, Degree, Discipline, End month; a probe run
+in the page at the same moment showed all six selects owned by React. Both
+were true. Chrome runs content scripts in an **isolated world**: the DOM is
+shared, but properties that page scripts attach to nodes are not — and
+React's fiber (`__reactFiber$…`), which the driver walks to reach
+`selectOption`, is such a property. From inside the extension the react-
+select driver has therefore never worked; Coinbase's, Chicago Trading's,
+NISC's and Clockwork's "known but not selected" dropdowns were all this one
+cause, and §30's and §34's hydration explanations were only part of the
+story (hydration is real and still waited for, but it was measured from the
+page world, which the extension does not share).
+
+Why it hid for so long: every fill verification I ran was a page-world
+injection through the browser tools, and it passed. The installed
+extension's own runs on standard forms were read only by their console
+counts, which said "filled" for text and "known but could not be entered"
+for selects — and the selects were blamed on hydration. Victor's rule — the
+installed extension, on real pages, read back — is the one that caught it.
+
+**Decision.** The fill runs in the page's world: the service worker injects
+`fill.js` with `chrome.scripting.executeScript({world: "MAIN"})` and awaits
+`applyPlan` there; the content script keeps extraction, the plan request and
+the report. The isolated copy stays only as a fallback when injection is
+refused, and says so. Duolingo's and Ashby's drivers, which never needed
+fibers, are unaffected. Extension 0.4.13.
+
+**What this changes about the numbers.** Every standard-renderer dropdown
+result before 0.4.13 that came from the installed extension is void; the
+page-world verifications (Figma, Scale AI, Coinbase, Gallup) stand, because
+that is the world the filler now runs in.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
