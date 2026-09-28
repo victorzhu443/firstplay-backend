@@ -921,6 +921,36 @@ cold plan is what people feel.
 
 ---
 
+## 29. Fill in tiers: start every lookup at once, pick afterwards
+
+Victor: "the education is still quite slow — I'm expecting 10 ms for each
+option"; and: "try to do things in parallel … fill out multiple sections at
+the same time." Measured 2026-09-28 before the change: the filler walked
+the plan in order and *awaited each widget in turn*, so education on the
+standard renderer paid three sequential network lookups (school, degree,
+discipline, ~0.3–0.8 s each) and Duolingo waited for its school search and
+then, separately, for its location geocoder.
+
+**Decision — four tiers, waits overlapping instead of adding up.**
+
+| tier | widgets | how |
+|---|---|---|
+| instant | text, checkboxes, radios, native selects, résumé | synchronous; no waits at all |
+| react-select | Greenhouse's standard selects, incl. school/degree/discipline | every option lookup fires concurrently (pure network, no focus); each pick is a synchronous `selectOption` with a 40 ms readback poll |
+| autocomplete | Duolingo's comboboxes, Ashby's Location, geocoders | **all searches are started first** (focusin + typed value), then each list is picked from; the first check is immediate, polls are 20 ms |
+| listbox | button-and-menu widgets | one after another — opening one may close another |
+
+Widgets that need focus are never driven concurrently; only their lookups
+are. Measured on Duolingo with the new order: after the start pass, all four
+lists (school, degree, discipline, location) were populated at once,
+including the two remote ones — the waiting now happens once, in parallel.
+
+**What stays slow, honestly.** A remote lookup costs what the network
+costs; nothing local should cost more than a frame or two. Every run prints
+its tier timing so the next complaint points at a number.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
