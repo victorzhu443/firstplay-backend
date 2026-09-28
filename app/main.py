@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import resume, job, analysis, pipeline
+from app.routers import resume, job, analysis, pipeline, autofill
 from app.db import engine, Base, SQLALCHEMY_DATABASE_URL
 from app.logging_config import configure_logging
 from app.models import Resume, JobDescription, GapAnalysis, ProjectPlan, ImprovedResume
@@ -159,6 +159,7 @@ app.include_router(resume.router)
 app.include_router(job.router)
 app.include_router(analysis.router)
 app.include_router(pipeline.router)
+app.include_router(autofill.router)
 
 @app.get("/")
 def read_root():
