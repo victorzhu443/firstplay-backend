@@ -1194,6 +1194,28 @@ and this round's backend changes on unseen forms.
 
 ---
 
+## 37. Never write into a form React has not taken over
+
+Round 3, Schonfeld, 2026-09-28, tab occluded (`visibilityState: hidden`):
+the extension filled 9 fields green and noted one select as having no
+React instance; a minute later the same page showed 12 of 13 selects with
+instances and **no green outlines at all**. Greenhouse hydrates its form
+lazily and not while the tab is hidden; the fill had landed on the
+server-rendered DOM, and hydration's re-render replaced it. The earlier
+20 s hydration wait only delayed the same outcome.
+
+**Decision.** Before writing anything, the filler waits: if the document is
+hidden, for it to be shown (a `visibilitychange`, not a timer — postings
+opened in background tabs fill the moment they are looked at); then for the
+last select on the page to be owned by React. The console says "this tab is
+in the background — the fill starts when you switch to it". Extension 0.4.16.
+
+**Measurement note for the survey.** macOS reports a window covered by
+another window as hidden, so "keep the tab active" is not enough; the Chrome
+window must be on screen. Rounds run under that condition only.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
