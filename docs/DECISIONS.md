@@ -1154,6 +1154,46 @@ that is the world the filler now runs in.
 
 ---
 
+## 36. Round 2 complete: twelve unseen boards through the extension itself
+
+All twelve round-2 boards, run by the installed extension (0.4.13 from
+Clockwork on — the first build whose select driver runs in the page world),
+tab visible, each page's own `applied:` / `timing:` and dry-run `form wants:`
+read back. 2026-09-28.
+
+| board | filled / could-not-enter | total | the form still wanted |
+|---|---|---|---|
+| Mill | 6 / 0 | 1.8 s | Country → fixed (§34) |
+| Chicago Trading | 10 / 12 (pre-page-world) | 8.0 s | re-run in round 3 |
+| NISC | 6 / 6 (hidden tab, pre-page-world) | 4.3 s | re-run in round 3 |
+| Clockwork | **15 / 1** | 4.2 s | phone-country shows "+1" for "United States +1" → readback accepts a partial display (0.4.14); Location → id fixed (0.4.15) |
+| Garda | 9 / 0 | 2.8 s | Location |
+| Verkada | 19 / 0 | 1.7 s | Location, start dates, an availability checkbox group (review) |
+| TribalScale | 12 / 0 | — | start dates |
+| Docugami | 8 / 0 | — | nothing |
+| Internship List | 23 / 0 | 3.3 s | bespoke (term, duration, pay), consents |
+| Vercel | 19 / 0 | 3.4 s | two essays, two attestations |
+| Integra FEC | 22 / 0 | 1.9 s | start dates, **heard-about multi-select**, availability, essay |
+| Apera | 10 / 0 | 1.8 s | one bespoke eligibility question |
+
+**Found and fixed this round.** `location` never located on the standard
+renderer (its control is `candidate-location`; every board above wanted it)
+— an id mapping, 0.4.15. The phone-country readback. And the heard-about
+multi-select: "Careers Website" now matches the one option that names the
+employer's own website or careers page and no third-party site — 26 such
+fields in the large corpus, 25 required.
+
+**What remains wanted is the honest residue:** education start dates (a
+profile gap — `education.start_date`), essays, attestations and consents
+(human by design), and bespoke questions.
+
+**Method.** Rounds 1 and 2 are training sets now; round 3 (ten boards never
+opened: Geneva Trading, Schonfeld, Integra Interns, Virtu, Relay, Clarity,
+Figure, Duolingo University, DoorDash Canada, Workshop) validates 0.4.14–15
+and this round's backend changes on unseen forms.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

@@ -654,3 +654,19 @@ def test_country_select_is_answered_from_residence():
     assert Memory(facts={"current_location": "Toronto, ON"}).lookup("country_of_residence") is None
     assert Memory(facts={"country": "Canada"}).lookup("country_of_residence") == "Canada"
     assert "educations[0].start_date.month" in fields and fields["educations[0].start_date.year"].required
+
+
+def test_careers_website_matches_the_employers_own_site_option():
+    from app.autofill.format import match_option
+    from app.autofill.schema import FieldOption, FormField
+
+    def field(*labels):
+        return FormField(key="q", label="How did you hear about us?", kind=FieldKind.MULTI_SELECT,
+                         field_class=FieldClass.CORE, required=True,
+                         options=[FieldOption(label=l, value=str(i)) for i, l in enumerate(labels)])
+
+    assert match_option("Careers Website", field("LinkedIn", "Handshake", "Integra FEC Website", "Other")).label == "Integra FEC Website"
+    assert match_option("Careers Website", field("Referral", "Social (i.e. LinkedIn, Facebook)", "Verkada Careers Page", "RepVue", "Other")).label == "Verkada Careers Page"
+    # Two candidate sites, or only third-party ones: no guess.
+    assert match_option("Careers Website", field("Company Website", "Careers Page", "Other")) is None
+    assert match_option("Careers Website", field("LinkedIn", "Indeed", "Other")) is None
