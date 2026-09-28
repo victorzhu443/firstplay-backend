@@ -74,7 +74,10 @@ class AutofillRequest(BaseModel):
     use_model: bool = True
 
 
-class AutofillResponse(BaseModel):
+class AutofillResponse(BaseModel,
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+        model_skipped=bool(jev is not None and getattr(jev, "tripped", False)),
+    ):
     plan: FillPlan
     summary: Dict[str, int]
     jev_calls: int = 0
