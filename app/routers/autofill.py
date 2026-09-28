@@ -36,7 +36,7 @@ from app.autofill.jev_binder import JevBinder, OptionCache, ThemeCache
 from app.autofill.memory import Memory
 from app.autofill.schema import FormSchema
 from app.exceptions import JevConfigurationError, JevError
-from app.rate_limit import llm_limit
+from app.rate_limit import autofill_limit
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ def _parse_form(ats: str, payload: Dict[str, Any]) -> FormSchema:
 # to the decisions API, and FastAPI runs sync handlers in a threadpool. Declared
 # async, one slow call would stall the event loop for every other request.
 @router.post("/plan", response_model=AutofillResponse,
-             dependencies=[Depends(llm_limit)])
+             dependencies=[Depends(autofill_limit)])
 def build_plan(request: AutofillRequest):
     """Resolve a form against a profile.
 
