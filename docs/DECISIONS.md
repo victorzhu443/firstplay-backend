@@ -874,6 +874,53 @@ on a foreground Chrome window.
 
 ---
 
+## 28. Speed is a requirement: where the seconds went, and the budget that stops them coming back
+
+Victor: "the time it takes to choose items is slow … if it is slower than by
+hand then what is the point." Measured 2026-09-28 before changing anything.
+
+**Where the time was.** Fetching the posting and its education vocabularies:
+0.4 s. Building the plan on the backend: **10–20 s — with zero model calls
+counted.** The server log had the cause: every Jev call in that server
+process was hitting the 10 s read timeout ("The read operation timed out")
+and the endpoint fell back deterministically after each one, up to three
+times per plan. A fresh process reached Jev in 0.24–0.39 s in the same
+minute, and after a restart the same plans took **1.3 s (Scale AI), 0.9 s
+(Gallup), 4.6 s (a cold posting, three sequential calls), 0.01 s
+(repeat)**. The process was sick; the design let a sick model cost 20 s.
+
+**Decisions.**
+
+1. *A 4 s per-call budget* (`JEV_TIMEOUT_SECONDS`, was 10). A healthy call
+   is 0.3–3 s; anything slower is not worth waiting for on a form.
+2. *A circuit breaker per plan.* After one transport failure the remaining
+   gates are skipped and the plan finishes deterministically; the response
+   says `model_skipped: true` and carries `elapsed_ms`, and the extension
+   prints both, so a slow fill is blamed correctly instead of looking like
+   the extension.
+3. *The plan request no longer waits for the page.* A Greenhouse plan is a
+   function of the API payload and the profile, not the DOM, so the content
+   script fires it the moment the posting is recognised and it runs while
+   the page settles. Settling itself samples every 250 ms and stops at the
+   first repeat (was 500 ms, two repeats).
+4. *Re-runs are free.* The service worker keeps each plan in session storage
+   under a hash of posting + profile for six hours; a second run on the same
+   page (after Apply, after a reload, after fixing a field) costs 0.01 s.
+   Plans where the model was skipped are not cached, so they retry.
+5. *Waits are polls.* Every fixed nap in the filler (80–150 ms) is now a
+   40 ms poll that exits as soon as the widget reflects the value; the
+   long caps for remote geocoders (8 s) are unchanged but rarely reached.
+6. *Every run reports its timing:* `page settled · plan ready (backend, or
+   "from cache") · filled · total`, in the console and, as total seconds, in
+   the popup — so the next slowness is measured, not felt.
+
+**Still on the table:** the option-translation and profile-answer gates run
+one after the other and are independent; running them concurrently would
+take roughly a second off a cold plan. Not done until a measurement says the
+cold plan is what people feel.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

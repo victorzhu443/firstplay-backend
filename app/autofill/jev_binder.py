@@ -33,6 +33,7 @@ from typing import Dict, List, Optional, Tuple
 from app.autofill.classify import normalize_label
 from app.autofill.themes import THEME_CRITERIA, QuestionTheme
 from app.autofill.schema import FormField
+from app.exceptions import JevServiceError
 from app.jev_client import JevClient, choice, get_jev_client
 
 logger = logging.getLogger(__name__)
@@ -224,6 +225,7 @@ class JevBinder:
         self.cost_usd = 0.0
         self.questions_asked = 0
 
+        self.tripped = False
         self._options = option_cache if option_cache is not None else OptionCache(
             (cache.path.replace("themes.json", "options.json")
              if cache is not None and cache.path else None)
@@ -406,7 +408,7 @@ class JevBinder:
                 criteria,
             )
 
-        decision = self._ensure_client().decide(
+        decision = self._decide(
             state, questions, description="answer {} question(s) from the profile".format(len(batch))
         )
 
@@ -424,6 +426,24 @@ class JevBinder:
             out[request_id] = (option_labels[request_id].get(answer.choice), answer.belief())
 
         return out
+
+    def _decide(self, state, questions, description):
+        """One call, behind a circuit breaker.
+
+        A model that has just timed out will time out again within the same
+        plan; paying the budget three times (theme, options, answers) turned a
+        10 ms deterministic plan into a 20 s wait. After the first transport
+        failure the remaining gates are skipped and the plan is finished
+        deterministically; the response says so.
+        """
+        if self.tripped:
+            raise JevServiceError("model skipped: an earlier call in this plan timed out")
+        try:
+            return self._ensure_client().decide(state, questions, description=description)
+        except JevServiceError as e:
+            if "timed out" in str(e) or "transport" in str(e):
+                self.tripped = True
+            raise
 
     @staticmethod
     def _option_signature(value: str, field) -> str:
@@ -459,7 +479,7 @@ class JevBinder:
                 "{}\n\nQuestion id: {}".format(_OPTION_INSTRUCTIONS, request_id), criteria
             )
 
-        decision = self._ensure_client().decide(
+        decision = self._decide(
             state, questions, description="match {} option set(s)".format(len(batch))
         )
 
@@ -496,7 +516,7 @@ class JevBinder:
                 _INSTRUCTIONS.format(label=label), THEME_CRITERIA
             )
 
-        decision = self._ensure_client().decide(
+        decision = self._decide(
             state, questions, description="classify {} form question(s)".format(len(batch))
         )
 

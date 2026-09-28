@@ -23,6 +23,7 @@ fields needing semantic option matching. Protected fields never reach that path
 — `ALLOWED_FILL_SOURCES` bars model judgement from them entirely.
 """
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -112,6 +113,7 @@ def build_plan(request: AutofillRequest):
     Returns:
         The plan, a summary, and what the model calls cost
     """
+    started = time.perf_counter()
     form = _parse_form(request.ats, request.form)
 
     try:
@@ -151,6 +153,8 @@ def build_plan(request: AutofillRequest):
         summary=plan.summary(),
         jev_calls=jev.calls if jev else 0,
         cost_usd=jev.cost_usd if jev else 0.0,
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+        model_skipped=bool(jev is not None and getattr(jev, "tripped", False)),
     )
 
 
