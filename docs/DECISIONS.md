@@ -1029,6 +1029,43 @@ and it is the half that finds id and rendering variance across boards.
 
 ---
 
+## 32. The form is the oracle: a dry-run submit after every fill
+
+Victor: "we must always check … run it across different Greenhouse
+applications, then try to submit, and if it doesn't submit figure out what
+fields have been filled, what have not, whether the filled ones are correct,
+and whether the unfilled ones are 'filled' with the right answer but not
+selected."
+
+**Measured on Gallup, 2026-09-28.** With every way of leaving the page
+blocked, clicking "Submit application" made Greenhouse mark **71 elements
+`aria-invalid`** with its own messages — "School is required.", "Country:
+Select a country", "Address Line 1: This field is required" — fired no
+submit event and attempted no network write. Greenhouse validates
+client-side before it posts, so the attempt is a read of the form's verdict.
+
+**Decision.** After every fill the extension performs that dry run and
+prints the diff: for each field the form still wants, what the plan had
+said — `FILL` (a filler defect: the value did not take), `review` (expected),
+`not in plan` (a coverage gap the API did not describe, such as Gallup's
+Address Line 1). The popup shows "form still wants N". The check runs in the
+page's main world from the service worker, with `fetch`, `XMLHttpRequest`,
+`sendBeacon`, `HTMLFormElement.submit` and the `submit` event all blocked
+for the duration and restored after.
+
+**The line.** The tool does not submit applications. Victor set that rule on
+day one ("don't actually apply and submit jobs but practice and see"), and
+a submission under his name is not reversible. The dry run gives the same
+information without crossing it; a real submission would need him to say so
+explicitly, and would still be his click.
+
+**Method for the survey runs.** Per posting: fill → dry-run → diff, recorded
+alongside the `applied:` and `timing:` lines. This is the loop that turns
+"reproducible across all Greenhouse applications" from a claim into a
+table.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
