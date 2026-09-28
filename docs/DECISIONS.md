@@ -993,6 +993,42 @@ lines are the record.
 
 ---
 
+## 31. Structural survey across ten Greenhouse boards: ids hold; two things generalise
+
+Victor: "don't fit this for only Duolingo — the purpose is this extension
+works across all Greenhouse applications." Measured 2026-09-28 on the
+standard renderer for Gallup, ATOMS, Baidu, Appian, Faraday Future,
+Brevium, Businessolver, SingleStore, Coinbase (and the EEO sequence on
+Gallup): for every posting, the headless plan's fields were checked against
+the live page — can the filler locate each one, and by what means?
+
+**Result.** Every planned field that a page renders is located, 96% by id
+and the rest by label. The misses fall into exactly two classes:
+
+1. *Education fields a board does not render.* Discipline is absent on
+   Gallup, Appian and Brevium; the end date on six of nine; Coinbase renders
+   an employment block (`company-name-0`, `start-/end-date-*-0`) and no
+   education dates at all. "Not on page" is the correct outcome and costs
+   nothing. The id table (§23) needs no change.
+2. *`race` on 7 of 9 boards.* The API lists one compliance field; the page
+   renders Greenhouse's two-question EEO block — `hispanic_ethnicity` (Yes /
+   No / Decline To Self Identify) first, and `race` is **mounted only after it
+   is answered** (verified on Gallup: absent before, present with "Asian" among
+   its options after). The filler now derives the Hispanic answer from the
+   applicant's stored race — "Hispanic or Latino" → Yes, a decline stays a
+   decline, anything else → No — fills it, waits for `race`, fills that. This
+   is replay of the applicant's own answer, not judgement; no model sees it.
+
+**Also seen live.** Gallup at first paint: 0 of 26 selects hydrated — the
+race §30 fixed, caught on a second board.
+
+**What the survey does not prove.** That the widgets take the values at
+speed; that is the foreground browser run (§26), still pending a visible
+window. The structural half is what could be measured from a hidden tab,
+and it is the half that finds id and rendering variance across boards.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
