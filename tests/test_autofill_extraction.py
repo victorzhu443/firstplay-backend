@@ -641,3 +641,16 @@ def test_location_block_yields_one_core_field_and_drops_the_hidden_coordinates()
     assert [f.key for f in fields] == ["location"]
     assert fields[0].field_class == FieldClass.CORE and fields[0].required
     assert memory_key_for("location", "Location") == "current_location"
+
+
+def test_country_select_is_answered_from_residence():
+    from app.autofill.memory import Memory
+    from app.autofill.classify import memory_key_for
+
+    fields = {f.key: f for f in parse_greenhouse_job(_duolingo_like_payload()).fields}
+    assert fields["country"].field_class == FieldClass.CORE and fields["country"].required
+    assert memory_key_for("country", "Country") == "country_of_residence"
+    assert Memory(facts={"current_location": "Ithaca, NY"}).lookup("country_of_residence") == "United States"
+    assert Memory(facts={"current_location": "Toronto, ON"}).lookup("country_of_residence") is None
+    assert Memory(facts={"country": "Canada"}).lookup("country_of_residence") == "Canada"
+    assert "educations[0].start_date.month" in fields and fields["educations[0].start_date.year"].required

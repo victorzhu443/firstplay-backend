@@ -167,6 +167,28 @@ def _year_of(text: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+_US_STATE_ABBR = {"al","ak","az","ar","ca","co","ct","de","fl","ga","hi","id","il","in","ia","ks","ky","la","me","md","ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok","or","pa","ri","sc","sd","tn","tx","ut","vt","va","wa","wv","wi","wy","dc"}
+
+
+def _country_of_residence(facts: Dict[str, str]) -> Optional[str]:
+    """"Ithaca, NY" -> "United States": the country the applicant lives in.
+
+    Explicit `country` wins; otherwise a US state abbreviation or name at the
+    end of `current_location` means the United States. Anything else stays
+    None and the form's country select goes to review.
+    """
+    explicit = (facts.get("country") or "").strip()
+    if explicit:
+        return explicit
+    location = (facts.get("current_location") or "").strip()
+    if not location:
+        return None
+    tail = re.split(r"[,\s]+", location.lower())[-1] if location else ""
+    if tail in _US_STATE_ABBR or tail == "usa" or "united states" in location.lower():
+        return "United States"
+    return None
+
+
 #: Values the education block asks for that the profile stores in another
 #: shape. Derived here so `graduation_date: "May 2028"` answers both the month
 #: select and the year field, and one `degree` string answers degree type and
@@ -321,6 +343,9 @@ class Memory(BaseModel):
 
         if key in _DERIVED_EDUCATION:
             return _DERIVED_EDUCATION[key](self.education)
+
+        if key == "country_of_residence":
+            return _country_of_residence(self.facts)
 
         for section in (self.facts, self.education, self.legal_status,
                         self.preferences, self.protected):
@@ -543,6 +568,7 @@ PROFILE_FIELDS = {
     ],
     "education": [
         ("university", "Cornell University", 14),
+        ("start_date", "August 2024", 1),
         ("graduation_date", "May 2028", 20),
         ("degree", "BS Computer Science", 5),
         ("gpa", "3.8", 12),

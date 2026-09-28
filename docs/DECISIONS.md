@@ -1079,6 +1079,45 @@ enough to stop a loop.
 
 ---
 
+## 34. Round 2 on twelve unseen boards: what the held-out set found
+
+Victor: "do this over and over again … the point is to not use the same
+testing group." Round 1's fourteen boards are now the training set; round 2
+drew twelve boards none of which had been opened before, and ran the
+**installed extension** (0.4.9) on each page with its dry-run check, reading
+the page and the console afterwards. First three boards, 2026-09-28:
+
+| board | applied | timing | form still wants | new defect |
+|---|---|---|---|---|
+| Mill | 6 filled, 0 failed | 1.8 s total, fill 0.1 s | **Country** (`#country`, beside Phone) | coverage: a required select no API block describes |
+| Chicago Trading Campus | 10 filled, **12 "not a react-select instance"**, 7 review | 8.0 s | 48 incl. school, degree, discipline, **start month/year** | hydration wait too short and only on the first select; "How did you hear" is a **fieldset of radios**; education **start dates** never planned |
+| NISC | 6 filled, 6 "not a react-select instance" | 4.3 s | **0** (false negative) | in a hidden tab React never hydrated: 0 of 12 selects owned minutes later, so neither the selects nor the form's validation existed |
+
+**Fixed from this round.**
+
+1. `country` is synthesised for every standard form (required; answered
+   from `country_of_residence`, derived: an explicit `country`, else a US
+   state in `current_location` → United States; else review).
+2. `educations[0].start_date.month/year` are synthesised; the profile gains
+   `education.start_date` (onboarding: "August 2024"); absent on most boards,
+   required on some.
+3. The filler waits for **each** select's React instance, up to 20 s, and
+   treats a `<fieldset>` of radios/checkboxes as a choice group.
+
+**A fact about hidden tabs, recorded.** Greenhouse's standard form does not
+hydrate while the tab is hidden. In that state the selects cannot be driven
+and a dry-run submit validates nothing — the "still wants 0" on NISC was the
+un-hydrated form, not a clean form. The extension now says so rather than
+guessing; the survey itself needs the tab visible for the select and
+validation tiers, exactly as §26 said.
+
+**Method note.** Each round: new boards only; the extension as installed;
+`applied:` / `timing:` / `form wants:` lines as the record; defects
+diagnosed and fixed before the next draw. Rounds continue until a draw finds
+nothing.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

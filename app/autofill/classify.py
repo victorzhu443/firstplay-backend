@@ -56,6 +56,7 @@ CORE_FIELD_NAMES = {
     # Greenhouse's candidate-location block (`location_questions`): a geocoder
     # typeahead whose chosen suggestion also fills hidden longitude/latitude.
     "location": "current_location",
+    "country": "country_of_residence",
     # Greenhouse's education block. Not in the API's `questions`; the payload
     # says only `education: education_required|education_optional`, and the
     # form renders these names (measured on Duolingo, 2026-09-27). Degree and
