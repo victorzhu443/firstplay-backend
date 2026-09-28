@@ -770,6 +770,110 @@ calibrated choice with a refusal option, not a writer.
 
 ---
 
+## 26. Where internships actually are, and how the engine is judged at scale
+
+Victor: run this across thousands of internships, provide the results to
+score, then expand to Workday and company portals. And, rightly: "I don't
+know if I can trust you running it versus running it in the browser — it's
+like testing vs real life."
+
+**Where the postings are (measured 2026-09-27).** SimplifyJobs' Summer-2026
+list, 16,933 entries, 4,516 active, 3,206 engineering-ish by title:
+
+| ATS | active | engineering-ish |
+|---|---|---|
+| Workday | 1,691 (37%) | 1,128 (35%) |
+| company portals / other | 973 (22%) | 766 (24%) — TikTok/ByteDance, Tesla, AMD, L3Harris, Qorvo, Eightfold… |
+| Greenhouse | 666 (15%) | 469 (15%) |
+| Oracle / Taleo | 341 | 221 |
+| Ashby | 287 | 226 |
+| iCIMS | 190 | 118 |
+| Lever | 107 | 83 |
+| SmartRecruiters | 98 | 76 |
+| Google / Apple / Microsoft / Amazon / Meta own portals | 63 | — |
+
+Greenhouse + Ashby, the two launch targets, are 22% of the market. Workday
+alone is larger than both combined, so it is the next platform, and it will
+need what Greenhouse never did: account creation per employer (the
+applicant's, never the tool's), a multi-page flow with its own widget set,
+and no public form API — a DOM extractor like Ashby's, measured first.
+
+**Two kinds of evidence, kept apart.**
+
+1. *Deciding* — what to answer. The extension sends the Greenhouse payload
+   and the profile to `POST /api/autofill/plan`; the same call can be made
+   headlessly for thousands of postings, and every FILL/REVIEW decision is
+   identical to what the extension would receive. From the 205 board tokens
+   in those listings, 190 answered; they hold **1,269 intern postings**,
+   which reduce to **578 unique forms** once identical question sets are
+   removed. Frozen to `~/.config/firstplay/corpus-large` with each board's
+   education vocabularies attached, exactly as the service worker attaches
+   them. Deterministic pass: 6,658 fields filled, median 12 per form, 5,957
+   left for review, **85 distinct (question, answer) pairs** — the unit
+   Victor scores, each carrying how many postings it covers. The model pass
+   follows and is reported in §27.
+2. *Filling* — whether the page takes it. Nothing headless proves this, and
+   every filler defect found today (a sibling written as YES, a decoy input,
+   a fallback that read another field's list) lived here. It is judged only
+   by the installed extension running on real postings in Victor's Chrome:
+   a stratified sample across renderers (hosted boards, embed frames,
+   employer renderers like Duolingo, Ashby), the extension's own
+   `applied:` line read back per posting, screenshots kept. The sample is
+   small by construction because it is expensive; the headless run is large
+   because it is cheap. Neither substitutes for the other.
+
+**Why distinct decisions, not fields.** 6,658 fills are not reviewable;
+85 rows are. Precision is then computed per fill, weighting each verdict by
+how many postings the decision covered, so one wrong row costs what it
+would cost in the world.
+
+---
+
+## 27. The scale run: 576 forms, 9,386 fills, 983 decisions to score, ten cents
+
+Measured 2026-09-27 with `python -m app.autofill.scale` over the 578 unique
+forms of §26 (two forms failed and are counted below).
+
+| | deterministic | with model gates |
+|---|---|---|
+| forms planned | 578 | 576 |
+| fields filled | 6,658 | **9,386** |
+| median filled / form | 12 | **17** |
+| fields left for review | 5,957 | 3,121 (median 5 / form) |
+| distinct (question, answer) pairs | 85 | **983** |
+| model-decided fills | 0 | 825 (254 distinct) |
+| Jev calls / cost | 0 | 802 calls, 2,662 questions, **$0.10** |
+
+The 983 distinct decisions are on the scorecard for Victor, each weighted by
+the forms it covers, so precision is computed per fill, not per row.
+
+**Seen before scoring, and fixed:**
+
+1. *"Select your anticipated master's degree graduation date" → 05/2028 at
+   0.99.* The applicant is pursuing a bachelor's; the question presupposes a
+   degree he is not taking. The gate's state now carries a derived note from
+   `degree_type` — "Bachelor's only; questions presupposing another degree
+   level do not apply" — the same device that settled OPT for a citizen.
+   Unlabelled rows of this shape stay on the scorecard for him to confirm.
+2. *Rothesay Graduates:* a university list of 552 options failed the whole
+   form, because a Jev Choice takes at most 255. Both gates now skip a field
+   with more than 254 options and leave it for review.
+
+**What the remaining 3,121 reviews are.** 1,695 "nothing stored answers
+this" — bespoke questions, the long tail; 284 human-only by class (consent,
+attestations); 291 stored answers that match no option unambiguously; 89
+onboarding answers not yet given; 198 self-identification questions
+(sexual orientation, transgender, personal preferences) the profile does
+not hold. The first bucket is where any further coverage lives, and it is
+what the scorecard's "Ask me" verdicts will refine.
+
+**Real-browser tier (pending).** A stratified sample is drawn — 14 hosted
+postings on 14 boards, 8 employer-hosted pages — to be run by the installed
+extension with its `applied:` line and a screenshot per posting. It waits
+on a foreground Chrome window.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

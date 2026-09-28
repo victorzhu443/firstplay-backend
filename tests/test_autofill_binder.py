@@ -535,3 +535,13 @@ def test_profile_answer_gate_fills_only_confident_screening_choices():
     assert entries[0].source == FillSource.MODEL_DECISION and entries[0].confidence == 0.97
     assert entries[1].needs_review and entries[1].value is None
     assert entries[2].needs_review and entries[2].value == "Yes" and "60%" in entries[2].reason
+
+
+def test_applicant_state_states_degree_level_and_never_protected_data():
+    from app.autofill.binder import _applicant_state
+    from app.autofill.memory import Memory
+
+    state = _applicant_state(Memory(education={"degree": "BS Computer Science"},
+                                    protected={"gender": "Male"}, facts={"email": "x@y.z"}))
+    assert any("Bachelor's Degree only" in n and "Master's" in n for n in state["notes"])
+    assert "Male" not in json.dumps(state) and "x@y.z" not in json.dumps(state)

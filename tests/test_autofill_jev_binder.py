@@ -243,3 +243,17 @@ def test_every_theme_has_criteria():
     for theme in QuestionTheme:
         assert theme.value in THEME_CRITERIA, theme
         assert len(THEME_CRITERIA[theme.value]) > 20, theme
+
+
+def test_gates_skip_fields_with_more_options_than_a_choice_allows():
+    """Rothesay (corpus-large) lists 552 universities; Jev's Choice takes 255."""
+    from app.autofill.jev_binder import JevBinder
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField
+
+    field = FormField(key="uni", label="Which university?", kind=FieldKind.SINGLE_SELECT,
+                      field_class=FieldClass.SCREENING, required=True,
+                      options=[FieldOption(label=f"University {i}", value=str(i)) for i in range(552)])
+    binder = JevBinder(client=None)
+
+    assert binder.answer_from_profile({"applicant": {}}, [("a", field)]) == {"a": (None, 0.0)}
+    assert binder.match_options([("m", "Cornell University", field)]) == {"m": (None, 0.0)}

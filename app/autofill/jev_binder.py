@@ -313,6 +313,9 @@ class JevBinder:
         # an identical match on every run is pure waste. Keyed on the stored
         # answer *and* the option set, since either changing changes the answer.
         for request_id, value, field in requests:
+            if len(field.options) > 254:
+                out[request_id] = (None, 0.0)
+                continue
             signature = self._option_signature(value, field)
             cached = self._options.get(signature)
             if cached is not None:
@@ -360,6 +363,11 @@ class JevBinder:
         pending = []
 
         for request_id, field in requests:
+            # A Choice takes at most 255 options; a 552-university list
+            # (Rothesay, corpus-large) must not fail the whole form.
+            if len(field.options) > 254:
+                out[request_id] = (None, 0.0)
+                continue
             signature = "answer::{}::{}::{}".format(
                 field.label[:80], "|".join(o.label for o in field.options)[:200], state_hash
             )
