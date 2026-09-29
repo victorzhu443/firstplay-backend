@@ -142,6 +142,7 @@ CORE_LABEL_ALIASES = {
     # own key rather than to `linkedin`, because the applicant may want to put
     # something different in a combined field than in a LinkedIn-only one.
     "linkedin profile github personal website or portfolio": "links_combined",
+    "github or personal website": "github",      # Sierra (Ashby): one field, GitHub first
     "linkedin github personal website or portfolio": "links_combined",
     "website portfolio": "links_combined",
     # identity extras
