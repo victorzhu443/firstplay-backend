@@ -670,3 +670,17 @@ def test_careers_website_matches_the_employers_own_site_option():
     # Two candidate sites, or only third-party ones: no guess.
     assert match_option("Careers Website", field("Company Website", "Careers Page", "Other")) is None
     assert match_option("Careers Website", field("LinkedIn", "Indeed", "Other")) is None
+
+
+def test_custom_address_questions_derive_from_the_stored_location():
+    from app.autofill.memory import Memory
+    from app.autofill.classify import memory_key_for
+
+    m = Memory(facts={"current_location": "Ithaca, NY"})
+    assert m.lookup("state_of_residence") == "New York"
+    assert m.lookup("city_of_residence") == "Ithaca"
+    assert m.lookup("street_address") is None            # a real gap stays a gap
+    assert memory_key_for("question_1", "State/Province") == "state_of_residence"
+    assert memory_key_for("question_2", "Country") == "country_of_residence"
+    assert memory_key_for("question_3", "Address Line 1") == "street_address"
+    assert memory_key_for("question_4", "City") == "city_of_residence"

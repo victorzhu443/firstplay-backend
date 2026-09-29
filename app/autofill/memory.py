@@ -167,6 +167,34 @@ def _year_of(text: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+_US_STATE_NAMES = {
+    "al": "Alabama", "ak": "Alaska", "az": "Arizona", "ar": "Arkansas", "ca": "California", "co": "Colorado",
+    "ct": "Connecticut", "de": "Delaware", "fl": "Florida", "ga": "Georgia", "hi": "Hawaii", "id": "Idaho",
+    "il": "Illinois", "in": "Indiana", "ia": "Iowa", "ks": "Kansas", "ky": "Kentucky", "la": "Louisiana",
+    "me": "Maine", "md": "Maryland", "ma": "Massachusetts", "mi": "Michigan", "mn": "Minnesota",
+    "ms": "Mississippi", "mo": "Missouri", "mt": "Montana", "ne": "Nebraska", "nv": "Nevada",
+    "nh": "New Hampshire", "nj": "New Jersey", "nm": "New Mexico", "ny": "New York", "nc": "North Carolina",
+    "nd": "North Dakota", "oh": "Ohio", "ok": "Oklahoma", "or": "Oregon", "pa": "Pennsylvania",
+    "ri": "Rhode Island", "sc": "South Carolina", "sd": "South Dakota", "tn": "Tennessee", "tx": "Texas",
+    "ut": "Utah", "vt": "Vermont", "va": "Virginia", "wa": "Washington", "wv": "West Virginia",
+    "wi": "Wisconsin", "wy": "Wyoming", "dc": "District of Columbia",
+}
+
+
+def _split_location(facts: Dict[str, str]):
+    """"Ithaca, NY" -> ("Ithaca", "New York"); explicit city/state facts win."""
+    city = (facts.get("city") or "").strip()
+    state = (facts.get("state") or "").strip()
+    location = (facts.get("current_location") or "").strip()
+    parts = [x.strip() for x in location.split(",") if x.strip()]
+    if not city and parts:
+        city = parts[0]
+    if not state and len(parts) >= 2:
+        tail = parts[1].split()[0].lower() if parts[1] else ""
+        state = _US_STATE_NAMES.get(tail, parts[1])
+    return city or None, state or None
+
+
 _US_STATE_ABBR = {"al","ak","az","ar","ca","co","ct","de","fl","ga","hi","id","il","in","ia","ks","ky","la","me","md","ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok","or","pa","ri","sc","sd","tn","tx","ut","vt","va","wa","wv","wi","wy","dc"}
 
 
@@ -346,6 +374,10 @@ class Memory(BaseModel):
 
         if key == "country_of_residence":
             return _country_of_residence(self.facts)
+        if key == "state_of_residence":
+            return _split_location(self.facts)[1]
+        if key == "city_of_residence":
+            return _split_location(self.facts)[0]
 
         for section in (self.facts, self.education, self.legal_status,
                         self.preferences, self.protected):
@@ -563,6 +595,7 @@ PROFILE_FIELDS = {
         ("current_employer", "Analytical Engines", 8),
         ("current_job_title", "Software Engineering Intern", 8),
         ("current_location", "San Francisco, CA", 5),
+        ("street_address", "", 2),
         ("postal_code", "94105", 13),
         ("country_of_residence", "United States", 8),
     ],
