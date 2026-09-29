@@ -1512,6 +1512,54 @@ is. What remains above one second is the fill's own outliers — next.
 
 ---
 
+## 43. The fill under one second: where its time went, and a race the oracle caught
+
+Victor's target: "filling it out in under 1 s is the optimal case." With
+the hidden-tab wait no longer counted as fill (0.4.22) and per-tier timing
+(0.4.21), the window on screen, the fill measured:
+
+| board (0.4.22) | fill | where |
+|---|---|---|
+| Truveta | 100 ms | nothing over 20 ms |
+| Rocket Lab | 735 ms | picks 581 ms — thirteen react-selects, each confirmed on a 40 ms poll in turn |
+| General Matter | 2,351 ms | lookups 863 ms; picks 1,383 ms with the Location geocoder's 804 ms network wait *inside* a pick |
+
+The 14–27 s readings of §42's round were the hidden-tab wait; the fill
+itself had never been slow.
+
+**Decisions (0.4.23–0.4.24).**
+- Picks are fired in one pass and their readbacks awaited together, polled
+  at frame rate. Rocket Lab's picks: 581 → 20 ms; fill 735 → 158 ms.
+- A typeahead with no loader (Location) is typed during the parallel
+  lookups tier, so its network wait overlaps the loader lookups instead of
+  following them. General Matter's fill: 2,351 → 828 ms, all of it the
+  geocoder's own latency, which now sets the floor.
+- Loader results are cached per control and term, and the last plan's
+  school / degree / discipline terms are looked up the moment the next
+  board settles — before its plan arrives. Pacific Fusion, the next board
+  opened: lookups 65 ms, fill 145 ms.
+
+**The race (0.4.25).** With picks confirmed on the widget's *held* state, the
+dry-run submit ran before the form had committed the values: Pacific
+Fusion, Rocket Lab and General Matter each showed correctly filled selects
+carrying a stale "required" flag, and the console printed `plan said FILL`
+rows for them. Two page probes settled it: firing four picks in one tick
+rendered all four values correctly (so nothing was lost), and a fresh
+dry-run on the untouched page read the same fields as valid (so the flags
+were a timing artefact). The rendered value is the commit signal when the
+tab is visible — the wrapper owns the value, so the display changes only
+once the form state has it — and the held state is used only when hidden;
+the dry-run waits one frame after the last write. The oracle of §32 caught
+a defect the fill's own readback could not see, which is what it is for.
+
+**State of the target.** Fill: 0.1–0.2 s on boards without a geocoder,
+~0.8 s with one (the network sets it). Plan: instant on a repeat visit,
+one Jev round trip on a first visit (§42), overlapped with the page's own
+settling. The remaining above-one-second cases are the page loading and
+the model host's latency spread, neither of which the extension controls.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
