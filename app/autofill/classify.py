@@ -111,7 +111,6 @@ CORE_LABEL_ALIASES = {
     # the stored location, and a street address the profile may hold.
     "state": "state_of_residence",
     "state province": "state_of_residence",
-    "state/province": "state_of_residence",
     "country": "country_of_residence",
     "country of residence": "country_of_residence",
     "city": "city_of_residence",
