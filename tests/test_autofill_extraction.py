@@ -641,3 +641,46 @@ def test_location_block_yields_one_core_field_and_drops_the_hidden_coordinates()
     assert [f.key for f in fields] == ["location"]
     assert fields[0].field_class == FieldClass.CORE and fields[0].required
     assert memory_key_for("location", "Location") == "current_location"
+
+
+def test_country_select_is_answered_from_residence():
+    from app.autofill.memory import Memory
+    from app.autofill.classify import memory_key_for
+
+    fields = {f.key: f for f in parse_greenhouse_job(_duolingo_like_payload()).fields}
+    assert fields["country"].field_class == FieldClass.CORE and fields["country"].required
+    assert memory_key_for("country", "Country") == "country_of_residence"
+    assert Memory(facts={"current_location": "Ithaca, NY"}).lookup("country_of_residence") == "United States"
+    assert Memory(facts={"current_location": "Toronto, ON"}).lookup("country_of_residence") is None
+    assert Memory(facts={"country": "Canada"}).lookup("country_of_residence") == "Canada"
+    assert "educations[0].start_date.month" in fields and fields["educations[0].start_date.year"].required
+
+
+def test_careers_website_matches_the_employers_own_site_option():
+    from app.autofill.format import match_option
+    from app.autofill.schema import FieldOption, FormField
+
+    def field(*labels):
+        return FormField(key="q", label="How did you hear about us?", kind=FieldKind.MULTI_SELECT,
+                         field_class=FieldClass.CORE, required=True,
+                         options=[FieldOption(label=l, value=str(i)) for i, l in enumerate(labels)])
+
+    assert match_option("Careers Website", field("LinkedIn", "Handshake", "Integra FEC Website", "Other")).label == "Integra FEC Website"
+    assert match_option("Careers Website", field("Referral", "Social (i.e. LinkedIn, Facebook)", "Verkada Careers Page", "RepVue", "Other")).label == "Verkada Careers Page"
+    # Two candidate sites, or only third-party ones: no guess.
+    assert match_option("Careers Website", field("Company Website", "Careers Page", "Other")) is None
+    assert match_option("Careers Website", field("LinkedIn", "Indeed", "Other")) is None
+
+
+def test_custom_address_questions_derive_from_the_stored_location():
+    from app.autofill.memory import Memory
+    from app.autofill.classify import memory_key_for
+
+    m = Memory(facts={"current_location": "Ithaca, NY"})
+    assert m.lookup("state_of_residence") == "New York"
+    assert m.lookup("city_of_residence") == "Ithaca"
+    assert m.lookup("street_address") is None            # a real gap stays a gap
+    assert memory_key_for("question_1", "State/Province") == "state_of_residence"
+    assert memory_key_for("question_2", "Country") == "country_of_residence"
+    assert memory_key_for("question_3", "Address Line 1") == "street_address"
+    assert memory_key_for("question_4", "City") == "city_of_residence"

@@ -58,7 +58,11 @@ DEFAULT_MODEL = "typesafe/jev-1.13"
 
 #: A single decision call is on the critical path of a page interaction, and
 #: published latency is 70-500ms. Ten seconds is generous and still bounded.
-DEFAULT_TIMEOUT_SECONDS = 10.0
+#: Per-call budget. A fill that waits on a slow model is slower than typing
+#: by hand, which defeats the tool; measured 2026-09-28, every call was
+#: hitting the old 10 s limit and each plan paid it up to three times. Four
+#: seconds covers a healthy call (~1-3 s) and bounds the damage of a sick one.
+DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("JEV_TIMEOUT_SECONDS", "4.0"))
 
 #: API limits, enforced before sending so a malformed question set fails with a
 #: message naming the question rather than as an opaque 422.
