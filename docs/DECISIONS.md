@@ -1216,6 +1216,77 @@ window must be on screen. Rounds run under that condition only.
 
 ---
 
+## 38. Rounds 3–5: 38 more unseen boards, one class of failure left and it is environmental
+
+Held-out boards are drawn from the ledger (`used_boards.json`, never reused)
+and run through the **installed** extension on `job-boards.greenhouse.io`,
+with the page's own `aria-invalid` fields read back after the dry-run
+submit. Totals for rounds 3–5 (closed postings excluded, 2026-09-28):
+
+| | |
+|---|---|
+| boards run | 38 (54 logged since round 1, 2 closed since freeze) |
+| fields filled green | 583 |
+| "known but could not be entered" | 20, all on 2 board (pacificfusion, lightmatter) |
+| boards with zero entry failures | 36/38 |
+
+The one board with failures loaded while the tab was hidden, flickered
+visible for a moment, then was covered again: the 20 s hydration budget
+was spent while Greenhouse was not hydrating, the wait gave up, and the
+fill landed on the server-rendered DOM (§37's failure, through a gap in
+§37's fix). Extension **0.4.19**: the budget counts only visible time; a
+hidden page parks on `visibilitychange` and resumes with its budget intact.
+
+**What the forms still want after a fill**, by kind, across those boards:
+
+| remaining requirement | boards |
+|---|---|
+| bespoke per-company question | 12 |
+| essay / narrative | 9 |
+| attestation | 3 |
+| security clearance | 2 |
+| consent / attestation | 2 |
+| availability multi | 1 |
+| street address (profile gap) | 1 |
+| state/province | 1 |
+| salary | 1 |
+| pronunciation | 1 |
+| duolingo account | 1 |
+| competing offer | 1 |
+| previously completed | 1 |
+| team preference group | 1 |
+| desired salary | 1 |
+| class year group (derivable from start_date) | 1 |
+| co-op registered | 1 |
+| heard-about (no own-site option) | 1 |
+| employment block: company, title, end year | 1 |
+| School | 1 |
+| experience checkbox group | 1 |
+| preferred pronouns | 1 |
+| office applying to | 1 |
+| referral conditional | 1 |
+| prior internship | 1 |
+| heard-about | 1 |
+| GPA (Undergraduate) alias gap | 1 |
+| SAT/ACT | 1 |
+| office multi | 1 |
+
+None of these is a widget failure. Essays and consents are out of scope by
+standing decision (§14, §21); bespoke questions ("which office", "can you
+lift 50 lb", "which shifts") have no taxonomy and stay for the applicant.
+Alias gaps found and closed this round: "GPA (Undergraduate)", "What is your
+preferred first name", and a State select whose label carries an "if N/A
+select Other" clause.
+
+**Measurement hazard, recorded for anyone repeating this.** Two of the
+38 boards were first read too early (ZipRecruiter's page is slow) and
+looked like failures until a second read; a JavaScript read that waits on a
+hidden tab longer than the debugger's 45 s timeout freezes the reader, not
+the page. Reads wait at most 30 s and report `visibilityState` with every
+count, so a "0 filled" on a hidden tab is never logged as a defect.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
