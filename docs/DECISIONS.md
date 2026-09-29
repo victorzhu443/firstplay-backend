@@ -1066,6 +1066,19 @@ table.
 
 ---
 
+## 33. The plan endpoint gets its own rate limit
+
+Measured 2026-09-28 during the round-2 survey: the extension logged
+`backend returned 429: Rate limit exceeded for LLM-backed endpoints: 30
+requests per 60 minutes` on live forms — the plan endpoint shared the
+limit meant for the résumé pipeline's four-call LLM chains. One plan is one
+page the applicant opened, from their own machine, at most one model
+round-trip and about a tenth of a cent. `RATE_LIMIT_AUTOFILL`, default 600
+per hour: enough for any evening of applying and for a survey run, small
+enough to stop a loop.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
