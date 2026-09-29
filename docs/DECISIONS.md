@@ -1227,10 +1227,13 @@ submit. Totals for rounds 3–5 (closed postings excluded, 2026-09-28):
 |---|---|
 | boards run | 38 (54 logged since round 1, 2 closed since freeze) |
 | fields filled green | 583 |
-| "known but could not be entered" | 20, all on 2 board (pacificfusion, lightmatter) |
+| "known but could not be entered" | 20, on 2 boards (Pacific Fusion 1, Lightmatter 19) |
 | boards with zero entry failures | 36/38 |
 
-The one board with failures loaded while the tab was hidden, flickered
+Pacific Fusion's one failure was a school lookup that returned nothing for
+the typed term, whereupon the driver fell back to the default A–Z page and
+refused, correctly, to pick from it (fixed in 0.4.18: retry the term, never
+the default page). Lightmatter loaded while the tab was hidden, flickered
 visible for a moment, then was covered again: the 20 s hydration budget
 was spent while Greenhouse was not hydrating, the wait gave up, and the
 fill landed on the server-rendered DOM (§37's failure, through a gap in
