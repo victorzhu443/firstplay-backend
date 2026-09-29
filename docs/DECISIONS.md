@@ -1352,6 +1352,94 @@ Next is Ashby, on the same protocol; then Workday, then Oracle.
 
 ---
 
+## 40. Widening the profile-answer gate: multi-selects, class standing, background
+
+After §39, 184 requirements remained across 101 boards. Sorted by hand,
+about 50 were bounded decisions from facts the applicant already holds:
+term availability, class standing, clearance, career fairs, prior
+internships, the GPA scale. The gate of §25 could not reach them for three
+reasons, none of them about the model.
+
+| gap | example | why the gate missed it |
+|---|---|---|
+| multi-selects refused | General Matter "When are you available… check all that apply"; Optiver's 11 offices; Rocket Lab's clearance list | the gate accepted single-choice and boolean only |
+| state too thin | Compeer "current academic status"; QuEra "highest level of education obtained"; Varda "seeking a Spring internship?" | no class standing, no today's date, no term calendar in state |
+| facts absent | BTI "US government security clearance?"; Perpay "fall career fair?"; Klaviyo "prior internships"; Radix "GPA range" | not in the profile at all |
+
+Arithmetic questions (a GPA to a bucket, a graduation year) stay in code;
+they were already answered by `match_numeric_bucket` where the label was
+recognised.
+
+**Decision.** A MULTI_SELECT with at most 12 options is asked as one Noul
+per option: tick at p ≥ 0.90, no at p ≤ 0.10, anything between leaves the
+whole field with the applicant, carrying the partial set as a suggestion.
+Batches are cut by question count, not request count. `_applicant_state`
+adds `today`, class standing derived from the education dates (academic
+years start in August; four years assumed when only the graduation date is
+stored), an availability note that names the month each term starts, and a
+whitelisted `background` dict of four new onboarding facts —
+`security_clearance`, `attended_career_fair`, `prior_internships`,
+`gpa_scale`. Protected and contact data still never reach the state.
+
+**Three things went wrong on the way, each caught by the live model on the
+board that exposed the question**, run in-process against the frozen posting
+with per-option beliefs printed:
+
+1. *A silent profile guessed.* Asked "would the applicant tick this option?",
+   the Noul put "Never held a clearance" at 0.90 with no clearance fact in
+   the profile — a plausible guess about a student, exactly on the
+   threshold. The wording now makes silence a no ("if the profile says
+   nothing that bears on the option, it does not apply — the applicant
+   decides"); the same option fell to 0.28 and the field went to review.
+2. *The note contradicted a fact.* "Any listed term is acceptable" beside an
+   earliest start of May 2027 left "Spring 2027" at p = 0.50. The note now
+   states the rule (a term applies only if it starts on or after the
+   earliest start) and the calendar (Spring = January, Summer = May/June,
+   Fall = August/September, Winter = December/January); Spring fell to 0.15
+   and the field filled at 0.89.
+3. *"Not Applicable" is not a proposition.* With the clearance fact present,
+   every level scored ≤ 0.05 and "Not Applicable" 0.15 — a model does not
+   read the opt-out as something one ticks. When every concrete option is a
+   confident no and exactly one option means none, that one is chosen by
+   elimination with the weakest no's confidence (0.93 on Rocket Lab).
+
+**Before / after, real Jev, the applicant's real profile** (facts rows used a
+temporary profile copy carrying the four new facts; nothing was written into
+the real profile):
+
+| board · question | before | after |
+|---|---|---|
+| General Matter · available terms (multi) | review | Summer 2027 · 0.89 |
+| Compeer · current academic status | review | Junior · 1.00 |
+| QuEra · highest level of education obtained | review | Some College, No Degree · 0.87 |
+| General Matter · active clearances (multi), fact present | review | Never held a clearance · 0.92 |
+| Rocket Lab · active clearances (multi), fact present | review | Not Applicable · 0.93 by elimination |
+| BTI360 · US government clearance?, fact present | review | No · 1.00 |
+| Perpay · fall career fair?, fact present | review | No · 0.97 |
+| Klaviyo · prior internships, fact present | review | 1 · 0.94 |
+| Radix · GPA range, fact present | review | 0.0 – 4.0 · 0.89 |
+| Optiver · offices open to (multi) | review | review — the profile is silent on offices, and the model now says so |
+| Varda · seeking a Spring internship? | review | review at 0.56 — for a term-flexible applicant with a May 2027 earliest start, a Spring 2028 role is open; the question is genuinely undetermined |
+
+Cost: about $0.0001 per multi-select field; a plan with three of them is
+still under 2 s end to end.
+
+**Held-out check.** Ten fresh boards (round 8): 10 model decisions, every one
+traceable to a stored fact (graduation year ×3, degree level, degree
+subject, work-eligibility statement, education status, based in, nationality
+— all from education and legal_status) and no multi-select on those forms.
+One policy catch: Maven Securities' UK-worded "If you require any support or
+adjustments during the recruitment process" was classified SCREENING and
+the gate answered it "No" from nothing. It is disability-adjacent; it is now
+a memory-only pattern and is replayed only from the stored answer.
+
+**Still open.** The multi-select write path has not yet run through the
+installed extension (the tab was hidden every time; it fills on the next
+look). The four facts are not yet in Victor's profile; until he adds them
+those questions stay amber, by design.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

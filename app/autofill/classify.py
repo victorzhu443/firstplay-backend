@@ -203,7 +203,11 @@ MEMORY_ONLY_LABEL_KEYS = (
     # accommodation first it was answered from accommodation_needs ("None"),
     # which rendered as "No" — the inverted answer, on a live Lyft posting.
     (re.compile(r"\bessential functions\b", re.I), "essential_functions"),
-    (re.compile(r"\b(reasonable accommodation|accommodation (for|during|request))\b", re.I),
+    # Maven Securities 8043552: "If you require any support or adjustments
+    # during the recruitment process…" is the UK wording. Unmatched, it was
+    # SCREENING and the model gate answered it "No" from nothing (§40).
+    (re.compile(r"\b(reasonable accommodations?|accommodations? (for|during|request)|"
+                r"support or adjustments|reasonable adjustments|adjustments (during|to) the)\b", re.I),
      "accommodation_needs"),
     (re.compile(r"\bclose relative\b", re.I), "close_relative_official"),
     (re.compile(r"\bgovernment official\b", re.I), "government_official"),
@@ -285,7 +289,8 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
 _MEMORY_ONLY = (
     # ADA / accommodation. Free text or yes/no, and the applicant's own
     # statement either way — most people store "None" and never see it again.
-    re.compile(r"\b(reasonable accommodation|accommodation (for|during|request)"
+    re.compile(r"\b(reasonable accommodations?|accommodations? (for|during|request)"
+               r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
                r"|essential functions)\b", re.I),
     # Conflict-of-interest and political-exposure screens (~30 instances across
     # the fintech boards). Stable facts about relatives and holdings.
