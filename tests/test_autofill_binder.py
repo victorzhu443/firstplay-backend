@@ -719,3 +719,18 @@ def test_the_answer_gate_is_asked_alongside_classification_and_not_again():
     assert answer_call[2] == ("spec_q1",)                      # only the answerable field was asked
     q1 = next(e for e in plan.entries if e.field_key == "q1")
     assert q1.value == "No" and q1.source == FillSource.MODEL_DECISION and not q1.needs_review
+
+
+def test_a_yes_no_control_never_receives_a_non_yes_no_value():
+    """Color Health (Ashby): "Are you based in the San Francisco Bay Area?" is a
+    checkbox; the location theme produced "Ithaca, NY" and the filler refused."""
+    from app.autofill.binder import Resolution, _within_options
+    from app.autofill.schema import FieldClass, FieldKind, FormField, FillSource
+
+    question = FormField(key="q1", label="Are you based in the San Francisco Bay Area?", kind=FieldKind.BOOLEAN,
+                         field_class=FieldClass.SCREENING, required=True, options=[])
+    guarded = _within_options(Resolution(field_key="q1", value="Ithaca, NY", source=FillSource.MEMORY), question)
+    assert guarded.value is None and guarded.needs_review and "yes/no" in guarded.reason
+
+    kept = _within_options(Resolution(field_key="q1", value="No", source=FillSource.MEMORY), question)
+    assert kept.value == "No" and not kept.needs_review
