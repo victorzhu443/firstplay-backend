@@ -1594,6 +1594,52 @@ disagree, the oracle is right until proven otherwise on the page.
 
 ---
 
+## 45. Greenhouse, closed out
+
+Victor: "so are we almost done with greenhouse applications and can move on
+to ashby?" The answer, with the numbers as of 2026-09-29:
+
+| | |
+|---|---|
+| boards opened | 132 |
+| excluded (closed since listing, employer-hosted redirect, network error) | 16 |
+| **live boards measured through the installed extension** | **116** |
+| fields filled | 1,849 |
+| "known but could not be entered" | 21 in total; 0 since 0.4.19, across 64 consecutive unseen boards |
+| false "still required" over filled fields | 0 on 0.4.26+ (Lightmatter, Pacific Fusion, Rocket Lab, Insurify, OpenTable) |
+| fill, tab on screen | 0.1–0.4 s without a geocoder; ~0.8–0.9 s with one (network floor) |
+| first-visit plan | one Jev round trip (§42); repeat visit instant (engine-keyed cache, §41) |
+
+Round 10 drew from sources never sampled before — the Simplify Summer
+2026 and New-Grad lists — because the original pool was exhausted. Of the
+first six intern postings four had closed since listing; the New-Grad list,
+liveness-checked against the board API first, gave 77 live boards. Five ran
+before the window was covered for the day: GITAI 15, Cloudflare 17,
+Katalyst 12, OpenTable 16, Insurify 18 — 78 filled, 0 entry failures, no
+false flags. New-grad forms ask the same shapes with different words; the
+gate answered them from the same facts.
+
+**Defects found in this closing pass, and where they went.**
+- One-pass pick firing (0.4.23) lost every pick but the last in the form's
+  state while every widget displayed correctly — §44, fixed 0.4.26.
+- A pick covered mid-fill waited the whole 2 s cap per select (Rocket Lab,
+  25.6 s in picks) — 0.4.27 caps the wait at twelve frames when hidden.
+- A loader that never answered held OpenTable's lookups tier for 8.7 s —
+  0.4.28 gives up at 3 s and names slow lookups.
+
+**What remains is not Greenhouse.** Essays, consents, disclosures, bespoke
+questions, custom self-identification wording, and one profile gap
+(education start date). Two coverage candidates stay open from §39:
+availability/term selects beyond the ones the gate now reaches, and class
+year as a stored fact rather than a derivation.
+
+**Decision.** Greenhouse is done for this pass. Ashby next, on the same
+protocol: a held-out draw from the Simplify lists (never sampled for
+Ashby), the installed extension, the form's own validation as oracle, one
+PR and one entry per iteration.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
