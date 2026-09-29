@@ -1640,6 +1640,59 @@ PR and one entry per iteration.
 
 ---
 
+## 46. Ashby exposes its form after all: ApiJobPosting
+
+§22 and the Ashby adapter's docstring said Ashby has no form-schema API —
+the posting API and `window.__appData` carry only metadata — so Ashby plans
+waited for the DOM to settle (≥ 500 ms) before a request could be made.
+Starting the Ashby pass from first principles meant checking that claim
+before building on it.
+
+**What the page actually does.** Its HTML (47 KB) carries no fields. Its
+network traffic shows one GraphQL route, `jobs.ashbyhq.com/api/non-user-graphql`,
+and its front-end bundle holds the operations as graphql-js ASTs. Printing
+the `ApiJobPosting` AST back to query text and replaying it from Python —
+no cookies, no auth — returned the posting **and** `applicationForm`:
+sections, each with `fieldEntries` carrying `field.{type, path, title,
+selectableValues}` and `isRequired`. Sierra's form: 23 entries in three
+sections; types String, Email, Phone, File, LongText, Number, ValueSelect
+(3-option radios and a 102-option combobox alike), MultiValueSelect.
+
+**The join is exact.** Every rendered control's `id` and `name` equal the
+field's `path` (`_systemfield_email`, `_systemfield_name`, or a UUID), and
+the field's container carries `data-field-path` and `data-field-entry-id`.
+Radio and checkbox options carry a per-load prefix on their ids but sit
+inside that container, labelled by their option text. Nothing has to be
+matched by label.
+
+**Decision.** Ashby gets the Greenhouse shape: the extension fetches
+`ApiJobPosting` at first sight of the posting (query text checked in as
+`ashby_posting.graphql`), the backend normalises the `jobPosting` object
+(`ashby_api.py`, keyed by path, hidden and deactivated entries dropped), the
+plan is cached like a Greenhouse plan, and the page is used only for
+writing — the container's `data-field-path` locates each field. The DOM
+adapter stays as the fallback. Because Ashby's posting page moves to
+`/application` without a page load, the content script watches the path.
+
+**Two things that do not carry over from Greenhouse.**
+1. *The page autosaves.* Every value written triggers `ApiSetFormValue` to
+   Ashby's server, and a résumé attach creates an upload handle and an S3
+   PUT. This is the page's own draft behaviour — not a submission, which is
+   a separate `ApiSubmitSingleApplicationFormAction` the extension never
+   calls — but an Ashby fill is never purely local the way a Greenhouse
+   fill is. Recorded here so nobody is surprised by the network tab.
+2. *Validation is per-container.* Ashby does not set `aria-invalid`; it
+   renders an error message inside the field's container. The dry-run
+   oracle reads those too, and picks the button that says "Submit
+   Application" rather than the first `type=submit` — the résumé upload
+   button is one as well.
+
+**Measured next**, on the 100-posting Ashby draw: what the DOM path filled
+before this change, what the API path fills after it, and the fill time
+against the one-second target.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
