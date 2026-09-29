@@ -109,6 +109,7 @@ CORE_LABEL_ALIASES = {
     "phone number": "phone",
     # Custom address questions (Relay, Gallup, round 3): derivable pieces of
     # the stored location, and a street address the profile may hold.
+    "gpa undergraduate": "gpa",            # Freeform: "GPA (Undergraduate)"
     "state": "state_of_residence",
     "state province": "state_of_residence",
     "state if n a select other": "state_of_residence",   # Chicago Trading
