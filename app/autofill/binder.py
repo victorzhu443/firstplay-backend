@@ -1137,7 +1137,10 @@ def resolve_form(
                         theme, field, memory, company, form.country, form.remote
                     ), field)
                 elif kind == Resolver.STORED:
-                    resolution = _resolve_stored(theme, field, memory)
+                    # Through the same guard as computed themes: Siftstack
+                    # asked "Do you have any offers…?" as a checkbox and the
+                    # timeline theme handed it the stored "None".
+                    resolution = _within_options(_resolve_stored(theme, field, memory), field)
 
                 # A theme recognised but not confidently enough to act on is a
                 # suggestion, not an answer.
