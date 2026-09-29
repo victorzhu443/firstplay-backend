@@ -113,6 +113,7 @@ CORE_LABEL_ALIASES = {
     "state": "state_of_residence",
     "state province": "state_of_residence",
     "state province region": "state_of_residence",  # TransMarket: "State/Province/Region:"
+    "province state": "state_of_residence",         # Visier (Canada): "Province/State"
     "state if n a select other": "state_of_residence",   # Chicago Trading
     "what is your preferred first name": "preferred_first_name",  # NISC
     "country": "country_of_residence",
