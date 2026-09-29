@@ -1440,6 +1440,39 @@ those questions stay amber, by design.
 
 ---
 
+## 41. A plan is a function of the engine, and a fill must not outlive the worker
+
+The first attempt to see §40's multi-select write through the installed
+extension (General Matter, 2026-09-28) produced neither a fill nor a clean
+failure, and the console explained both halves:
+
+- `plan ready 2.2s (plan from cache)` — the session plan cache is keyed on
+  posting and profile, so the plan served was the one built *before* the
+  gate was widened. Twelve minutes of waiting tested nothing.
+- `could not run the fill in the page's world (… the message channel closed
+  before a response was received); falling back` and `filled 756.7s` — the
+  content script asked the service worker to run the page-world fill while
+  the tab was hidden; the worker's `executeScript` sat in §37's visibility
+  wait, MV3 stopped the idle worker, the channel closed, and the fill fell
+  back to the isolated world, where 15 selects could not be driven.
+
+**Decision.** The backend exposes an `engine` fingerprint — a hash of the
+autofill package's source — on the plan response and the health route, and
+the extension's cache key carries it (0.4.20): a backend change is never
+served a stale plan. The content script waits for visibility *itself* before
+asking the worker, so the worker's call lasts seconds (hydration), not
+minutes; and a closed channel is retried once before any fallback, because
+it is the worker having been stopped, not a page problem.
+
+**Measurement note.** The same session showed a hazard in the tooling that
+had nothing to do with the product: two shell commands run concurrently
+share one working directory, and a `cd` in one moved the other. A checkout
+meant for the extension repository ran in the backend's. Nothing was lost
+(the commit had already landed and been pushed), but every command since
+names its repository explicitly.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
