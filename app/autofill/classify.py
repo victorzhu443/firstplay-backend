@@ -112,6 +112,7 @@ CORE_LABEL_ALIASES = {
     "gpa undergraduate": "gpa",            # Freeform: "GPA (Undergraduate)"
     "state": "state_of_residence",
     "state province": "state_of_residence",
+    "state province region": "state_of_residence",  # TransMarket: "State/Province/Region:"
     "state if n a select other": "state_of_residence",   # Chicago Trading
     "what is your preferred first name": "preferred_first_name",  # NISC
     "country": "country_of_residence",
