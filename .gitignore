@@ -149,3 +149,5 @@ logs/
 
 # OS specific
 Thumbs.db
+# Claude Code session state
+.claude/

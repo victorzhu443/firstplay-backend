@@ -1,0 +1,297 @@
+{
+  "_note": "Captured read-only from the live DOM of a real Ashby application form on 2026-09-23. Nothing was typed or submitted. This form is the counter-example to ashby_linear_fullstack.json: it carries EEOC questions, rendered as radio groups that share a name. Note the group names end `_systemfield_eeoc_gender`, `_systemfield_eeoc_race`, `_systemfield_eeoc_veteran_status` \u2014 Ashby marks these structurally in the field name, exactly as Greenhouse marks them with a separate compliance block. The individual radio inputs carry only option text as their label ('Hispanic or Latino'), and there is no fieldset legend, so the question text is not recoverable from labels at all. NOTE: the `d5e6e981-\u2026` prefix on the EEOC radio-group names is a per-page-load UUID \u2014 a later load of the same posting used `9fbac581-\u2026`. Only the `_systemfield_eeoc_*` suffix is stable; match on that.",
+  "posting_id": "1fc309c8-da20-4ff2-84c7-8b863ece2b0a",
+  "company": "Notion",
+  "title": "Software Engineer, Developer Platform",
+  "apply_url": "https://jobs.ashbyhq.com/notion/1fc309c8-da20-4ff2-84c7-8b863ece2b0a/application",
+  "controls": [
+    {
+      "tag": "input",
+      "type": "file",
+      "name": "",
+      "id": "",
+      "required": false,
+      "label": ""
+    },
+    {
+      "tag": "input",
+      "type": "text",
+      "name": "_systemfield_name",
+      "id": "_systemfield_name",
+      "required": true,
+      "label": "Full Name"
+    },
+    {
+      "tag": "input",
+      "type": "email",
+      "name": "_systemfield_email",
+      "id": "_systemfield_email",
+      "required": true,
+      "label": "Email"
+    },
+    {
+      "tag": "input",
+      "type": "tel",
+      "name": "8039f8aa-c269-467e-bdea-dec068474224",
+      "id": "8039f8aa-c269-467e-bdea-dec068474224",
+      "required": true,
+      "label": "Phone"
+    },
+    {
+      "tag": "input",
+      "type": "text",
+      "name": "",
+      "id": "",
+      "required": false,
+      "label": ""
+    },
+    {
+      "tag": "input",
+      "type": "file",
+      "name": "",
+      "id": "_systemfield_resume",
+      "required": true,
+      "label": "Resume"
+    },
+    {
+      "tag": "input",
+      "type": "text",
+      "name": "dbb7e595-3d7b-4a1f-b0b6-76497b74b4cb",
+      "id": "dbb7e595-3d7b-4a1f-b0b6-76497b74b4cb",
+      "required": true,
+      "label": "LinkedIn Profile"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "670462a8-dae8-472d-ac61-6fe5ad480830_b0a5aba8-dbb7-41a9-b548-f72cc3e48956",
+      "id": "pron-1",
+      "required": false,
+      "label": "He/Him"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "670462a8-dae8-472d-ac61-6fe5ad480830_b0a5aba8-dbb7-41a9-b548-f72cc3e48956",
+      "id": "pron-2",
+      "required": false,
+      "label": "She/Her"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "670462a8-dae8-472d-ac61-6fe5ad480830_b0a5aba8-dbb7-41a9-b548-f72cc3e48956",
+      "id": "pron-3",
+      "required": false,
+      "label": "They/Them"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "670462a8-dae8-472d-ac61-6fe5ad480830_b0a5aba8-dbb7-41a9-b548-f72cc3e48956",
+      "id": "pron-4",
+      "required": false,
+      "label": "Prefer not to say"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "670462a8-dae8-472d-ac61-6fe5ad480830_b0a5aba8-dbb7-41a9-b548-f72cc3e48956",
+      "id": "pron-5",
+      "required": false,
+      "label": "Not represented here"
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "e01a85db-feaa-42b3-a9ad-69b1dcbbab3f",
+      "id": "cb-1",
+      "required": false,
+      "label": ""
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "790b5934-74f5-46f5-897a-675b7f37f2f3",
+      "id": "cb-2",
+      "required": false,
+      "label": ""
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "LinkedIn",
+      "id": "src-1",
+      "required": false,
+      "label": "LinkedIn"
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "Glassdoor",
+      "id": "src-2",
+      "required": false,
+      "label": "Glassdoor"
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "Notion Blog",
+      "id": "src-3",
+      "required": false,
+      "label": "Notion Blog"
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "Notion Employee",
+      "id": "src-4",
+      "required": false,
+      "label": "Notion Employee"
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "Notion Website",
+      "id": "src-5",
+      "required": false,
+      "label": "Notion Website"
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "Billboard/Outdoor Ads",
+      "id": "src-6",
+      "required": false,
+      "label": "Billboard/Outdoor Ads"
+    },
+    {
+      "tag": "input",
+      "type": "checkbox",
+      "name": "Conference or Meetup",
+      "id": "src-7",
+      "required": false,
+      "label": "Conference or Meetup"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_gender",
+      "id": "g-1",
+      "required": false,
+      "label": "Male"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_gender",
+      "id": "g-2",
+      "required": false,
+      "label": "Female"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_gender",
+      "id": "g-3",
+      "required": false,
+      "label": "Decline to self-identify"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_race",
+      "id": "r-1",
+      "required": false,
+      "label": "Hispanic or Latino"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_race",
+      "id": "r-2",
+      "required": false,
+      "label": "White (Not Hispanic or Latino)"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_race",
+      "id": "r-3",
+      "required": false,
+      "label": "Black or African American (Not Hispanic or Latino)"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_race",
+      "id": "r-4",
+      "required": false,
+      "label": "Native Hawaiian or Other Pacific Islander (Not Hispanic or Latino)"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_race",
+      "id": "r-5",
+      "required": false,
+      "label": "Asian (Not Hispanic or Latino)"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_race",
+      "id": "r-6",
+      "required": false,
+      "label": "American Indian or Alaska Native (Not Hispanic or Latino)"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_race",
+      "id": "r-7",
+      "required": false,
+      "label": "Two or More Races (Not Hispanic or Latino)"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_race",
+      "id": "r-8",
+      "required": false,
+      "label": "Decline to self-identify"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_veteran_status",
+      "id": "v-1",
+      "required": false,
+      "label": "I identify as one or more of the classifications of protected veteran listed above"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_veteran_status",
+      "id": "v-2",
+      "required": false,
+      "label": "I am not a protected veteran"
+    },
+    {
+      "tag": "input",
+      "type": "radio",
+      "name": "d5e6e981-7a2e-44ba-8884-94a2836454c9__systemfield_eeoc_veteran_status",
+      "id": "v-3",
+      "required": false,
+      "label": "I decline to self-identify for protected veteran status"
+    },
+    {
+      "tag": "textarea",
+      "type": "textarea",
+      "name": "g-recaptcha-response",
+      "id": "g-recaptcha-response",
+      "required": false,
+      "label": ""
+    }
+  ]
+}

@@ -19,6 +19,12 @@ TEST_API_KEY = "sk-test-dummy-key-not-a-real-credential"
 
 os.environ["OPENAI_API_KEY"] = TEST_API_KEY
 
+# Pin the provider for the same reason the key above is seeded: app.llm_client
+# calls load_dotenv() at import, and a developer with LLM_PROVIDER=cohere in
+# .env made get_llm() return a ChatCohere where the provider tests assert
+# ChatOpenAI — 6 failures that had nothing to do with the code under test.
+os.environ["LLM_PROVIDER"] = "openai"
+
 # Point the suite at a throwaway database, set before app.db is imported since
 # it binds its engine at import time. Without this the tests share the
 # developer's working firstplay.db: they accumulated rows in it run after run,
