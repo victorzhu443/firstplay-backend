@@ -148,6 +148,12 @@ def match_country(value: Optional[str], field: FormField) -> Optional[FieldOptio
     return hits[0] if len(hits) == 1 else None
 
 
+_OWN_SITE_ANSWERS = {"careers website", "career website", "careers page", "career page",
+                     "company website", "careers site", "career site", "website"}
+_OWN_SITE = re.compile(r"\b(website|web site|careers? page|careers? site|careers)\b", re.I)
+_THIRD_PARTY = re.compile(r"linkedin|indeed|glassdoor|handshake|ripplematch|wayup|simplify|"
+                          r"builtin|levels|blind|repvue|google|job board|university|school", re.I)
+
 _SYNONYMS = {
     "male": ("man",), "man": ("male",),
     "female": ("woman",), "woman": ("female",),
@@ -187,6 +193,17 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
     same = [o for o in field.options if normalize_value(o.label) in synonyms]
     if len(same) == 1:
         return same[0]
+
+    # "Careers Website" against a source list: the employer's own site is
+    # named after the employer ("Integra FEC Website", "Verkada Careers Page",
+    # "DV Website"). 26 such fields in the large corpus, 25 required. Only when
+    # exactly one option names a website / careers page and it is not a
+    # third-party site.
+    if target in _OWN_SITE_ANSWERS:
+        own = [o for o in field.options
+               if _OWN_SITE.search(o.label) and not _THIRD_PARTY.search(o.label)]
+        if len(own) == 1:
+            return own[0]
 
     # Yes/no, where the option text is longer than the answer: a stored "Yes"
     # against "Yes, I am authorized to work in the US".

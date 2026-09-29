@@ -160,6 +160,15 @@ llm_limit = rate_limit(
     int(os.getenv("RATE_LIMIT_LLM", "30")), _HOUR, "LLM-backed endpoints"
 )
 
+# Autofill plans: one per page the applicant opens, from their own machine.
+# 30/hour (the LLM limit) refused a normal evening of applying — the extension
+# logged "backend returned 429" on live forms. A plan costs at most one model
+# round-trip and about a tenth of a cent; 600/hour bounds a runaway loop
+# without touching a person.
+autofill_limit = rate_limit(
+    int(os.getenv("RATE_LIMIT_AUTOFILL", "600")), _HOUR, "autofill plans"
+)
+
 # No LLM call, but each does real work: PDF extraction, or an outbound fetch.
 ingest_limit = rate_limit(
     int(os.getenv("RATE_LIMIT_INGEST", "60")), _HOUR, "uploads and fetches"

@@ -678,6 +678,13 @@ def _applicant_state(memory: Memory) -> Dict[str, object]:
                      "extension, H-1B, TN, sponsorship) do not apply; questions about them are "
                      "answered 'not applicable' when offered, otherwise 'No'.")
 
+    degree_type = memory.lookup("degree_type") or ""
+    if degree_type:
+        others = [d for d in ("Bachelor's", "Master's", "Doctorate / PhD", "MBA", "JD", "MD") if not degree_type.startswith(d.split(" ")[0])]
+        notes.append("Currently pursuing a {} only; questions that presuppose another degree "
+                     "level ({}) do not apply — answer 'not applicable' when offered, otherwise "
+                     "'unsure'.".format(degree_type, ", ".join(others)))
+
     return {
         "notes": notes,
         "legal_status": dict(memory.legal_status or {}),
