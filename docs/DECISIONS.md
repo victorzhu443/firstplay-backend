@@ -874,6 +874,198 @@ on a foreground Chrome window.
 
 ---
 
+## 28. Speed is a requirement: where the seconds went, and the budget that stops them coming back
+
+Victor: "the time it takes to choose items is slow … if it is slower than by
+hand then what is the point." Measured 2026-09-28 before changing anything.
+
+**Where the time was.** Fetching the posting and its education vocabularies:
+0.4 s. Building the plan on the backend: **10–20 s — with zero model calls
+counted.** The server log had the cause: every Jev call in that server
+process was hitting the 10 s read timeout ("The read operation timed out")
+and the endpoint fell back deterministically after each one, up to three
+times per plan. A fresh process reached Jev in 0.24–0.39 s in the same
+minute, and after a restart the same plans took **1.3 s (Scale AI), 0.9 s
+(Gallup), 4.6 s (a cold posting, three sequential calls), 0.01 s
+(repeat)**. The process was sick; the design let a sick model cost 20 s.
+
+**Decisions.**
+
+1. *A 4 s per-call budget* (`JEV_TIMEOUT_SECONDS`, was 10). A healthy call
+   is 0.3–3 s; anything slower is not worth waiting for on a form.
+2. *A circuit breaker per plan.* After one transport failure the remaining
+   gates are skipped and the plan finishes deterministically; the response
+   says `model_skipped: true` and carries `elapsed_ms`, and the extension
+   prints both, so a slow fill is blamed correctly instead of looking like
+   the extension.
+3. *The plan request no longer waits for the page.* A Greenhouse plan is a
+   function of the API payload and the profile, not the DOM, so the content
+   script fires it the moment the posting is recognised and it runs while
+   the page settles. Settling itself samples every 250 ms and stops at the
+   first repeat (was 500 ms, two repeats).
+4. *Re-runs are free.* The service worker keeps each plan in session storage
+   under a hash of posting + profile for six hours; a second run on the same
+   page (after Apply, after a reload, after fixing a field) costs 0.01 s.
+   Plans where the model was skipped are not cached, so they retry.
+5. *Waits are polls.* Every fixed nap in the filler (80–150 ms) is now a
+   40 ms poll that exits as soon as the widget reflects the value; the
+   long caps for remote geocoders (8 s) are unchanged but rarely reached.
+6. *Every run reports its timing:* `page settled · plan ready (backend, or
+   "from cache") · filled · total`, in the console and, as total seconds, in
+   the popup — so the next slowness is measured, not felt.
+
+**Still on the table:** the option-translation and profile-answer gates run
+one after the other and are independent; running them concurrently would
+take roughly a second off a cold plan. Not done until a measurement says the
+cold plan is what people feel.
+
+---
+
+## 29. Fill in tiers: start every lookup at once, pick afterwards
+
+Victor: "the education is still quite slow — I'm expecting 10 ms for each
+option"; and: "try to do things in parallel … fill out multiple sections at
+the same time." Measured 2026-09-28 before the change: the filler walked
+the plan in order and *awaited each widget in turn*, so education on the
+standard renderer paid three sequential network lookups (school, degree,
+discipline, ~0.3–0.8 s each) and Duolingo waited for its school search and
+then, separately, for its location geocoder.
+
+**Decision — four tiers, waits overlapping instead of adding up.**
+
+| tier | widgets | how |
+|---|---|---|
+| instant | text, checkboxes, radios, native selects, résumé | synchronous; no waits at all |
+| react-select | Greenhouse's standard selects, incl. school/degree/discipline | every option lookup fires concurrently (pure network, no focus); each pick is a synchronous `selectOption` with a 40 ms readback poll |
+| autocomplete | Duolingo's comboboxes, Ashby's Location, geocoders | **all searches are started first** (focusin + typed value), then each list is picked from; the first check is immediate, polls are 20 ms |
+| listbox | button-and-menu widgets | one after another — opening one may close another |
+
+Widgets that need focus are never driven concurrently; only their lookups
+are. Measured on Duolingo with the new order: after the start pass, all four
+lists (school, degree, discipline, location) were populated at once,
+including the two remote ones — the waiting now happens once, in parallel.
+
+**What stays slow, honestly.** A remote lookup costs what the network
+costs; nothing local should cost more than a frame or two. Every run prints
+its tier timing so the next complaint points at a number.
+
+---
+
+## 30. Coinbase: the speed work exposed a hydration race, and an unbounded search
+
+Victor: "now I want this to be reproducible across many many different
+Greenhouse applications … for example Coinbase doesn't work." Measured on
+`job-boards.greenhouse.io/embed/job_app?for=coinbase&token=8175459`,
+2026-09-28.
+
+**What the page said.** The plan built in 0.38 s with 24 fills. On the page,
+text fields filled; **every dropdown carried an orange note offering
+"Afghanistan+93 | Åland Islands+358 | …"** — the phone widget's country
+list. Two defects behind one symptom:
+
+1. *Hydration race.* Since §28 the plan request leaves at first sight of the
+   posting and arrives before React has hydrated the form. `widgetKind`
+   recognised react-select by finding its instance through the fiber; with
+   no fiber yet, the standard selects fell through to the autocomplete
+   path. Fix: recognise react-select from its markup (`select__input`,
+   `react-select-*` ids, the container classes) and, before the react-select
+   tier runs, wait until an instance exists — bounded at 3 s, measured as
+   already true by the time the first lookup returned.
+2. *Unbounded list search.* The autocomplete path found a field's list by
+   walking up to the nearest ancestor holding any `aria-controls`/`aria-owns`
+   — nine levels, to the `<form>` with 55 inputs, whose first pointer is the
+   phone picker's. Now at most three levels, and never a container holding
+   other fields' inputs.
+
+**Also measured.** Coinbase renders an employment block (`company-name-0`,
+`start-date-*-0`, `end-date-*-0`) and **no education dates**, so the plan's
+end-date entries are correctly "not on page" there; Scale AI renders
+`end-year--0` and no month. The id table stays as it is.
+
+**Verified after the fixes.** All three education lookups (school, degree,
+discipline) prefetched in parallel in **67 ms**; each pick selected the one
+option its loader returned.
+
+**Reproducibility, as a method.** One employer's page found two defects the
+previous ten did not. The browser-tier sample in §26 (14 hosted boards, 8
+employer pages) is the next run, and each page's `applied:` and `timing:`
+lines are the record.
+
+---
+
+## 31. Structural survey across ten Greenhouse boards: ids hold; two things generalise
+
+Victor: "don't fit this for only Duolingo — the purpose is this extension
+works across all Greenhouse applications." Measured 2026-09-28 on the
+standard renderer for Gallup, ATOMS, Baidu, Appian, Faraday Future,
+Brevium, Businessolver, SingleStore, Coinbase (and the EEO sequence on
+Gallup): for every posting, the headless plan's fields were checked against
+the live page — can the filler locate each one, and by what means?
+
+**Result.** Every planned field that a page renders is located, 96% by id
+and the rest by label. The misses fall into exactly two classes:
+
+1. *Education fields a board does not render.* Discipline is absent on
+   Gallup, Appian and Brevium; the end date on six of nine; Coinbase renders
+   an employment block (`company-name-0`, `start-/end-date-*-0`) and no
+   education dates at all. "Not on page" is the correct outcome and costs
+   nothing. The id table (§23) needs no change.
+2. *`race` on 7 of 9 boards.* The API lists one compliance field; the page
+   renders Greenhouse's two-question EEO block — `hispanic_ethnicity` (Yes /
+   No / Decline To Self Identify) first, and `race` is **mounted only after it
+   is answered** (verified on Gallup: absent before, present with "Asian" among
+   its options after). The filler now derives the Hispanic answer from the
+   applicant's stored race — "Hispanic or Latino" → Yes, a decline stays a
+   decline, anything else → No — fills it, waits for `race`, fills that. This
+   is replay of the applicant's own answer, not judgement; no model sees it.
+
+**Also seen live.** Gallup at first paint: 0 of 26 selects hydrated — the
+race §30 fixed, caught on a second board.
+
+**What the survey does not prove.** That the widgets take the values at
+speed; that is the foreground browser run (§26), still pending a visible
+window. The structural half is what could be measured from a hidden tab,
+and it is the half that finds id and rendering variance across boards.
+
+---
+
+## 32. The form is the oracle: a dry-run submit after every fill
+
+Victor: "we must always check … run it across different Greenhouse
+applications, then try to submit, and if it doesn't submit figure out what
+fields have been filled, what have not, whether the filled ones are correct,
+and whether the unfilled ones are 'filled' with the right answer but not
+selected."
+
+**Measured on Gallup, 2026-09-28.** With every way of leaving the page
+blocked, clicking "Submit application" made Greenhouse mark **71 elements
+`aria-invalid`** with its own messages — "School is required.", "Country:
+Select a country", "Address Line 1: This field is required" — fired no
+submit event and attempted no network write. Greenhouse validates
+client-side before it posts, so the attempt is a read of the form's verdict.
+
+**Decision.** After every fill the extension performs that dry run and
+prints the diff: for each field the form still wants, what the plan had
+said — `FILL` (a filler defect: the value did not take), `review` (expected),
+`not in plan` (a coverage gap the API did not describe, such as Gallup's
+Address Line 1). The popup shows "form still wants N". The check runs in the
+page's main world from the service worker, with `fetch`, `XMLHttpRequest`,
+`sendBeacon`, `HTMLFormElement.submit` and the `submit` event all blocked
+for the duration and restored after.
+
+**The line.** The tool does not submit applications. Victor set that rule on
+day one ("don't actually apply and submit jobs but practice and see"), and
+a submission under his name is not reversible. The dry run gives the same
+information without crossing it; a real submission would need him to say so
+explicitly, and would still be his click.
+
+**Method for the survey runs.** Per posting: fill → dry-run → diff, recorded
+alongside the `applied:` and `timing:` lines. This is the loop that turns
+"reproducible across all Greenhouse applications" from a claim into a
+table.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

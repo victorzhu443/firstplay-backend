@@ -23,6 +23,7 @@ fields needing semantic option matching. Protected fields never reach that path
 — `ALLOWED_FILL_SOURCES` bars model judgement from them entirely.
 """
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -75,6 +76,11 @@ class AutofillRequest(BaseModel):
 
 class AutofillResponse(BaseModel):
     plan: FillPlan
+    #: Wall-clock time the backend spent, so a slow fill is blamed correctly.
+    elapsed_ms: int = 0
+    #: True when a model call timed out and the rest of the plan was finished
+    #: deterministically — the fill is still complete, just with more review.
+    model_skipped: bool = False
     summary: Dict[str, int]
     jev_calls: int = 0
     cost_usd: float = 0.0
@@ -112,6 +118,7 @@ def build_plan(request: AutofillRequest):
     Returns:
         The plan, a summary, and what the model calls cost
     """
+    started = time.perf_counter()
     form = _parse_form(request.ats, request.form)
 
     try:
@@ -151,6 +158,8 @@ def build_plan(request: AutofillRequest):
         summary=plan.summary(),
         jev_calls=jev.calls if jev else 0,
         cost_usd=jev.cost_usd if jev else 0.0,
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+        model_skipped=bool(jev is not None and getattr(jev, "tripped", False)),
     )
 
 
