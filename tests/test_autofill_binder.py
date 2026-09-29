@@ -545,3 +545,64 @@ def test_applicant_state_states_degree_level_and_never_protected_data():
                                     protected={"gender": "Male"}, facts={"email": "x@y.z"}))
     assert any("Bachelor's Degree only" in n and "Master's" in n for n in state["notes"])
     assert "Male" not in json.dumps(state) and "x@y.z" not in json.dumps(state)
+
+
+def test_a_required_follow_up_without_a_not_applicable_option_keeps_its_own_answer():
+    """Xaira 5225658007: "If you answered 'No' ... will you require sponsorship?"
+
+    Required, options Yes / No only. The sponsorship theme had already answered
+    "No" from the stored fact; marking it "answered by a sibling" left it blank
+    and the form refused to submit. A confident answer of its own stands.
+    """
+    from app.autofill.binder import FillPlanEntry, _resolve_conditionals
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField, FormSchema, FillSource
+
+    yn = [FieldOption(label="Yes", value="1"), FieldOption(label="No", value="0")]
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[
+        FormField(key="q1", label="Are you legally authorized to work in the country for this position?",
+                  kind=FieldKind.SINGLE_SELECT, field_class=FieldClass.SCREENING, required=True, options=yn),
+        FormField(key="q2", label="If you answered 'No' to the previous question, will you require sponsorship for a work visa?",
+                  kind=FieldKind.SINGLE_SELECT, field_class=FieldClass.SCREENING, required=True, options=yn),
+    ])
+    entries = [
+        FillPlanEntry(field_key="q1", label=form.fields[0].label, value="Yes", source=FillSource.MEMORY),
+        FillPlanEntry(field_key="q2", label=form.fields[1].label, value="No", source=FillSource.MEMORY, confidence=1.0),
+    ]
+
+    _resolve_conditionals(entries, form)
+
+    assert entries[1].value == "No"
+    assert entries[1].satisfied_by is None and not entries[1].needs_review
+    assert "required" in entries[1].reason
+
+
+def test_a_required_follow_up_with_nothing_to_say_goes_to_review_not_blank():
+    """Compeer 5404994008: a required "If yes, please explain" text field.
+
+    The applicant answered No above, so there is nothing to explain — but the
+    form still refuses a blank. It must be outlined for the applicant, not
+    hidden as answered.
+    """
+    from app.autofill.binder import FillPlanEntry, _resolve_conditionals
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField, FormSchema, FillSource
+
+    yn = [FieldOption(label="Yes", value="1"), FieldOption(label="No", value="0")]
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[
+        FormField(key="q1", label="Do you have any relatives employed here?",
+                  kind=FieldKind.SINGLE_SELECT, field_class=FieldClass.SCREENING, required=True, options=yn),
+        FormField(key="q2", label="If yes, please explain.",
+                  kind=FieldKind.LONG_TEXT, field_class=FieldClass.SCREENING, required=True, options=[]),
+        FormField(key="q3", label="If yes, please provide details.",
+                  kind=FieldKind.LONG_TEXT, field_class=FieldClass.SCREENING, required=False, options=[]),
+    ])
+    entries = [
+        FillPlanEntry(field_key="q1", label=form.fields[0].label, value="No", source=FillSource.MEMORY),
+        FillPlanEntry(field_key="q2", label=form.fields[1].label, value=None, source=FillSource.HUMAN, needs_review=True),
+        FillPlanEntry(field_key="q3", label=form.fields[2].label, value=None, source=FillSource.HUMAN, needs_review=True),
+    ]
+
+    _resolve_conditionals(entries, form)
+
+    assert entries[1].needs_review and entries[1].satisfied_by is None
+    # The optional one is still simply inapplicable.
+    assert entries[2].satisfied_by == "q1" and not entries[2].needs_review
