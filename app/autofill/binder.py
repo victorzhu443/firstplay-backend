@@ -16,6 +16,7 @@ Jev binder added later has a measured baseline to beat, rather than being
 adopted on the assumption that it helps.
 """
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from typing import Dict, List, Optional, Tuple
 
@@ -43,6 +44,14 @@ AUTOFILL_CONFIDENCE = 0.85
 #: than this many options is a list (offices worldwide, every clearance level)
 #: that the applicant scans faster than a model can be trusted on.
 MULTI_SELECT_OPTION_CAP = 12
+
+#: Ask the profile-answer gate in the same breath as theme classification.
+#: Measured on three unseen boards (Truveta, DV Trading, Amperesand): a
+#: first-visit plan was 0.7–0.95 s, all of it two or three Jev round trips
+#: of 230–465 ms run one after another. The answer gate needs only the form
+#: and the profile, so it runs concurrently with classification and its
+#: results are kept for whichever fields the themes leave for review.
+SPECULATE_ANSWERS = True
 
 #: Below this, do not even show a suggestion.
 SUGGEST_CONFIDENCE = 0.50
@@ -525,7 +534,10 @@ _CONDITION_IS_NO = re.compile(r"\bif (you )?(answered|selected)\s*[\"'“]?no\b"
 _OPT_OUT = re.compile(r"\bnone of (these|the)\b|\bnot pursuing\b|\bnone apply\b", re.I)
 
 
-def _resolve_option_mismatches(entries, form: FormSchema, binder) -> None:
+def _resolve_option_mismatches(
+    entries, form: FormSchema, binder,
+    precomputed: Optional[Dict[str, Tuple[Optional[str], float]]] = None,
+) -> None:
     """Ask the model which option expresses an answer the applicant already gave.
 
     The largest single cause of unfilled fields: 88 of 222 across 57 postings,
@@ -542,6 +554,8 @@ def _resolve_option_mismatches(entries, form: FormSchema, binder) -> None:
 
     fields = {f.key: f for f in form.fields}
     requests = []
+    results: Dict[str, Tuple[Optional[str], float]] = {}
+    precomputed = precomputed or {}
 
     for index, entry in enumerate(entries):
         if entry.reason != OPTION_MISMATCH or not entry.value:
@@ -556,12 +570,16 @@ def _resolve_option_mismatches(entries, form: FormSchema, binder) -> None:
         # risk as a single-select. Choosing a *set* of options stays
         # deterministic-only, and disclosures are unreachable regardless:
         # `may_fill_from` above already bars every LEGAL field.
-        requests.append(("req_{}".format(index), entry.value, field))
+        request_id = "req_{}".format(index)
+        if entry.field_key in precomputed:
+            results[request_id] = precomputed[entry.field_key]
+            requests.append((request_id, entry.value, None))
+        else:
+            requests.append((request_id, entry.value, field))
 
-    if not requests:
-        return
-
-    results = binder.match_options(requests)
+    fresh = [(rid, v, f) for rid, v, f in requests if f is not None]
+    if fresh:
+        results.update(binder.match_options(fresh))
 
     for request_id, _value, _field in requests:
         entry = entries[int(request_id.split("_")[1])]
@@ -816,7 +834,94 @@ def _applicant_state(memory: Memory, today: Optional[date] = None) -> Dict[str, 
     }
 
 
-def _answer_from_profile(entries: List[FillPlanEntry], form: FormSchema, memory: Memory, binder) -> None:
+def _model_may_answer(field: FormField) -> bool:
+    """Whether the profile-answer gate may be asked about a field at all."""
+    if not field.options:
+        return False
+    if field.kind == FieldKind.MULTI_SELECT:
+        # "Check all that apply" — term availability, offices, clearances.
+        # Each option is its own yes/no; the cap keeps a form's questions
+        # bounded (Optiver lists 11 offices, General Matter 3 terms).
+        if len(field.options) > MULTI_SELECT_OPTION_CAP:
+            return False
+    elif field.kind not in (FieldKind.SINGLE_SELECT, FieldKind.BOOLEAN):
+        return False
+    return field.allows_model_judgement()
+
+
+def _answer_state(form: FormSchema, memory: Memory, earlier: List[Dict[str, object]]) -> Dict[str, object]:
+    return {
+        "applicant": _applicant_state(memory),
+        "form": {"company": form.company, "title": form.title, "earlier_answers": earlier[:40]},
+    }
+
+
+def _speculative_answers(
+    form: FormSchema, memory: Memory, binder, pending: List[FormField], resolved: Dict[str, "Resolution"]
+) -> Tuple[
+    Dict[str, Tuple[QuestionTheme, float]],
+    Dict[str, Tuple[Optional[object], float]],
+    Dict[str, Tuple[Optional[str], float]],
+]:
+    """Classify themes, ask the profile-answer gate, and translate the option
+    mismatches memory already knows about — all in the same breath.
+
+    Returns (themes, speculative answers by field key, option matches by
+    field key). The answer gate's state carries the answers memory has
+    already settled — the theme-resolved ones are not known yet, which is
+    the price of the overlap; the confidence thresholds are unchanged.
+    Option mismatches that only appear once a theme resolves are matched
+    afterwards, as before.
+    """
+    labels = [f.label for f in pending]
+    candidates = [f for f in pending if _model_may_answer(f)] if hasattr(binder, "answer_from_profile") else []
+    mismatches = [
+        (f, resolved[f.key].value) for f in form.fields
+        if f.key in resolved and resolved[f.key].reason == OPTION_MISMATCH and resolved[f.key].value
+        and f.options and f.allows_option_translation()
+    ] if hasattr(binder, "match_options") else []
+
+    if not SPECULATE_ANSWERS or not (candidates or mismatches):
+        return binder.classify_themes(labels), {}, {}
+
+    earlier = [
+        {"question": (f.label or "")[:120], "answer": resolved[f.key].values or resolved[f.key].value}
+        for f in form.fields
+        if f.key in resolved
+        and (resolved[f.key].value or resolved[f.key].values)
+        and not resolved[f.key].needs_review
+        and not resolved[f.key].skipped
+    ]
+    state = _answer_state(form, memory, earlier)
+    requests = [("spec_{}".format(f.key), f) for f in candidates]
+    match_requests = [("match_{}".format(f.key), value, f) for f, value in mismatches]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        answer_future = pool.submit(binder.answer_from_profile, state, requests) if requests else None
+        match_future = pool.submit(binder.match_options, match_requests) if match_requests else None
+        themes = binder.classify_themes(labels)
+        answers, matches = {}, {}
+        # A failed speculation costs nothing: the sequential gates still run.
+        try:
+            answers = answer_future.result() if answer_future else {}
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            matches = match_future.result() if match_future else {}
+        except Exception:  # noqa: BLE001
+            pass
+
+    return (
+        themes,
+        {f.key: answers[rid] for rid, f in requests if rid in answers},
+        {f.key: matches[rid] for rid, _v, f in match_requests if rid in matches},
+    )
+
+
+def _answer_from_profile(
+    entries: List[FillPlanEntry], form: FormSchema, memory: Memory, binder,
+    speculative: Optional[Dict[str, Tuple[Optional[object], float]]] = None,
+) -> None:
     """Ask the model to answer, from the profile, what no lookup reached.
 
     Runs last, over single-choice screening questions still marked for review,
@@ -830,39 +935,31 @@ def _answer_from_profile(entries: List[FillPlanEntry], form: FormSchema, memory:
 
     fields = {f.key: f for f in form.fields}
     requests = []
+    results: Dict[str, Tuple[Optional[object], float]] = {}
+    speculative = speculative or {}
 
     for index, entry in enumerate(entries):
         if not entry.needs_review or entry.skipped or entry.satisfied_by:
             continue
         field = fields.get(entry.field_key)
-        if field is None or not field.options:
+        if field is None or not _model_may_answer(field):
             continue
-        if field.kind == FieldKind.MULTI_SELECT:
-            # "Check all that apply" — term availability, offices, clearances.
-            # Each option is its own yes/no; the cap keeps a form's questions
-            # bounded (Optiver lists 11 offices, General Matter 3 terms).
-            if len(field.options) > MULTI_SELECT_OPTION_CAP:
-                continue
-        elif field.kind not in (FieldKind.SINGLE_SELECT, FieldKind.BOOLEAN):
-            continue
-        if not field.allows_model_judgement():
-            continue
-        requests.append(("ans_{}".format(index), field))
+        request_id = "ans_{}".format(index)
+        if entry.field_key in speculative:
+            results[request_id] = speculative[entry.field_key]
+            requests.append((request_id, None))
+        else:
+            requests.append((request_id, field))
 
-    if not requests:
-        return
+    fresh = [(rid, f) for rid, f in requests if f is not None]
 
-    earlier = [
-        {"question": (e.label or "")[:120], "answer": e.values or e.value}
-        for e in entries
-        if (e.value or e.values) and not e.needs_review and not e.skipped and not e.satisfied_by
-    ]
-    state = {
-        "applicant": _applicant_state(memory),
-        "form": {"company": form.company, "title": form.title, "earlier_answers": earlier[:40]},
-    }
-
-    results = binder.answer_from_profile(state, requests)
+    if fresh:
+        earlier = [
+            {"question": (e.label or "")[:120], "answer": e.values or e.value}
+            for e in entries
+            if (e.value or e.values) and not e.needs_review and not e.skipped and not e.satisfied_by
+        ]
+        results.update(binder.answer_from_profile(_answer_state(form, memory, earlier), fresh))
 
     for request_id, _field in requests:
         entry = entries[int(request_id.split("_")[1])]
@@ -999,8 +1096,10 @@ def resolve_form(
             pending.append(field)
 
     themes: Dict[str, Tuple[QuestionTheme, float]] = {}
+    speculative: Dict[str, Tuple[Optional[object], float]] = {}
+    matched: Dict[str, Tuple[Optional[str], float]] = {}
     if binder is not None and pending:
-        themes = binder.classify_themes([f.label for f in pending])
+        themes, speculative, matched = _speculative_answers(form, memory, binder, pending, resolved)
 
     for field in form.fields:
         resolution = resolved.get(field.key)
@@ -1062,10 +1161,10 @@ def resolve_form(
         )
 
     _mark_attachments(entries, form)
-    _resolve_option_mismatches(entries, form, binder)
+    _resolve_option_mismatches(entries, form, binder, matched)
     _mark_satisfied_alternates(entries, form)
     _resolve_conditionals(entries, form)
-    _answer_from_profile(entries, form, memory, binder)
+    _answer_from_profile(entries, form, memory, binder, speculative)
 
     return FillPlan(
         posting_id=form.posting_id,

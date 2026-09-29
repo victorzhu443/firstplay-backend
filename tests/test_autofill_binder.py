@@ -680,3 +680,42 @@ def test_applicant_state_carries_standing_availability_and_whitelisted_backgroun
 def test_the_engine_fingerprint_is_stable_and_short():
     from app.autofill import ENGINE, engine_fingerprint
     assert ENGINE == engine_fingerprint() and len(ENGINE) == 12 and int(ENGINE, 16) >= 0
+
+
+def test_the_answer_gate_is_asked_alongside_classification_and_not_again():
+    """A first-visit plan was 0.7–0.95 s of sequential Jev round trips; the
+    answer gate now runs concurrently with classification, and fields it
+    already answered are not asked a second time."""
+    import threading
+    from app.autofill.binder import resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField, FormSchema, FillSource
+    from app.autofill.themes import QuestionTheme
+
+    yn = [FieldOption(label="Yes", value="1"), FieldOption(label="No", value="0")]
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[
+        FormField(key="q1", label="Are you seeking a Spring internship?", kind=FieldKind.SINGLE_SELECT,
+                  field_class=FieldClass.SCREENING, required=True, options=yn),
+        FormField(key="q2", label="Tell us about yourself", kind=FieldKind.LONG_TEXT,
+                  field_class=FieldClass.NARRATIVE, required=True, options=[]),
+    ])
+
+    class FakeBinder:
+        calls = []
+        def classify_themes(self, labels):
+            FakeBinder.calls.append(("classify", threading.get_ident(), tuple(labels)))
+            return {l: (QuestionTheme.UNKNOWN, 0.0) for l in labels}
+        def answer_from_profile(self, state, requests):
+            FakeBinder.calls.append(("answer", threading.get_ident(), tuple(r for r, _f in requests)))
+            return {r: ("No", 0.95) for r, _f in requests}
+
+    plan = resolve_form(form, Memory(preferences={"internship_term": "Summer"}), binder=FakeBinder())
+
+    kinds = [c[0] for c in FakeBinder.calls]
+    assert kinds.count("answer") == 1 and kinds.count("classify") == 1
+    answer_call = next(c for c in FakeBinder.calls if c[0] == "answer")
+    classify_call = next(c for c in FakeBinder.calls if c[0] == "classify")
+    assert answer_call[1] != classify_call[1]                 # ran on another thread, i.e. concurrently
+    assert answer_call[2] == ("spec_q1",)                      # only the answerable field was asked
+    q1 = next(e for e in plan.entries if e.field_key == "q1")
+    assert q1.value == "No" and q1.source == FillSource.MODEL_DECISION and not q1.needs_review

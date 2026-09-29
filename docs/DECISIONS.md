@@ -1473,6 +1473,45 @@ names its repository explicitly.
 
 ---
 
+## 42. Plan latency: the gates run in the same breath
+
+Victor's target is a fill under one second. The extension's own numbers on
+round 9 (0.4.20, window on screen): page settled 0.3–2.2 s, plan ready
+1.0–4.5 s (backend 0.6–2.1 s), fill 0.3–1.6 s on seven boards and 14–27 s
+on three. The fill outliers are being measured per tier (0.4.21) before
+anything is changed there. The plan side was measured first:
+
+| board | first visit, before | after | second visit |
+|---|---|---|---|
+| Truveta | 783 ms = classify 433 → answer 348 | 367 ms | 2 ms |
+| DV Trading | 2,114 ms = classify 409 → match 319 → answer 1,377 | 1,294 ms | 5 ms |
+| Amperesand | 689 ms = classify 349 → answer 338 | 317 ms | 2 ms |
+| HPR | 590 ms = classify 258 → match 331 | 918 ms* | — |
+
+Every millisecond of a first-visit plan is Jev round trips (230–2,400 ms
+each, the spread is the network's), run one after another because each
+gate consumed the previous one's output. But the profile-answer gate needs
+only the form and the profile, and the option mismatches memory already
+knows about need only the stored value and the option list. Both now run
+concurrently with theme classification (a two-worker pool around one HTTP
+client), and their results are kept for whichever fields the themes leave
+open; mismatches that appear only once a theme resolves are matched
+afterwards, as before. Model decisions are identical in both modes on all
+four boards.
+
+\* HPR's "after" was slower because one call took 571 ms instead of 331 —
+the per-call spread is larger than the structural gain on a small form.
+The structural gain is one round trip per plan; the spread belongs to the
+model host and is bounded by the 4 s budget of §28.
+
+**Where this leaves the target.** A repeat visit is instant (the session
+cache, now keyed on the engine). A first visit is one Jev round trip plus
+whatever the page itself takes to settle, and the request goes out at first
+sight of the posting, so on most boards the plan is ready before the page
+is. What remains above one second is the fill's own outliers — next.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
