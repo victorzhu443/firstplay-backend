@@ -25,6 +25,7 @@ re-applied to the threshold each time, so raising `AUTOFILL_CONFIDENCE` later
 tightens historical entries too rather than grandfathering them in.
 """
 import hashlib
+import re
 import json
 import logging
 import os
@@ -155,13 +156,25 @@ _APPLIES_INSTRUCTIONS = (
     "state.form.earlier_answers lists what is already answered on this form. The form asks "
     "a select-all-that-apply question. Judge whether ONE option truthfully applies to this "
     "applicant, using only facts stated in the profile and earlier answers. If the profile "
-    "says nothing that bears on the option, it does NOT apply here — the applicant decides."
+    "says nothing that bears on the option, it does NOT apply here — the applicant decides. "
+    "An option that means none / not applicable / never held / no is the one that applies "
+    "when the profile states the applicant has none of the things the question lists."
 )
 
 #: Noul thresholds for one option of a multi-select. Between them the option
 #: is undecided and the whole field stays with the applicant.
 MULTI_YES = 0.90
 MULTI_NO = 0.10
+
+#: The opt-out entry of a "check all that apply" list. A Noul scores "Not
+#: Applicable" low as a proposition even when the profile says the applicant
+#: has none of the listed things (Rocket Lab's clearance list: every level
+#: at p<=0.05, "Not Applicable" at 0.15). When every concrete option is
+#: confidently ruled out and exactly one option means none, that one is the
+#: answer by elimination — and its confidence is the weakest of those no's.
+_NONE_OPTION = re.compile(
+    r"\b(none|not applicable|n/?a|never held|no clearance|do not have|i do not have|neither)\b", re.I
+)
 
 _ANSWER_INSTRUCTIONS = (
     "You are filling a job application for the applicant described in state.applicant. "
@@ -476,9 +489,11 @@ class JevBinder:
                     # Below MULTI_NO is a confident no; in between, undecided.
                     # Either way the field's confidence is its least-decided option.
                     decidedness = min(decidedness, max(p, 1.0 - p))
+                if not picked:
+                    picked, decidedness = self._none_by_elimination(multi[request_id], decision)
                 # An empty selection is not an answer to a required question;
                 # report it as undecided so the field stays with the applicant.
-                out[request_id] = (picked or None, decidedness if picked else min(decidedness, 0.0))
+                out[request_id] = (picked or None, decidedness if picked else 0.0)
                 continue
 
             answer = decision.get(request_id)
@@ -488,6 +503,23 @@ class JevBinder:
             out[request_id] = (option_labels[request_id].get(answer.choice), answer.belief())
 
         return out
+
+    @staticmethod
+    def _none_by_elimination(per_option, decision):
+        """The list's single none-option, when every other option is a confident no."""
+        none_options = [(q, label) for q, label in per_option if _NONE_OPTION.search(label)]
+        if len(none_options) != 1:
+            return [], 0.0
+        weakest_no = 1.0
+        for question_id, label in per_option:
+            if (question_id, label) == none_options[0]:
+                continue
+            answer = decision.get(question_id)
+            p = answer.belief() if answer is not None else 0.5
+            if p > MULTI_NO:
+                return [], 0.0
+            weakest_no = min(weakest_no, 1.0 - p)
+        return [none_options[0][1]], weakest_no
 
     def _decide(self, state, questions, description):
         """One call, behind a circuit breaker.

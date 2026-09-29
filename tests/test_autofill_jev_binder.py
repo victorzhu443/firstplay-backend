@@ -329,3 +329,23 @@ def test_multi_select_batches_are_split_by_question_count_not_request_count():
     assert len(client.calls) == 2
     assert all(len(c["questions"]) <= MAX_QUESTIONS_PER_CALL for c in client.calls)
     assert sum(len(c["questions"]) for c in client.calls) == 48
+
+
+def test_a_lists_none_option_is_chosen_by_elimination_when_every_level_is_ruled_out():
+    """Rocket Lab 7990043003: clearance levels all at p<=0.05, "Not Applicable" at 0.15."""
+    from app.autofill.jev_binder import JevBinder
+
+    client = NoulAwareClient({"Top Secret": 0.03, "Secret": 0.03, "Expired": 0.05, "Not Applicable": 0.15})
+    field = _multi("Active Security Clearance(s)", "Top Secret", "Secret", "Expired Clearance", "Not Applicable")
+    labels, confidence = JevBinder(client=client).answer_from_profile({"applicant": {}}, [("a", field)])["a"]
+    assert labels == ["Not Applicable"] and abs(confidence - 0.95) < 1e-9
+
+    # One level merely undecided: no elimination, the applicant decides.
+    unsure = NoulAwareClient({"Top Secret": 0.03, "Secret": 0.40, "Expired": 0.05, "Not Applicable": 0.15})
+    labels, confidence = JevBinder(client=unsure).answer_from_profile({"applicant": {}}, [("b", field)])["b"]
+    assert labels is None and confidence == 0.0
+
+    # Two none-like options (Never held / Do not wish to disclose) are ambiguous: no pick.
+    two = _multi("Active Security Clearance(s)", "Top Secret", "Never held a clearance", "None of the above")
+    labels, _ = JevBinder(client=NoulAwareClient({"Top Secret": 0.02})).answer_from_profile({"applicant": {}}, [("c", two)])["c"]
+    assert labels is None
