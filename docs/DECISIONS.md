@@ -1693,6 +1693,69 @@ against the one-second target.
 
 ---
 
+## 47. One hundred Ashby applications
+
+Drawn from the Simplify intern and new-grad lists (never sampled for Ashby
+before), one posting per organisation, 56 intern and 44 new-grad SWE-family
+titles, every one confirmed live through Ashby's posting API. Run on
+2026-09-29 through the installed extension (0.4.35, the API path of §46),
+with each page's own outcome record as the log.
+
+| | |
+|---|---|
+| applications | 100, 100 organisations |
+| fields filled | 702 |
+| left for the applicant | 246 (essays, consents, bespoke questions, office preferences) |
+| "known but could not be entered" | 4 on the first pass; 0 after the fixes below on re-run |
+| forms with nothing left for the applicant | 20 |
+| fill, median | 88 ms; 74 ms on the 68 forms without a geocoder |
+| fill, under one second | 83 of 100 |
+| fill, worst | 3.5 s — Notion's Location geocoder |
+| first-visit plan, median | 0.9 s (one Jev round trip, §42); repeat visits from cache |
+
+**What carried over from Greenhouse unchanged.** The profile memory, the
+themes and aliases, the widened gate (§40) including multi-selects, the
+résumé attach, the plan cache, the per-tier timing, the one-at-a-time
+guard, the hidden-tab rules — and the protocol itself: held-out draw,
+installed extension, one PR and one entry per iteration.
+
+**What did not, and what replaced it.**
+1. *The form definition.* Not the DOM: Ashby's `ApiJobPosting` (§46). The
+   DOM baseline on Sierra filled 14 in 9.3 s; the API path fills 16 in 33 ms.
+2. *The oracle.* Ashby validates only on its server, so a submit click is
+   both blind and one block from a real submission. Never clicked; the plan
+   carries each field's required flag and the check is local.
+3. *Visibility.* Ashby renders its form client-side whether or not the tab
+   is looked at, so an Ashby tab fills in the background (0.4.34). Chrome's
+   intensive throttling of long-hidden tabs then bit every setTimeout-based
+   wait; the settle loop and the pre-check waits use unthrottled sleeps
+   (0.4.35).
+4. *Autosave.* Every written value is posted to Ashby as a draft. Not a
+   submission, but not local either.
+
+**Defects found by the run, each fixed and re-verified.**
+- Color Health: "Are you based in the San Francisco Bay Area?" is a checkbox;
+  the location theme handed it "Ithaca, NY". A yes/no control now takes yes
+  or no and nothing else; other values go to the model gate. Re-run: 0
+  failures.
+- Siftstack: "Do you have any offers…?" got the stored "None" from the
+  timeline theme, which bypassed the guard computed themes had. Stored
+  themes pass through it now. Re-run: 0 failures.
+- Espa and Fanvue: the Location geocoder answered after the 1.5 s
+  shortened-term retry had already fired, and the retry term kept its
+  comma. The full term now waits 3.5 s on a geocoder, shortened terms lose
+  their punctuation, and the last plan's location is typed into the box as
+  soon as the next form renders (0.4.37) — the same warm-up that pays for
+  Greenhouse's education lookups. Re-run pending the reload.
+
+**The one-second question.** Without a geocoder the fill is 8–175 ms, which
+is not the bottleneck anywhere. With one it is the geocoder's own latency
+(0.4–3.3 s, 32 of 100 forms), and the only lever is to start it before the
+plan arrives, which 0.4.37 does. The first-visit plan is the model's round
+trip; the page's own settle is 0.3–2 s. A repeat visit is instant.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
