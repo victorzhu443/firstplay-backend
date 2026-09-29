@@ -1706,7 +1706,7 @@ with each page's own outcome record as the log.
 | applications | 100, 100 organisations |
 | fields filled | 702 |
 | left for the applicant | 246 (essays, consents, bespoke questions, office preferences) |
-| "known but could not be entered" | 4 on the first pass; 0 after the fixes below on re-run |
+| "known but could not be entered" | 4 on the first pass; 0 after the fixes below on re-run (two were yes/no guards, two an employer-scoped geocoder now reported as a mismatch) |
 | forms with nothing left for the applicant | 20 |
 | fill, median | 88 ms; 74 ms on the 68 forms without a geocoder |
 | fill, under one second | 83 of 100 |
@@ -1741,12 +1741,18 @@ installed extension, one PR and one entry per iteration.
 - Siftstack: "Do you have any offers…?" got the stored "None" from the
   timeline theme, which bypassed the guard computed themes had. Stored
   themes pass through it now. Re-run: 0 failures.
-- Espa and Fanvue: the Location geocoder answered after the 1.5 s
-  shortened-term retry had already fired, and the retry term kept its
-  comma. The full term now waits 3.5 s on a geocoder, shortened terms lose
-  their punctuation, and the last plan's location is typed into the box as
-  soon as the next form renders (0.4.37) — the same warm-up that pays for
-  Greenhouse's education lookups. Re-run pending the reload.
+- Espa and Fanvue: first read as a retry-timing defect (0.4.37 gives a
+  geocoder 3.5 s, strips punctuation from shortened terms, and types the
+  stored location as soon as the form renders — the warm-up that pays for
+  Greenhouse's education lookups). The re-run on 0.4.37 failed the same
+  way in 0.9 s, so it was not timing: both fields are plain `Location`
+  geocoders with no option list, and both return "Netherlands | New Zealand
+  | West" for "Ithaca, NY" while thirty other organisations' geocoders
+  return Ithaca. The geocoder is scoped to where the employer hires. The
+  widget worked and the form's answer set excludes the applicant's value,
+  so 0.4.38 reports it as a mismatch for the applicant, with what was
+  offered, rather than as a field the filler could not enter. Two of the
+  hundred, both employers outside the applicant's country.
 
 **The one-second question.** Without a geocoder the fill is 8–175 ms, which
 is not the bottleneck anywhere. With one it is the geocoder's own latency
