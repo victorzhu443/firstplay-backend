@@ -1079,6 +1079,143 @@ enough to stop a loop.
 
 ---
 
+## 34. Round 2 on twelve unseen boards: what the held-out set found
+
+Victor: "do this over and over again … the point is to not use the same
+testing group." Round 1's fourteen boards are now the training set; round 2
+drew twelve boards none of which had been opened before, and ran the
+**installed extension** (0.4.9) on each page with its dry-run check, reading
+the page and the console afterwards. First three boards, 2026-09-28:
+
+| board | applied | timing | form still wants | new defect |
+|---|---|---|---|---|
+| Mill | 6 filled, 0 failed | 1.8 s total, fill 0.1 s | **Country** (`#country`, beside Phone) | coverage: a required select no API block describes |
+| Chicago Trading Campus | 10 filled, **12 "not a react-select instance"**, 7 review | 8.0 s | 48 incl. school, degree, discipline, **start month/year** | hydration wait too short and only on the first select; "How did you hear" is a **fieldset of radios**; education **start dates** never planned |
+| NISC | 6 filled, 6 "not a react-select instance" | 4.3 s | **0** (false negative) | in a hidden tab React never hydrated: 0 of 12 selects owned minutes later, so neither the selects nor the form's validation existed |
+
+**Fixed from this round.**
+
+1. `country` is synthesised for every standard form (required; answered
+   from `country_of_residence`, derived: an explicit `country`, else a US
+   state in `current_location` → United States; else review).
+2. `educations[0].start_date.month/year` are synthesised; the profile gains
+   `education.start_date` (onboarding: "August 2024"); absent on most boards,
+   required on some.
+3. The filler waits for **each** select's React instance, up to 20 s, and
+   treats a `<fieldset>` of radios/checkboxes as a choice group.
+
+**A fact about hidden tabs, recorded.** Greenhouse's standard form does not
+hydrate while the tab is hidden. In that state the selects cannot be driven
+and a dry-run submit validates nothing — the "still wants 0" on NISC was the
+un-hydrated form, not a clean form. The extension now says so rather than
+guessing; the survey itself needs the tab visible for the select and
+validation tiers, exactly as §26 said.
+
+**Method note.** Each round: new boards only; the extension as installed;
+`applied:` / `timing:` / `form wants:` lines as the record; defects
+diagnosed and fixed before the next draw. Rounds continue until a draw finds
+nothing.
+
+---
+
+## 35. The select driver never ran where it could work: isolated world vs. page world
+
+Round 2, Clockwork, 2026-09-28. The extension's notes said "not a
+react-select instance" on School, Degree, Discipline, End month; a probe run
+in the page at the same moment showed all six selects owned by React. Both
+were true. Chrome runs content scripts in an **isolated world**: the DOM is
+shared, but properties that page scripts attach to nodes are not — and
+React's fiber (`__reactFiber$…`), which the driver walks to reach
+`selectOption`, is such a property. From inside the extension the react-
+select driver has therefore never worked; Coinbase's, Chicago Trading's,
+NISC's and Clockwork's "known but not selected" dropdowns were all this one
+cause, and §30's and §34's hydration explanations were only part of the
+story (hydration is real and still waited for, but it was measured from the
+page world, which the extension does not share).
+
+Why it hid for so long: every fill verification I ran was a page-world
+injection through the browser tools, and it passed. The installed
+extension's own runs on standard forms were read only by their console
+counts, which said "filled" for text and "known but could not be entered"
+for selects — and the selects were blamed on hydration. Victor's rule — the
+installed extension, on real pages, read back — is the one that caught it.
+
+**Decision.** The fill runs in the page's world: the service worker injects
+`fill.js` with `chrome.scripting.executeScript({world: "MAIN"})` and awaits
+`applyPlan` there; the content script keeps extraction, the plan request and
+the report. The isolated copy stays only as a fallback when injection is
+refused, and says so. Duolingo's and Ashby's drivers, which never needed
+fibers, are unaffected. Extension 0.4.13.
+
+**What this changes about the numbers.** Every standard-renderer dropdown
+result before 0.4.13 that came from the installed extension is void; the
+page-world verifications (Figma, Scale AI, Coinbase, Gallup) stand, because
+that is the world the filler now runs in.
+
+---
+
+## 36. Round 2 complete: twelve unseen boards through the extension itself
+
+All twelve round-2 boards, run by the installed extension (0.4.13 from
+Clockwork on — the first build whose select driver runs in the page world),
+tab visible, each page's own `applied:` / `timing:` and dry-run `form wants:`
+read back. 2026-09-28.
+
+| board | filled / could-not-enter | total | the form still wanted |
+|---|---|---|---|
+| Mill | 6 / 0 | 1.8 s | Country → fixed (§34) |
+| Chicago Trading | 10 / 12 (pre-page-world) | 8.0 s | re-run in round 3 |
+| NISC | 6 / 6 (hidden tab, pre-page-world) | 4.3 s | re-run in round 3 |
+| Clockwork | **15 / 1** | 4.2 s | phone-country shows "+1" for "United States +1" → readback accepts a partial display (0.4.14); Location → id fixed (0.4.15) |
+| Garda | 9 / 0 | 2.8 s | Location |
+| Verkada | 19 / 0 | 1.7 s | Location, start dates, an availability checkbox group (review) |
+| TribalScale | 12 / 0 | — | start dates |
+| Docugami | 8 / 0 | — | nothing |
+| Internship List | 23 / 0 | 3.3 s | bespoke (term, duration, pay), consents |
+| Vercel | 19 / 0 | 3.4 s | two essays, two attestations |
+| Integra FEC | 22 / 0 | 1.9 s | start dates, **heard-about multi-select**, availability, essay |
+| Apera | 10 / 0 | 1.8 s | one bespoke eligibility question |
+
+**Found and fixed this round.** `location` never located on the standard
+renderer (its control is `candidate-location`; every board above wanted it)
+— an id mapping, 0.4.15. The phone-country readback. And the heard-about
+multi-select: "Careers Website" now matches the one option that names the
+employer's own website or careers page and no third-party site — 26 such
+fields in the large corpus, 25 required.
+
+**What remains wanted is the honest residue:** education start dates (a
+profile gap — `education.start_date`), essays, attestations and consents
+(human by design), and bespoke questions.
+
+**Method.** Rounds 1 and 2 are training sets now; round 3 (ten boards never
+opened: Geneva Trading, Schonfeld, Integra Interns, Virtu, Relay, Clarity,
+Figure, Duolingo University, DoorDash Canada, Workshop) validates 0.4.14–15
+and this round's backend changes on unseen forms.
+
+---
+
+## 37. Never write into a form React has not taken over
+
+Round 3, Schonfeld, 2026-09-28, tab occluded (`visibilityState: hidden`):
+the extension filled 9 fields green and noted one select as having no
+React instance; a minute later the same page showed 12 of 13 selects with
+instances and **no green outlines at all**. Greenhouse hydrates its form
+lazily and not while the tab is hidden; the fill had landed on the
+server-rendered DOM, and hydration's re-render replaced it. The earlier
+20 s hydration wait only delayed the same outcome.
+
+**Decision.** Before writing anything, the filler waits: if the document is
+hidden, for it to be shown (a `visibilitychange`, not a timer — postings
+opened in background tabs fill the moment they are looked at); then for the
+last select on the page to be owned by React. The console says "this tab is
+in the background — the fill starts when you switch to it". Extension 0.4.16.
+
+**Measurement note for the survey.** macOS reports a window covered by
+another window as hidden, so "keep the tab active" is not enough; the Chrome
+window must be on screen. Rounds run under that condition only.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

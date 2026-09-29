@@ -185,9 +185,25 @@ def _education_fields(payload: Dict[str, Any]) -> List[FormField]:
         select("educations[0].school_name_id", "School", None),
         select("educations[0].degree_id", "Degree", extra.get("degrees")),
         select("educations[0].discipline_id", "Discipline", extra.get("disciplines")),
+        # Start dates: rendered by some boards (Chicago Trading, round 2) and
+        # required there; "not on page" elsewhere, which costs nothing.
+        select("educations[0].start_date.month", "Start date month", None, months),
+        select("educations[0].start_date.year", "Start date year", None),
         select("educations[0].end_date.month", "End date month", None, months),
         select("educations[0].end_date.year", "End date year", None),
     ]
+
+
+def _country_field() -> List[FormField]:
+    """The `country` select every standard Greenhouse form renders beside Phone.
+
+    Not in any API block; the form marks it required (measured on Mill,
+    Coinbase, Gallup, Chicago Trading: "Country: Select a country" after a
+    dry-run submit). Answered from the applicant's country of residence.
+    """
+    key, label, kind = "country", "Country", FieldKind.SINGLE_SELECT
+    return [FormField(key=key, label=label, kind=kind,
+                      field_class=classify(key, label, kind), required=True, options=[])]
 
 
 def _location_fields(payload: Dict[str, Any]) -> List[FormField]:
@@ -241,6 +257,7 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
     fields.extend(_education_fields(payload))
     fields.extend(_demographic_fields(payload))
     fields.extend(_location_fields(payload))
+    fields.extend(_country_field())
 
     return FormSchema(
         source="greenhouse_api",

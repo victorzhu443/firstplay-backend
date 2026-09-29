@@ -56,6 +56,7 @@ CORE_FIELD_NAMES = {
     # Greenhouse's candidate-location block (`location_questions`): a geocoder
     # typeahead whose chosen suggestion also fills hidden longitude/latitude.
     "location": "current_location",
+    "country": "country_of_residence",
     # Greenhouse's education block. Not in the API's `questions`; the payload
     # says only `education: education_required|education_optional`, and the
     # form renders these names (measured on Duolingo, 2026-09-27). Degree and
@@ -106,6 +107,23 @@ CORE_LABEL_ALIASES = {
     "github link": "github",                  # Notion (Ashby), 2026-09-27
     "phone": "phone",                         # Ashby's label; the key is a UUID
     "phone number": "phone",
+    # Custom address questions (Relay, Gallup, round 3): derivable pieces of
+    # the stored location, and a street address the profile may hold.
+    "gpa undergraduate": "gpa",            # Freeform: "GPA (Undergraduate)"
+    "state": "state_of_residence",
+    "state province": "state_of_residence",
+    "state if n a select other": "state_of_residence",   # Chicago Trading
+    "what is your preferred first name": "preferred_first_name",  # NISC
+    "country": "country_of_residence",
+    "country of residence": "country_of_residence",
+    "city": "city_of_residence",
+    "address": "street_address",
+    "address line 1": "street_address",
+    "street address": "street_address",
+    "zip": "postal_code",
+    "zip code": "postal_code",
+    "zip postal code": "postal_code",
+    "postal code": "postal_code",
     "website": "website",
     "websites": "website",                    # x6  "Website(s)"
     "website s": "website",                   # "Website(s)" after punctuation strip
