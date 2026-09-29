@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.autofill.ashby import parse_ashby_dom
+from app.autofill import ENGINE
 from app.autofill.binder import DeterministicBinder, FillPlan, resolve_form
 from app.autofill.greenhouse import parse_greenhouse_job
 from app.autofill.jev_binder import JevBinder, OptionCache, ThemeCache
@@ -84,6 +85,8 @@ class AutofillResponse(BaseModel):
     summary: Dict[str, int]
     jev_calls: int = 0
     cost_usd: float = 0.0
+    #: Fingerprint of the engine that built this plan (see app.autofill.ENGINE).
+    engine: str = ""
 
 
 def _parse_form(ats: str, payload: Dict[str, Any]) -> FormSchema:
@@ -160,6 +163,7 @@ def build_plan(request: AutofillRequest):
         cost_usd=jev.cost_usd if jev else 0.0,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
         model_skipped=bool(jev is not None and getattr(jev, "tripped", False)),
+        engine=ENGINE,
     )
 
 
@@ -176,6 +180,7 @@ def autofill_health():
 
     return {
         "status": "ok",
+        "engine": ENGINE,
         "model_available": configured,
         "themes": len(list(QuestionTheme)),
         "theme_cache": _THEME_CACHE.size,

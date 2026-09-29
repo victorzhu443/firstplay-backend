@@ -675,3 +675,8 @@ def test_applicant_state_carries_standing_availability_and_whitelisted_backgroun
     flexible = _applicant_state(Memory(preferences={"internship_term": "Summer", "term_flexible": "Yes"}),
                                 today=date(2026, 9, 28))
     assert any("on or after the earliest start date" in n for n in flexible["notes"])
+
+
+def test_the_engine_fingerprint_is_stable_and_short():
+    from app.autofill import ENGINE, engine_fingerprint
+    assert ENGINE == engine_fingerprint() and len(ENGINE) == 12 and int(ENGINE, 16) >= 0
