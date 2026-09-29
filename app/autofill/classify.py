@@ -111,6 +111,8 @@ CORE_LABEL_ALIASES = {
     # the stored location, and a street address the profile may hold.
     "state": "state_of_residence",
     "state province": "state_of_residence",
+    "state if n a select other": "state_of_residence",   # Chicago Trading
+    "what is your preferred first name": "preferred_first_name",  # NISC
     "country": "country_of_residence",
     "country of residence": "country_of_residence",
     "city": "city_of_residence",
