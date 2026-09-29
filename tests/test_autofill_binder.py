@@ -606,3 +606,72 @@ def test_a_required_follow_up_with_nothing_to_say_goes_to_review_not_blank():
     assert entries[1].needs_review and entries[1].satisfied_by is None
     # The optional one is still simply inapplicable.
     assert entries[2].satisfied_by == "q1" and not entries[2].needs_review
+
+
+def test_profile_gate_asks_multi_selects_and_fills_only_a_decided_set():
+    """General Matter 5377118008: "When are you available … Check all that apply"."""
+    from app.autofill.binder import FillPlanEntry, _answer_from_profile, MULTI_SELECT_OPTION_CAP
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField, FormSchema, FillSource
+
+    terms = [FieldOption(label=t, value=t) for t in ("Fall 2026", "Spring 2027", "Summer 2027")]
+    offices = [FieldOption(label="Office {}".format(i), value=str(i)) for i in range(MULTI_SELECT_OPTION_CAP + 1)]
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[
+        FormField(key="terms", label="When are you available for a 12 week internship? Check all that apply",
+                  kind=FieldKind.MULTI_SELECT, field_class=FieldClass.SCREENING, required=True, options=terms),
+        FormField(key="offices", label="Please select office location(s) you are open to working in:",
+                  kind=FieldKind.MULTI_SELECT, field_class=FieldClass.SCREENING, required=True, options=offices),
+        FormField(key="clear", label="Active Security Clearance(s)",
+                  kind=FieldKind.MULTI_SELECT, field_class=FieldClass.SCREENING, required=True, options=terms),
+    ])
+    entries = [FillPlanEntry(field_key=f.key, label=f.label, value=None, source=FillSource.HUMAN, needs_review=True)
+               for f in form.fields]
+
+    class FakeBinder:
+        asked = None
+        def answer_from_profile(self, state, requests):
+            FakeBinder.asked = [r for r, _f in requests]
+            return {"ans_0": (["Summer 2027"], 0.96), "ans_2": (["Fall 2026", "Spring 2027"], 0.62)}
+
+    memory = Memory(preferences={"internship_term": "Summer", "earliest_start": "June 2027"})
+    _answer_from_profile(entries, form, memory, FakeBinder())
+
+    assert FakeBinder.asked == ["ans_0", "ans_2"]           # 13 offices exceed the cap; never asked
+    assert entries[0].values == ["Summer 2027"] and entries[0].value is None
+    assert entries[0].source == FillSource.MODEL_DECISION and not entries[0].needs_review
+    assert entries[1].needs_review and not entries[1].values
+    # Partial certainty is a suggestion the applicant sees, never a fill.
+    assert entries[2].needs_review and entries[2].values == ["Fall 2026", "Spring 2027"]
+    assert "62%" in entries[2].reason
+
+
+def test_applicant_state_carries_standing_availability_and_whitelisted_background():
+    from datetime import date
+    from app.autofill.binder import _applicant_state, _class_standing
+    from app.autofill.memory import Memory
+
+    memory = Memory(
+        education={"start_date": "August 2024", "graduation_date": "May 2028", "gpa": "3.8"},
+        preferences={"internship_term": "Summer", "term_flexible": "No", "earliest_start": "June 2027"},
+        facts={"security_clearance": "None", "prior_internships": "1", "email": "x@y.z",
+               "phone": "555", "street_address": "1 Main St"},
+        protected={"gender": "Male"},
+    )
+    state = _applicant_state(memory, today=date(2026, 9, 28))
+
+    assert state["today"] == "2026-09-28"
+    assert any("third-year (junior)" in n and "May 2028" in n for n in state["notes"])
+    assert any("Summer terms only" in n and "June 2027" in n and "Spring = January" in n for n in state["notes"])
+    assert state["background"] == {"security_clearance": "None", "prior_internships": "1"}
+    blob = json.dumps(state)
+    assert "x@y.z" not in blob and "555" not in blob and "1 Main St" not in blob and "Male" not in blob
+
+    # Standing from the graduation date alone assumes four years; graduation
+    # in the past reads as graduated; a flexible applicant is told so.
+    assert _class_standing({"graduation_date": "May 2028"}, date(2026, 9, 28)) == "third-year (junior)"
+    assert _class_standing({"graduation_date": "May 2027"}, date(2027, 2, 1)) == "fourth-year (senior)"
+    assert _class_standing({"graduation_date": "May 2026"}, date(2026, 9, 28)).startswith("graduated")
+    assert _class_standing({}, date(2026, 9, 28)) is None
+    flexible = _applicant_state(Memory(preferences={"internship_term": "Summer", "term_flexible": "Yes"}),
+                                today=date(2026, 9, 28))
+    assert any("on or after the earliest start date" in n for n in flexible["notes"])

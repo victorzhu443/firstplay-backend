@@ -598,6 +598,12 @@ PROFILE_FIELDS = {
         ("street_address", "", 2),
         ("postal_code", "94105", 13),
         ("country_of_residence", "United States", 8),
+        # Background the 100-board run kept asking for (DECISIONS §39–§40).
+        # Sent to the model as `background`; never protected, never contact.
+        ("security_clearance", "None", 4),
+        ("attended_career_fair", "No", 12),
+        ("prior_internships", "1", 3),
+        ("gpa_scale", "4.0", 2),
     ],
     "education": [
         ("university", "Cornell University", 14),

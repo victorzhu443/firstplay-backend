@@ -257,3 +257,75 @@ def test_gates_skip_fields_with_more_options_than_a_choice_allows():
 
     assert binder.answer_from_profile({"applicant": {}}, [("a", field)]) == {"a": (None, 0.0)}
     assert binder.match_options([("m", "Cornell University", field)]) == {"m": (None, 0.0)}
+
+
+class NoulAwareClient(FakeClient):
+    """Answers a Noul by the option named in its instructions, a Choice as FakeClient does."""
+
+    def __init__(self, beliefs, **kw):
+        super().__init__({}, **kw)
+        self._beliefs = beliefs
+
+    def decide(self, state, questions, description=""):
+        self.calls.append({"state": state, "questions": questions})
+        answers = {}
+        for question_id, question in questions.items():
+            if question["type"] == "noul":
+                text = question["instructions"]
+                p = next((v for needle, v in self._beliefs.items() if needle in text), 0.5)
+                answers[question_id] = Answer(type="noul", noul=p)
+            else:
+                answers[question_id] = Answer(type="choice", choice="unsure", confidence=0.3)
+        return Decision(answers=answers, cost_usd=self._cost, input_tokens=100)
+
+
+def _multi(label, *options):
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField
+    return FormField(key=label[:8], label=label, kind=FieldKind.MULTI_SELECT, field_class=FieldClass.SCREENING,
+                     required=True, options=[FieldOption(label=o, value=o) for o in options])
+
+
+def test_a_multi_select_is_one_noul_per_option_and_returns_the_decided_set():
+    from app.autofill.jev_binder import JevBinder
+
+    client = NoulAwareClient({"Summer 2027": 0.97, "Spring 2027": 0.03, "Fall 2026": 0.04})
+    binder = JevBinder(client=client)
+    field = _multi("When are you available? Check all that apply", "Fall 2026", "Spring 2027", "Summer 2027")
+
+    out = binder.answer_from_profile({"applicant": {"notes": ["Summer only"]}}, [("a", field)])
+
+    assert len(client.calls) == 1
+    asked = client.calls[0]["questions"]
+    assert len(asked) == 3 and all(q["type"] == "noul" for q in asked.values())
+    assert all("Option being judged" in q["instructions"] for q in asked.values())
+    labels, confidence = out["a"]
+    assert labels == ["Summer 2027"] and confidence >= 0.96
+
+
+def test_an_undecided_option_lowers_the_whole_field_and_an_empty_set_is_no_answer():
+    from app.autofill.jev_binder import JevBinder
+
+    client = NoulAwareClient({"Chicago": 0.95, "New York": 0.55, "Amsterdam": 0.02})
+    binder = JevBinder(client=client)
+    field = _multi("Which offices are you open to?", "Chicago", "New York", "Amsterdam")
+    labels, confidence = binder.answer_from_profile({"applicant": {}}, [("a", field)])["a"]
+    assert labels == ["Chicago"] and abs(confidence - 0.55) < 1e-9   # New York undecided → suggestion only
+
+    nothing = NoulAwareClient({"Chicago": 0.05, "New York": 0.02, "Amsterdam": 0.02})
+    labels, confidence = JevBinder(client=nothing).answer_from_profile({"applicant": {}}, [("b", field)])["b"]
+    assert labels is None and confidence == 0.0
+
+
+def test_multi_select_batches_are_split_by_question_count_not_request_count():
+    from app.autofill.jev_binder import JevBinder, MAX_QUESTIONS_PER_CALL
+
+    client = NoulAwareClient({})
+    binder = JevBinder(client=client)
+    # Each request is 12 nouls; four of them exceed one 40-question call.
+    requests = [("r{}".format(i), _multi("Q{} check all".format(i), *["o{}".format(k) for k in range(12)]))
+                for i in range(4)]
+    binder.answer_from_profile({"applicant": {}}, requests)
+
+    assert len(client.calls) == 2
+    assert all(len(c["questions"]) <= MAX_QUESTIONS_PER_CALL for c in client.calls)
+    assert sum(len(c["questions"]) for c in client.calls) == 48

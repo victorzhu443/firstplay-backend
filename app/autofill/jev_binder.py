@@ -32,9 +32,9 @@ from typing import Dict, List, Optional, Tuple
 
 from app.autofill.classify import normalize_label
 from app.autofill.themes import THEME_CRITERIA, QuestionTheme
-from app.autofill.schema import FormField
+from app.autofill.schema import FieldKind, FormField
 from app.exceptions import JevServiceError
-from app.jev_client import JevClient, choice, get_jev_client
+from app.jev_client import JevClient, choice, get_jev_client, noul
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,23 @@ _OPTION_INSTRUCTIONS = (
     "expresses it."
 )
 
+
+#: Per-option yes/no for a "check all that apply" question. A Noul wants an
+#: observable situation on each side, and an undetermined proposition comes
+#: back near 0.5 — which is exactly what the caller treats as "ask the
+#: applicant".
+_APPLIES_INSTRUCTIONS = (
+    "You are filling a job application for the applicant described in state.applicant; "
+    "state.form.earlier_answers lists what is already answered on this form. The form asks "
+    "a select-all-that-apply question. Judge whether ONE option truthfully applies to this "
+    "applicant, using only facts stated in the profile and earlier answers. If the profile "
+    "says nothing that bears on the option, it does NOT apply here — the applicant decides."
+)
+
+#: Noul thresholds for one option of a multi-select. Between them the option
+#: is undecided and the whole field stays with the applicant.
+MULTI_YES = 0.90
+MULTI_NO = 0.10
 
 _ANSWER_INSTRUCTIONS = (
     "You are filling a job application for the applicant described in state.applicant. "
@@ -370,8 +387,9 @@ class JevBinder:
             if len(field.options) > 254:
                 out[request_id] = (None, 0.0)
                 continue
-            signature = "answer::{}::{}::{}".format(
-                field.label[:80], "|".join(o.label for o in field.options)[:200], state_hash
+            signature = "answer::{}::{}::{}::{}".format(
+                field.kind.value, field.label[:80],
+                "|".join(o.label for o in field.options)[:200], state_hash,
             )
             cached = self._options.get(signature)
             if cached is not None:
@@ -379,12 +397,23 @@ class JevBinder:
                 continue
             pending.append((request_id, field, signature))
 
-        for start in range(0, len(pending), MAX_QUESTIONS_PER_CALL):
-            batch = pending[start:start + MAX_QUESTIONS_PER_CALL]
+        # Batched by *questions*, not requests: a multi-select is one question
+        # per option, and the call cap is on questions.
+        batch: List[Tuple[str, FormField, str]] = []
+        weight = 0
+        for item in pending:
+            cost = len(item[1].options) if item[1].kind == FieldKind.MULTI_SELECT else 1
+            if batch and weight + cost > MAX_QUESTIONS_PER_CALL:
+                out.update(self._answer_batch(state, [(r, f) for r, f, _sig in batch]))
+                for request_id, _field, signature in batch:
+                    self._options.put(signature, *out.get(request_id, (None, 0.0)))
+                batch, weight = [], 0
+            batch.append(item)
+            weight += cost
+        if batch:
             out.update(self._answer_batch(state, [(r, f) for r, f, _sig in batch]))
             for request_id, _field, signature in batch:
-                label, confidence = out.get(request_id, (None, 0.0))
-                self._options.put(signature, label, confidence)
+                self._options.put(signature, *out.get(request_id, (None, 0.0)))
 
         return out
 
@@ -394,7 +423,24 @@ class JevBinder:
         questions = {}
         option_labels: Dict[str, Dict[str, str]] = {}
 
+        multi: Dict[str, List[Tuple[str, str]]] = {}   # request_id -> [(question_id, option label)]
+
         for request_id, field in batch:
+            if field.kind == FieldKind.MULTI_SELECT:
+                per_option = []
+                for index, option in enumerate(field.options):
+                    question_id = "{}__opt_{}".format(request_id, index)
+                    questions[question_id] = noul(
+                        "{}\n\nQuestion on the form: {}\nOption being judged: {}".format(
+                            _APPLIES_INSTRUCTIONS, field.label, option.label
+                        ),
+                        true_means="The profile states facts under which the applicant would tick this option.",
+                        false_means="The profile rules this option out, or says nothing that bears on it.",
+                    )
+                    per_option.append((question_id, option.label))
+                multi[request_id] = per_option
+                continue
+
             criteria = {}
             labels = {}
             for index, option in enumerate(field.options):
@@ -409,16 +455,32 @@ class JevBinder:
             )
 
         decision = self._decide(
-            state, questions, description="answer {} question(s) from the profile".format(len(batch))
+            state, questions, description="answer {} question(s) from the profile".format(len(questions))
         )
 
         self.calls += 1
         self.cost_usd += decision.cost_usd
-        self.questions_asked += len(batch)
+        self.questions_asked += len(questions)
 
-        out: Dict[str, Tuple[Optional[str], float]] = {}
+        out: Dict[str, Tuple[Optional[object], float]] = {}
 
         for request_id, _field in batch:
+            if request_id in multi:
+                picked: List[str] = []
+                decidedness = 1.0
+                for question_id, label in multi[request_id]:
+                    answer = decision.get(question_id)
+                    p = answer.belief() if answer is not None else 0.5
+                    if p >= MULTI_YES:
+                        picked.append(label)
+                    # Below MULTI_NO is a confident no; in between, undecided.
+                    # Either way the field's confidence is its least-decided option.
+                    decidedness = min(decidedness, max(p, 1.0 - p))
+                # An empty selection is not an answer to a required question;
+                # report it as undecided so the field stays with the applicant.
+                out[request_id] = (picked or None, decidedness if picked else min(decidedness, 0.0))
+                continue
+
             answer = decision.get(request_id)
             if answer is None or not answer.choice or answer.choice == "unsure":
                 out[request_id] = (None, answer.belief() if answer else 0.0)

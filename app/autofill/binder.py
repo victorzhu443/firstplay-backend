@@ -16,6 +16,7 @@ Jev binder added later has a measured baseline to beat, rather than being
 adopted on the assumption that it helps.
 """
 import re
+from datetime import date
 from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
@@ -37,6 +38,11 @@ from app.autofill.themes import (
 #: needless review costs one glance. Jev's default 0.5 is the right default and
 #: the wrong setting here.
 AUTOFILL_CONFIDENCE = 0.85
+
+#: A "check all that apply" question is asked as one yes/no per option; more
+#: than this many options is a list (offices worldwide, every clearance level)
+#: that the applicant scans faster than a model can be trusted on.
+MULTI_SELECT_OPTION_CAP = 12
 
 #: Below this, do not even show a suggestion.
 SUGGEST_CONFIDENCE = 0.50
@@ -677,7 +683,61 @@ def _resolve_conditionals(entries: List[FillPlanEntry], form: FormSchema) -> Non
         )
 
 
-def _applicant_state(memory: Memory) -> Dict[str, object]:
+#: Facts a screening question can turn on that are neither protected nor
+#: contact details. Whitelisted by key so that a new fact never reaches the
+#: model by accident. Counts are how often the 100-board run wanted them.
+_BACKGROUND_FACTS = (
+    "security_clearance",     # 4 boards: hold one? which level? eligible?
+    "attended_career_fair",   # career fair / saw us on campus, 12 source variants
+    "prior_internships",      # Klaviyo "how many prior internships", counts
+    "gpa_scale",              # Radix "your university's GPA range"
+    "current_job_title",
+    "current_employer",
+)
+
+_STANDING = {
+    1: "first-year (freshman)",
+    2: "second-year (sophomore)",
+    3: "third-year (junior)",
+    4: "fourth-year (senior)",
+}
+
+
+def _class_standing(education: Dict[str, str], today: date) -> Optional[str]:
+    """Where in a degree the applicant is, as a person would say it.
+
+    Academic years start in August. From the stored start date when there is
+    one, else from the graduation date assuming four years; "graduated" once
+    the graduation month has passed. None when neither date parses.
+    """
+    from app.autofill.memory import _year_of, _month_of  # local: memory imports binder's schema
+
+    start = _year_of(education.get("start_date") or "")
+    grad = _year_of(education.get("graduation_date") or "")
+    grad_month = _month_of(education.get("graduation_date") or "")
+    academic_year = today.year if today.month >= 8 else today.year - 1
+
+    if grad:
+        grad_year = int(grad)
+        months = ["January", "February", "March", "April", "May", "June", "July",
+                  "August", "September", "October", "November", "December"]
+        grad_month_index = months.index(grad_month) + 1 if grad_month in months else 6
+        if (today.year, today.month) > (grad_year, grad_month_index):
+            return "graduated ({} {})".format(grad_month or "", grad_year).replace("( ", "(")
+
+    if start:
+        index = academic_year - int(start) + 1
+    elif grad:
+        index = 4 - (int(grad) - academic_year - 1)
+    else:
+        return None
+
+    if index < 1:
+        return "not yet started (starts {})".format(start or grad)
+    return _STANDING.get(index, "{}th-year".format(index))
+
+
+def _applicant_state(memory: Memory, today: Optional[date] = None) -> Dict[str, object]:
     """What the model may know about the applicant when answering a question.
 
     Facts a screening question can turn on — legal status, education, stated
@@ -706,8 +766,44 @@ def _applicant_state(memory: Memory) -> Dict[str, object]:
                      "level ({}) do not apply — answer 'not applicable' when offered, otherwise "
                      "'unsure'.".format(degree_type, ", ".join(others)))
 
+    today = today or date.today()
+    education = dict(memory.education or {})
+    standing = _class_standing(education, today)
+    if standing:
+        notes.append("Today is {}. Class standing: {}; graduating {}. Questions about academic "
+                     "status, year in school or highest degree completed follow from this "
+                     "(an undergraduate has not yet obtained a bachelor's degree).".format(
+                         today.isoformat(), standing, education.get("graduation_date") or "unknown"))
+
+    term = (memory.preferences or {}).get("internship_term") or ""
+    flexible = str((memory.preferences or {}).get("term_flexible") or "").lower().startswith("y")
+    earliest = (memory.preferences or {}).get("earliest_start") or ""
+    if term:
+        # The calendar the model would otherwise have to guess at: a term is
+        # available only if it starts on or after the earliest start date.
+        # General Matter's "Fall 2026 / Spring 2027 / Summer 2027" sat at
+        # p=0.50 on Spring until the note said when Spring begins.
+        calendar = ("Term start months: Spring = January, Summer = May/June, Fall = August/September, "
+                    "Winter = December/January.")
+        if flexible:
+            rule = ("Any term is acceptable provided it starts on or after the earliest start date{}; "
+                    "a term that starts before it does not apply.".format(
+                        " ({})".format(earliest) if earliest else ""))
+        else:
+            rule = ("{} terms only{}; options naming other terms or semesters do not apply.".format(
+                term, " (earliest start {})".format(earliest) if earliest else ""))
+        notes.append("Internship availability: preferred term {}. {} {}".format(term, rule, calendar))
+
+    background = {
+        key: (memory.facts or {}).get(key) or (memory.preferences or {}).get(key)
+        for key in _BACKGROUND_FACTS
+    }
+    background = {k: v for k, v in background.items() if v and v not in Memory.BLANK_ANSWERS}
+
     return {
         "notes": notes,
+        "today": today.isoformat(),
+        "background": background,
         "legal_status": dict(memory.legal_status or {}),
         "work_authorization_by_country": dict((memory.per_country or {}).get("work_authorization", {})),
         "needs_sponsorship_by_country": dict((memory.per_country or {}).get("needs_sponsorship", {})),
@@ -741,7 +837,13 @@ def _answer_from_profile(entries: List[FillPlanEntry], form: FormSchema, memory:
         field = fields.get(entry.field_key)
         if field is None or not field.options:
             continue
-        if field.kind not in (FieldKind.SINGLE_SELECT, FieldKind.BOOLEAN):
+        if field.kind == FieldKind.MULTI_SELECT:
+            # "Check all that apply" — term availability, offices, clearances.
+            # Each option is its own yes/no; the cap keeps a form's questions
+            # bounded (Optiver lists 11 offices, General Matter 3 terms).
+            if len(field.options) > MULTI_SELECT_OPTION_CAP:
+                continue
+        elif field.kind not in (FieldKind.SINGLE_SELECT, FieldKind.BOOLEAN):
             continue
         if not field.allows_model_judgement():
             continue
@@ -766,20 +868,33 @@ def _answer_from_profile(entries: List[FillPlanEntry], form: FormSchema, memory:
         entry = entries[int(request_id.split("_")[1])]
         label, confidence = results.get(request_id, (None, 0.0))
 
-        if label is None:
+        if label is None or label == []:
             continue
+
+        # A multi-select comes back as the list of options that apply, with
+        # the confidence of the least-decided option. Partial certainty is a
+        # suggestion, never a fill: ticking two of three boxes silently is
+        # worse than ticking none.
+        picked = list(label) if isinstance(label, (list, tuple)) else None
 
         if confidence < AUTOFILL_CONFIDENCE:
             if confidence >= 0.5:
-                entry.value = label
+                if picked is not None:
+                    entry.values = picked
+                else:
+                    entry.value = label
                 entry.confidence = confidence
                 entry.reason = "the model reads your profile as {!r}, but only {:.0%} sure".format(
-                    label, confidence
+                    picked if picked is not None else label, confidence
                 )
             continue
 
-        entry.value = label
-        entry.values = []
+        if picked is not None:
+            entry.value = None
+            entry.values = picked
+        else:
+            entry.value = label
+            entry.values = []
         entry.source = FillSource.MODEL_DECISION
         entry.confidence = confidence
         entry.needs_review = False
