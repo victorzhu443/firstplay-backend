@@ -1560,6 +1560,40 @@ the model host's latency spread, neither of which the extension controls.
 
 ---
 
+## 44. One pick per frame: two react-select picks in one tick lose the first
+
+§43's account of the dry-run race was half right. 0.4.25 confirmed picks
+on the rendered value and gave the form a frame before the dry-run, and
+Lightmatter still printed `plan said FILL` for four correctly displayed
+selects. So the theory was tested on the page, with a dry-run submit after
+each variant, on two of those selects:
+
+| picks | form's verdict after a dry-run submit |
+|---|---|
+| both fired in the same tick, 150 ms wait | first flagged **required**, second valid |
+| one per frame (rAF + macrotask between), 150 ms wait | both valid |
+
+Both variants *displayed* both values — react-select keeps its own
+selected value — which is why the readback, the display check and the
+first probe of §43 all passed. Greenhouse's wrapper folds each change into
+the form's state from a closure over the previous state; two changes in
+one tick and the second overwrites the first. The form's own validation
+was the only observer that could see it, which is the point of §32.
+
+**Decision (0.4.26).** Picks run one per frame, as they had until 0.4.23;
+the concurrency that was worth having stays in the lookups tier, where it
+belongs. A pick confirms on its rendered value, or on its held state once a
+frame has passed (some widgets, Lightmatter's gender select among them,
+never expose a readable display and ran the whole 2 s wait). Thirteen
+selects now cost roughly a quarter of a second rather than 581 ms, and the
+dry-run reports what the form will actually submit.
+
+**Lesson recorded.** A confirmation that reads the widget is not a
+confirmation that reads the form. When the oracle and the readback
+disagree, the oracle is right until proven otherwise on the page.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
