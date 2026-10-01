@@ -35,6 +35,7 @@ from app.autofill import ENGINE
 from app.autofill.binder import DeterministicBinder, FillPlan, resolve_form
 from app.autofill.greenhouse import parse_greenhouse_job
 from app.autofill.jev_binder import JevBinder, OptionCache, ThemeCache
+from app.autofill.learn import LearnResult, Observation, accept, learn
 from app.autofill.memory import Memory
 from app.autofill.schema import FormSchema
 from app.exceptions import JevConfigurationError, JevError
@@ -170,6 +171,63 @@ def build_plan(request: AutofillRequest):
         elapsed_ms=int((time.perf_counter() - started) * 1000),
         model_skipped=bool(jev is not None and getattr(jev, "tripped", False)),
         engine=ENGINE,
+    )
+
+
+class LearnRequest(BaseModel):
+    """What the applicant did on a form, and the profile to fold it into."""
+
+    profile: Dict[str, Any] = Field(default_factory=dict)
+    observations: List[Observation] = Field(default_factory=list)
+    #: Keys of pending proposals the applicant accepted in the popup.
+    accept: List[str] = Field(default_factory=list)
+    use_model: bool = True
+
+
+class LearnResponse(BaseModel):
+    profile: Dict[str, Any]
+    learned: int = 0
+    accepted: List[str] = Field(default_factory=list)
+    proposals: List[Dict[str, Any]] = Field(default_factory=list)
+    ignored: List[Dict[str, str]] = Field(default_factory=list)
+    jev_calls: int = 0
+    cost_usd: float = 0.0
+    engine: str = ""
+
+
+@router.post("/learn", response_model=LearnResponse,
+             dependencies=[Depends(autofill_limit)])
+def learn_from_form(request: LearnRequest):
+    """Fold the applicant's edits on a form into the profile (DECISIONS §50).
+
+    Stateless like /plan: the updated profile comes back for the extension
+    to store. Exact answers are saved for replay; generalisations are only
+    proposed, and applied here only for keys listed in `accept`.
+    """
+    try:
+        memory = Memory(**request.profile)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail="Profile could not be read: {}".format(e))
+
+    accepted = [key for key in request.accept if accept(memory, key)]
+
+    binder: Optional[JevBinder] = None
+    if request.use_model and request.observations:
+        try:
+            binder = JevBinder(cache=_THEME_CACHE, option_cache=_OPTION_CACHE)
+        except JevConfigurationError as e:
+            logger.warning("Jev unavailable; learning episodes only: %s", e)
+
+    try:
+        result: LearnResult = learn(memory, request.observations, binder=binder)
+    except JevError as e:
+        logger.warning("Jev failed while judging corrections; episodes only: %s", e)
+        result = learn(memory, request.observations, binder=None)
+
+    return LearnResponse(
+        profile=result.profile, learned=result.learned, accepted=accepted,
+        proposals=[p.model_dump() for p in result.proposals], ignored=result.ignored,
+        jev_calls=result.jev_calls, cost_usd=result.cost_usd, engine=ENGINE,
     )
 
 

@@ -1946,6 +1946,99 @@ column is 75; the N/A column 35.
 Crusoe, Fab, Exegy, Saronic re-run clean: yes/no buttons read pressed,
 Saronic's university lands in 0.4 s.
 
+## 50. The learning loop: an agent that improves from what the applicant does
+
+Victor, 2026-10-01: "build an agent that as we use it improves and
+understands what I do to answer questions and starts being able to answer
+my own questions … build these in parallel, then test and iterate; the goal
+is to do this based off of research about agents."
+
+**What the literature says that applies here, and what it does not.**
+- *Memory kinds.* CoALA (Sumers et al., 2023) separates an agent's
+  episodic memory (what happened), semantic memory (facts about the world
+  and the self) and procedural memory (how to act). The profile is semantic
+  memory; the plan engine, themes and aliases are procedural; what was
+  missing was the episodic layer — nothing recorded what the applicant
+  actually typed when the engine left a field to them.
+- *Learning from verbal feedback.* Reflexion (Shinn et al., 2023) improves
+  an agent without weight updates by storing natural-language reflections
+  on past failures and conditioning later attempts on them. Here the
+  "reflection" is concrete and cheap: the applicant's own answer to the
+  question the engine could not answer.
+- *A growing library.* Voyager (Wang et al., 2023) accumulates verified
+  skills and retrieves them later. The analogue is a growing set of
+  learned facts, each verified by the person it describes (they typed it,
+  and they accept the generalisation).
+- *Reflection into higher-level facts.* Generative Agents (Park et al.,
+  2023) periodically synthesise observations into higher-level
+  statements. The generalisation step below — "this answer is a stable
+  fact about you, not about this company" — is that synthesis, bounded to
+  a yes/no and a key choice so Jev can make it.
+- *What does not transfer.* These systems let a model write to memory
+  freely. A job application is submitted under a real person's name, so
+  nothing a model composes is ever written; the model only decides whether
+  an answer the applicant gave is reusable and under which key.
+
+**The design (three memories, one contract).**
+1. *Episodic, automatic.* The extension watches the fields the plan knew
+   about; when the applicant's value differs from the plan's, or the plan
+   had none, the (question, answer) pair is sent to the local backend
+   with the profile and comes back saved under `answers[fingerprint]`.
+   The next form that asks the same question replays it verbatim — the
+   path `Memory.recall_answer` already had, now fed.
+2. *Semantic, proposed.* For each such pair the backend asks Jev two
+   bounded questions with the non-protected profile as state: is this a
+   stable fact or preference that would be the same on any employer's
+   form (Noul), and which existing profile key does it belong to, or is it
+   new (Choice). Only at 0.90 / 0.85 does a *proposal* come back — set
+   this key to this value. Proposals are never applied by the model; the
+   applicant accepts or ignores each in the popup. Protected and consent
+   questions are never proposed as facts.
+3. *Procedural, reused.* Accepted facts live in `profile.learned` and
+   enter the second pass's catalogue and the gate's state, so the engine
+   answers that question itself from then on.
+
+**How it is measured.** Offline: `python -m app.autofill.learn_eval`
+replays a simulated applicant across the frozen corpora and reports the
+replay rate (how many identical later questions the loop answers) with
+sample sizes. Live: the count of questions the applicant had to answer
+twice, which should fall toward zero as the profile learns.
+
+**Built in parallel, then corrected by the research.** Two forks worked
+against the contract above at the same time (backend PR #24,
+`autofill/16-learning`; extension PR #12, 0.4.40–0.4.42) while a third
+agent wrote `docs/research/learning-agents.md` — 53 sources on agent
+memory, correction learning, the incumbent products, ATS terms, Chrome Web
+Store policy and self-identification law. Three findings changed the build
+before it was tested: (1) Chromium Autofill's per-field votes and the
+absence of any published stable-vs-company-specific rule → a fact is
+proposed only after the same answer at two different organisations
+(`MIN_SUPPORT_COMPANIES = 2`); exact-question replay still needs one. (2)
+Mixed-initiative evidence that pre-applied suggestions reduce agency, and
+a June 2026 budget-matched study showing memory gains must be measured as
+fewer repeated questions rather than benchmark lift → propose-then-accept
+stays, and the metric is questions-asked-twice. (3) Chrome Web Store
+Limited Use treats learning as a post-install change in data handling →
+an opt-in switch in the popup, off by default, with the disclosure in
+plain words. Also noted: Ashby's robots.txt disallows `/api/`, so posting
+reads stay to the applicant's own open posting; self-identification is
+never generalised or judged.
+
+**Measured offline** (`python -m app.autofill.learn_eval`, deterministic
+simulation of an applicant answering every open SCREENING text/select
+question in corpus order):
+
+| corpus | forms | simulated answers | later occurrences of the same label | replayed | rate |
+|---|---|---|---|---|---|
+| Greenhouse | 578 | 1,045 | 1,666 | 1,571 | 94.3% |
+| Ashby | 413 | 360 | 234 | 226 | 96.6% |
+
+The remainder is the same label on a select whose option set differs. With
+the model on 60 Ashby forms: 55 simulated answers produced 3 proposals
+(citizenship, work authorisation, sponsorship), none applied. Backend: 620
+tests; extension: 23 node cases for the capture rules. The live test on a
+real form follows the reload to 0.4.42 and is recorded in the README log.
+
 ---
 
 ## Current state

@@ -108,6 +108,7 @@ def parse_ashby_posting(payload: Dict[str, Any], *, org: Optional[str] = None) -
             # agreement; the classifier sees the count and handles it.
             fields.append(
                 FormField(
+                    numeric=str(field.get("type") or "") == "Number",
                     key=key,
                     label=label,
                     kind=kind,

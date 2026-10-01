@@ -328,3 +328,25 @@ def test_second_pass_keeps_review_when_verification_fails_and_skips_essays_and_f
     assert plan.entries[0].needs_review and plan.entries[0].value is None and "did not verify" in plan.entries[0].reason
     offered = binder.seen[0][1]
     assert offered == ["Please provide your university email address."]
+
+
+def test_a_numeric_control_takes_digits_or_sends_the_value_back_for_review():
+    from app.autofill.binder import Resolution, _within_options
+    phone = FormField(key="p", label="Phone", kind=FieldKind.TEXT, field_class=FieldClass.CORE, numeric=True)
+    kept = _within_options(Resolution(field_key="p", value="301-555-0100", source=FillSource.MEMORY), phone)
+    assert kept.value == "3015550100" and not kept.needs_review
+    months = FormField(key="m", label="What is your notice period (in months)?", kind=FieldKind.TEXT,
+                       field_class=FieldClass.SCREENING, numeric=True)
+    back = _within_options(Resolution(field_key="m", value="8 weeks +", source=FillSource.MEMORY), months)
+    assert back.needs_review and back.value is None and "takes a number" in back.reason
+    assert _within_options(Resolution(field_key="m", value="2", source=FillSource.MEMORY), months).value == "2"
+
+
+def test_ashby_number_fields_carry_the_numeric_flag():
+    from app.autofill.ashby_api import parse_ashby_posting
+    payload = {"id": "x", "title": "T", "applicationForm": {"sections": [{"fieldEntries": [
+        {"field": {"path": "n1", "title": "Phone", "type": "Number"}, "isRequired": True},
+        {"field": {"path": "t1", "title": "Name", "type": "String"}, "isRequired": True}]}]}}
+    form = parse_ashby_posting(payload, org="acme")
+    flags = {f.key: f.numeric for f in form.fields}
+    assert flags == {"n1": True, "t1": False}

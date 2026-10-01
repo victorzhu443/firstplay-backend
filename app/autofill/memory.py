@@ -301,6 +301,18 @@ class Memory(BaseModel):
     #: attestation and arbitration agreements are never in a bucket.
     consents: Dict[str, str] = Field(default_factory=dict)
 
+    #: Facts the loop learned from the applicant's own corrections and
+    #: accepted in the popup (§50): key -> value. CoALA's semantic memory —
+    #: what is true of the applicant — grown from episodes (`answers`) the
+    #: way Voyager grows its skill library: a candidate is proposed when the
+    #: same kind of answer recurs, and only the applicant promotes it. Read by
+    #: the second pass and the gate like any stored fact; never protected.
+    learned: Dict[str, str] = Field(default_factory=dict)
+
+    #: Proposals not yet accepted: key -> {value, support, labels, companies}.
+    #: Support counts distinct companies whose forms produced the same answer.
+    learned_pending: Dict[str, Dict[str, object]] = Field(default_factory=dict)
+
     # --- derived facts ------------------------------------------------------
 
     def full_name(self) -> Optional[str]:
@@ -390,7 +402,7 @@ class Memory(BaseModel):
             return _split_location(self.facts)[0]
 
         for section in (self.facts, self.education, self.legal_status,
-                        self.preferences, self.protected):
+                        self.preferences, self.protected, self.learned):
             if section.get(key):
                 return section[key]
 

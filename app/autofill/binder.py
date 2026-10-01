@@ -296,6 +296,23 @@ def _within_options(resolution: Optional[Resolution], field: FormField) -> Optio
                 needs_review=True,
                 reason="this is a yes/no question; {!r} is not an answer to it".format(str(resolution.value)[:30]),
             )
+    # A numeric control takes a number. A phone number becomes its digits
+    # (TELUS asks "Phone" as a Number field); "8 weeks +" into "notice period
+    # (in months)" is not an answer and goes back for review.
+    if getattr(field, "numeric", False) and resolution.value is not None and not resolution.values:
+        text = str(resolution.value).strip()
+        digits = re.sub(r"\D", "", text)
+        if re.fullmatch(r"-?\d+([.,]\d+)?", text):
+            pass
+        elif len(digits) >= 7 and re.fullmatch(r"[\d\s().+-]+", text):
+            resolution.value = digits
+        else:
+            return Resolution(
+                field_key=field.key, value=None, source=FillSource.HUMAN, confidence=0.0,
+                needs_review=True,
+                reason="this field takes a number; {!r} is not one".format(text[:30]),
+            )
+
     if not field.options or (resolution.value is None and not resolution.values):
         return resolution
 
@@ -998,6 +1015,7 @@ def _applicant_state(memory: Memory, today: Optional[date] = None) -> Dict[str, 
         "needs_sponsorship_by_country": dict((memory.per_country or {}).get("needs_sponsorship", {})),
         "education": dict(memory.education or {}),
         "preferences": preferences,
+        "learned": {k: v for k, v in (getattr(memory, "learned", None) or {}).items() if v},
         "current_location": (memory.facts or {}).get("current_location"),
         "employers": [
             (e.get("name") if isinstance(e, dict) else str(e)) for e in (getattr(memory, "employers", None) or [])
@@ -1032,7 +1050,7 @@ SECOND_PASS = True
 #: Profile keys the second pass may write. Files never; protected and consent
 #: sections never; nothing a model composed. Values come from memory.lookup so
 #: a phone number is formatted the way the first pass formats it.
-_SECOND_PASS_SECTIONS = ("facts", "education", "preferences", "legal_status")
+_SECOND_PASS_SECTIONS = ("facts", "education", "preferences", "legal_status", "learned")
 _SECOND_PASS_EXCLUDE = {"resume_file", "cover_letter", "transcript_file", "personal_preferences"}
 
 
