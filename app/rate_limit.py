@@ -42,6 +42,14 @@ def client_key(request: Request) -> str:
     Returns:
         A stable key for the caller
     """
+    # The autofill extension identifies each install with a random token it
+    # generated on first run (X-FirstPlay-Install). Behind Render's proxy many
+    # installs share an address; the token keeps one applicant's limit theirs.
+    # It is an opaque UUID, never tied to a person, and only used as this key.
+    install = (request.headers.get("x-firstplay-install") or "").strip()
+    if install and len(install) <= 64 and install.replace("-", "").isalnum():
+        return "install:" + install
+
     forwarded = request.headers.get("x-forwarded-for")
 
     if forwarded and TRUSTED_PROXY_HOPS > 0:
