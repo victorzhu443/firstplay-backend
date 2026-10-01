@@ -250,7 +250,8 @@ def test_no_field_is_ever_silently_blank(anthropic, figma, notion, memory):
             accounted = (entry.value is not None
                          or entry.needs_review
                          or entry.satisfied_by is not None
-                         or entry.attach is not None)
+                         or entry.attach is not None
+                         or entry.skipped is not None)   # a stated decision to leave it blank
             assert accounted, entry.label
             assert entry.reason, entry.label
 
@@ -457,6 +458,15 @@ def test_computed_answer_outside_the_options_is_never_marked_filled():
     )
     memory = Memory(legal_status={"work_authorization": "Yes"})
 
+    # Since round 1 of §48, polarity is read from the opening words, so the one
+    # option that opens affirmatively ("I am authorized…") is selected exactly.
+    raw = _resolve_computed(QuestionTheme.WORK_AUTHORIZATION, field, memory, "Lyft", "US")
+    assert raw is not None and raw.value == field.options[0].label and not raw.needs_review
+    assert _within_options(raw, field).needs_review is False
+
+    # Two affirmative options ("for any employer" / "for my present employer
+    # only") carry the same polarity, so nothing is unique and the guard holds.
+    field.options.append(FieldOption(label="I am authorized to work for my present employer only.", value="4"))
     raw = _resolve_computed(QuestionTheme.WORK_AUTHORIZATION, field, memory, "Lyft", "US")
     assert raw is not None and raw.value == "Yes" and not raw.needs_review  # the defect
 

@@ -120,7 +120,9 @@ ALLOWED_FILL_SOURCES = {
     FieldClass.NARRATIVE: frozenset(
         {FillSource.MEMORY, FillSource.MODEL_DECISION, FillSource.MODEL_DRAFT}
     ),
-    FieldClass.CONSENT: frozenset({FillSource.HUMAN}),
+    # MEMORY here means a *standing consent* the applicant recorded once
+    # (Memory.consents); no model source, and no stored answer means human.
+    FieldClass.CONSENT: frozenset({FillSource.MEMORY, FillSource.HUMAN}),
     FieldClass.UNKNOWN: frozenset({FillSource.HUMAN}),
 }
 
@@ -152,9 +154,22 @@ class FormField(BaseModel):
     required: bool = False
     options: List[FieldOption] = Field(default_factory=list)
 
+    def _allowed_sources(self) -> frozenset:
+        allowed = ALLOWED_FILL_SOURCES.get(self.field_class, frozenset())
+        # A consent is fillable only when it is one of the standing consents
+        # the applicant can record once (classify.CONSENT_BUCKETS). Arbitration
+        # agreements and the AI-policy attestation match no bucket and remain
+        # human whatever the profile says.
+        if self.field_class == FieldClass.CONSENT:
+            from app.autofill.classify import consent_key_for  # local: classify imports this module
+
+            if consent_key_for(self.label) is None:
+                return frozenset({FillSource.HUMAN})
+        return allowed
+
     def may_fill_from(self, source: "FillSource") -> bool:
         """Whether `source` is permitted to produce this field's value."""
-        return source in ALLOWED_FILL_SOURCES.get(self.field_class, frozenset())
+        return source in self._allowed_sources()
 
     def allows_model_judgement(self) -> bool:
         """Whether a model's *judgement* may produce this field's value.
@@ -187,9 +202,7 @@ class FormField(BaseModel):
         True for everything the applicant has already answered once, including
         demographics — which is the whole point of the product.
         """
-        return bool(
-            ALLOWED_FILL_SOURCES.get(self.field_class, frozenset()) - {FillSource.HUMAN}
-        )
+        return bool(self._allowed_sources() - {FillSource.HUMAN})
 
     def needs_onboarding_answer(self) -> bool:
         """Whether this field can only be answered by asking the applicant once.

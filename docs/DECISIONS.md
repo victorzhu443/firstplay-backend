@@ -1760,9 +1760,109 @@ is not the bottleneck anywhere. With one it is the geocoder's own latency
 plan arrives, which 0.4.37 does. The first-visit plan is the model's round
 trip; the page's own settle is 0.3–2 s. A repeat visit is instant.
 
+## 48. Everything except the essays — round 1
+
+Victor, 2026-09-30: "create it so that for Greenhouse and for Ashby it
+fills out everything except for the essays. Everything else is a simple
+decision. Make sure to continuously train and test and train and test and
+hypothesize." This entry is the loop's first turn and the record of how
+each turn runs.
+
+**The loop.** (1) Measure coverage offline over frozen forms with the real
+profile; (2) cluster what is not filled and name a mechanism per cluster;
+(3) implement with tests; (4) measure the delta offline; (5) run a fresh
+held-out draw through the installed extension and let the page say what is
+still wanted; (6) record, one PR. Essays are out of scope by definition:
+LONG_TEXT, and single-line controls whose opening words ask for one.
+
+**The measurement.** `python -m app.autofill.coverage [--model] [--profile]`
+scores two frozen corpora: 578 deduplicated Greenhouse forms
+(`corpus-large`, 16,485 fields) and a new Ashby corpus of 413 live
+SWE-family `ApiJobPosting` definitions frozen 2026-09-30 from the Simplify
+lists (`corpus-ashby`, 4,475 fields; the API returns 429 above two parallel
+requests — the first attempt at eight workers "failed" 353 of 459). Coverage
+= filled ÷ (fields − essays − files). A stated decision to leave a field
+blank counts as covered: the skip list, nothing recorded for an optional
+secondary fact, an untriggered follow-up. The report keeps every uncovered
+field with label, kind, options, class and the plan's reason, grouped by
+normalised label — the hypothesis list the next turn starts from.
+
+| coverage, real profile | Greenhouse | Ashby |
+|---|---|---|
+| baseline, deterministic only | 65.2% | 64.8% |
+| baseline, with Jev | 74.2% ($0.12) | 76.5% ($0.07) |
+| round 1, deterministic only | 68.0% | 71.5% |
+| round 1, with Jev | 76.3% | 79.4% |
+| round 1 ceiling: new facts set, with Jev | 85.1% | 80.8% |
+
+The ceiling row uses a temporary copy of the profile with every new fact
+given a placeholder (`profile_ceiling.json`); it is what the applicant
+reaches by answering the onboarding questions below, not a claim about the
+engine. Nothing was written to the real profile.
+
+**What the baseline said was missing, and the mechanism chosen for each.**
+
+| cluster (Greenhouse × Ashby, baseline) | mechanism | needs the applicant? |
+|---|---|---|
+| Education start month/year, 411 forms × 2 | the fact `education.start_date` already exists; it is unset | yes |
+| Ashby custom text fields restating a core fact — Current Location ×37, Current Company ×22, "Please provide your LinkedIn profile" ×10, phone ×8, School/University/Degree ×8 each, Last Name ×4 | exact aliases, plus `CORE_LABEL_PATTERNS` for sentence-shaped labels ("Your Phone Number", "Please include your LinkedIn profile", "GitHub or Portfolio URL") on text controls only | no |
+| "If other, please specify" ×24, "Please specify" ×24, "Please provide additional detail" ×19, "If other, please explain" ×15 | an optional follow-up whose preceding *choice* was settled and was not "Other"/yes is blank by decision; required ones and "if yes" wordings stay with the existing conditional rule | no |
+| protected answers against custom wording — veteran sentence options ×40, "Veteran Status" Yes/No ×13 | polarity read from the opening words ("No, I am not a veteran…" is a no; "I don't wish to answer", "Not applicable", "None" carry none), so the stored answer lands on the one option with its polarity. Still memory-only, still unique-winner | no |
+| consents — 284 fields to review; SMS opt-in ×21, Privacy Statement ×16, Terms ×11, certifications | a `consents` section of standing decisions (privacy_notice, truthful_certification, terms_and_conditions, sms_messages, marketing_communications, interview_recording, background_check). Buckets by wording; the AI-policy attestation and arbitration match no bucket and stay human. Unset bucket = human, with the reason naming the key to set | yes |
+| "How did you hear about us?" with no careers-site option ×46 required | `heard_about_fallback`: ordered second choices, exact match only; "College Recruiting – Careers Services" no longer counts as the employer's own site | yes |
+| Website / Portfolio ×154 (+Twitter ×9, Address 2 ×28) | the skip list already answers these; counted as blank by choice. `street_address_2`, `twitter` added as optional secondary facts: unrecorded + optional = blank | no |
+| "Ideal end date" ×8, "When do you plan on ending your internship?" ×15 | new stored theme `INTERNSHIP_END` (`preferences.internship_end`); the gate had read it as graduation | yes |
+| "Are you currently a Freshman or Sophomore?" (Base Power ×5) as a checkbox | computed from class standing (start or graduation date) | no |
+| essays in single-line controls — "What excites you about Talos?", "Additional information or a note…" | classified NARRATIVE by opening words; out of scope | — |
+| desired salary ×24, interview language ×6, years of experience ×6, transgender ×41, sexual orientation ×44 | new facts (`desired_salary`, `interview_language`, `years_experience`, `transgender`, `sexual_orientation`); `years_experience` joins the gate's background facts | yes |
+
+**What is deliberately not done.** No model touches a protected or consent
+field: the polarity reader is string logic and the consents are the
+applicant's own standing decisions, chosen once in setup. A certification
+that answers are true is replayed only when `truthful_certification` is set,
+and the applicant still reviews every form before submitting. A gender menu
+without a decline option, an "Other" that was chosen, a required follow-up —
+all stay for review.
+
+**The held-out round, R48-1 (2026-10-01).** Twelve unused Ashby
+organisations through the installed extension (0.4.38) in a hidden tab:
+103 fields filled, 42 left for the applicant, fill 60 ms–4.6 s (median
+0.4 s; 9 of 12 under one second). Three forms — Crusoe, Fab, Exegy —
+reported a sponsorship / worked-here yes/no as *filled* while the local
+check still wanted it. A DOM read showed why: Ashby's Boolean field is two
+buttons toggling `aria-pressed` with a hidden checkbox behind them; the
+filler's lone-checkbox rule had "left it unchecked" for a No and called
+that an answer. Pressing the No button by hand flipped `aria-pressed` —
+that is the control. Extension 0.4.39 drives the buttons and believes only
+a pressed one; the local check counts a pressed button. Saronic's
+College/University pick also failed its own confirmation: the option is
+three spans (name, country, domain), so its text is longer than what the
+input shows; a non-empty prefix is now the proof. Both go to the next
+round's re-run once the extension is reloaded. The Greenhouse side of the
+draw (12 live, unused boards) ran one board — IMC, 20 filled, 12 review, 0
+failures, 1.07 s — before the browser window left the screen; Greenhouse
+tabs fill only while visible (§45), so the remaining eleven wait for the
+window. Their plans, built through the backend with the real profile,
+leave for review only unset facts (consents, start date, salary), four
+bespoke questions, and three model reads under threshold.
+
+**Verification.** 600 tests, offline. The coverage numbers above are from
+the frozen corpora with the real profile and the real Jev; the ceiling from
+the placeholder copy; the live numbers from each page's own outcome record.
+
+**Next turns, in order of fields recovered:** the applicant's onboarding
+answers (the ceiling row); Ashby's `_systemfield_education_history` block
+(40 forms, 38 required — a repeatable school/degree/dates widget the filler
+does not drive yet); protected multi-select taxonomies ("East Asian" vs a
+stored "Asian": a finer stored answer, not a model); the bespoke yes/no
+remainder through the gate with the new background facts.
+
 ---
 
 ## Current state
+
+For coverage of the "everything except the essays" goal see §48; the
+figures below are the earlier 42-posting measurement.
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
 
