@@ -223,6 +223,14 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
      re.compile(r"\b(currently (located|based|live)|where .{0,30}"
                r"(based|work from|intend to work))", re.I)),
     (QuestionTheme.HEARD_ABOUT, re.compile(r"\bhear about\b", re.I)),
+    # R48-2: "What is your desired salary?" x6, "What are your salary
+    # expectations?" x5+3, "Desired Salary" x3, "annual base salary
+    # expectations" — all went unanswered with desired_salary stored.
+    (QuestionTheme.DESIRED_SALARY,
+     re.compile(r"\b(desired|expected|target|anticipated)\s+(annual\s+)?(base\s+)?(salary|compensation|pay|rate)\b"
+                r"|\b(salary|compensation|pay)\s+(expectation|requirement)s?\b|\bexpected base\b", re.I)),
+    (QuestionTheme.INTERNSHIP_END,
+     re.compile(r"\b(ideal |anticipated |expected )?end date\b|\bending your internship\b|\binternship end\b", re.I)),
     (QuestionTheme.EARLIEST_START,
      re.compile(r"\b(earliest|notice period|start date|when .{0,20}start)\b", re.I)),
     (QuestionTheme.TIMELINE_NOTES,
@@ -851,6 +859,39 @@ def _class_standing_answer(field: FormField, memory: Memory) -> Optional[Resolut
                       reason="computed: you are a {} by your stored dates".format(mine))
 
 
+_BASED_IN = re.compile(r"\b(based|located|living|live|reside|residing|physically located)\s+(in|within)\b", re.I)
+_COUNTRY_NAMES = {"US": "united states", "CA": "canada", "UK": "united kingdom", "IE": "ireland", "DE": "germany", "IN": "india"}
+
+
+def _based_in_country_answer(field: FormField, memory: Memory) -> Optional[Resolution]:
+    """"Are you currently based in the United States?" from the stored country.
+
+    R48-2: two Ashby forms asked it as a checkbox; the location theme handed
+    them "Ithaca, NY" and the yes/no guard refused. The country named in the
+    label against the applicant's country of residence is arithmetic, not
+    judgement. Only a *country* — "based in the Bay Area" stays with the gate.
+    """
+    two_way = (field.kind == FieldKind.SINGLE_SELECT and len(field.options) == 2
+               and all(_as_bool(o.label) is not None for o in field.options))
+    if field.kind != FieldKind.BOOLEAN and not two_way:
+        return None
+    label = field.label or ""
+    code = country_in_label(label)
+    if not code or not _BASED_IN.search(label):
+        return None
+    mine = (memory.lookup("country_of_residence") or "").strip().lower()
+    if not mine:
+        return None
+    mine_code = next((c for c, name in _COUNTRY_NAMES.items() if name in mine or mine in (c.lower(), "usa", "u.s.", "u.s.a.") and c == "US"), None)
+    if mine_code is None:
+        return None
+    answer = mine_code == code
+    option = option_for_bool(answer, field) if field.options else None
+    value = option.label if option else ("Yes" if answer else "No")
+    return Resolution(field_key=field.key, value=value, source=FillSource.MEMORY,
+                      reason="computed: you live in {}".format(memory.lookup("country_of_residence")))
+
+
 def _class_standing(education: Dict[str, str], today: date) -> Optional[str]:
     """Where in a degree the applicant is, as a person would say it.
 
@@ -1221,7 +1262,7 @@ def resolve_form(
     for field in form.fields:
         resolution = _within_options(memory.resolve(field), field)
         if resolution is None:
-            resolution = _class_standing_answer(field, memory)
+            resolution = _class_standing_answer(field, memory) or _based_in_country_answer(field, memory)
         if resolution is not None:
             resolved[field.key] = resolution
         else:

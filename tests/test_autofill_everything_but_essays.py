@@ -231,3 +231,54 @@ def test_a_note_field_after_a_links_field_is_an_essay_not_a_follow_up():
     note = _field("n", "Additional detail", FieldKind.TEXT)
     plan = resolve_form(_form(links, note), Memory(facts={"links_combined": "github.com/ada"}), binder=None)
     assert plan.entries[1].needs_review and not plan.entries[1].skipped
+
+
+# --- round 2 (R48-2 live hundreds): wired to facts the applicant already gave
+
+def test_salary_expectations_resolve_from_the_stored_preference_without_a_model():
+    from app.autofill.binder import _resolve_stored
+    from app.autofill.themes import QuestionTheme
+    for label in ("What is your desired salary?", "What are your salary expectations?", "Desired Salary",
+                  "What are your annual base salary expectations? Please include currency"):
+        assert DeterministicBinder().classify_themes([label])[label][0] == QuestionTheme.DESIRED_SALARY, label
+    field = _field("s", "What is your desired salary?")
+    assert _resolve_stored(QuestionTheme.DESIRED_SALARY, field, Memory(preferences={"desired_salary": "Open to the posted range"})).value == "Open to the posted range"
+
+
+def test_privacy_acknowledgements_are_consents_and_replay_the_standing_decision():
+    label = "Please acknowledge that you have read and agree to our Privacy Policy."
+    assert classify("q", label, FieldKind.SINGLE_SELECT, option_count=1) == FieldClass.CONSENT
+    assert consent_key_for(label) == "privacy_notice"
+    field = _field("c", label, FieldKind.SINGLE_SELECT, ["I acknowledge"], required=True)
+    plan = resolve_form(_form(field), Memory(consents={"privacy_notice": "Agree"}), binder=None)
+    assert plan.entries[0].value == "I acknowledge" and not plan.entries[0].needs_review
+    assert consent_key_for("I consent to have my personal data disclosed to other Momentum Group entities") == "privacy_notice"
+
+
+def test_linkedin_link_wordings_and_profile_url_lists_resolve():
+    memory = Memory(facts={"linkedin": "https://linkedin.com/in/ada", "links_combined": "github.com/ada | linkedin.com/in/ada"})
+    form = _form(_field("a", "Please share a link to your LinkedIn profile if you have one:"),
+                 _field("b", "Please provide a link to your LinkedIn profile."),
+                 _field("c", "Provide any relevant profile URLs (LinkedIn, Google Scholar, GitHub)"),
+                 _field("d", "Google Scholar"))
+    plan = resolve_form(form, memory, binder=None)
+    values = {e.field_key: (e.value, bool(e.skipped)) for e in plan.entries}
+    assert values["a"][0] == values["b"][0] == "https://linkedin.com/in/ada"
+    assert values["c"][0] == "github.com/ada | linkedin.com/in/ada"
+    assert values["d"] == (None, True)   # nothing recorded, optional: blank by decision
+
+
+def test_a_cover_letter_file_input_on_ashby_follows_the_skip_list():
+    field = _field("f", "Cover Letter", FieldKind.FILE)
+    plan = resolve_form(_form(field), Memory(skip=["cover_letter"]), binder=None)
+    assert plan.entries[0].skipped and not plan.entries[0].needs_review
+
+
+def test_based_in_a_named_country_is_computed_from_the_stored_country():
+    from app.autofill.binder import _based_in_country_answer
+    us = Memory(facts={"current_location": "Ithaca, NY"})
+    field = _field("b", "Are you currently based in the United States?", FieldKind.BOOLEAN)
+    assert _based_in_country_answer(field, us).value == "Yes"
+    assert _based_in_country_answer(_field("b2", "Are you currently based in Canada?", FieldKind.BOOLEAN), us).value == "No"
+    assert _based_in_country_answer(_field("b3", "Are you based in the San Francisco Bay Area?", FieldKind.BOOLEAN), us) is None
+    assert _based_in_country_answer(field, Memory()) is None

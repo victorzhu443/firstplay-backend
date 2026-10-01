@@ -224,7 +224,7 @@ CORE_LABEL_ALIASES = {
 #: something most applicants do not have; recording nothing is the answer.
 OPTIONAL_BLANK_KEYS = frozenset({
     "street_address_2", "twitter", "website_other", "alternate_email",
-    "preferred_last_name",
+    "preferred_last_name", "google_scholar",
 })
 
 #: Follow-up fields that only apply after a particular answer to the question
@@ -266,6 +266,13 @@ CORE_LABEL_PATTERNS = (
     (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(resume|cv|resume cv)$", re.I), "resume_file"),
     (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?preferred (first )?name$", re.I), "preferred_first_name"),
     (re.compile(r"^(github|linkedin|portfolio|website|twitter)(( or | |/|, ?)(github|linkedin|portfolio|website|twitter|etc|url|link|links))+$", re.I), "links_combined"),
+    # "Please share a link to your LinkedIn profile if you have one:" (x5),
+    # "Please provide a link to your LinkedIn profile." (x2) — R48-2.
+    (re.compile(r"^(please )?(share|provide|include|add|paste|enter)( us)?( with)? (a |the )?(link|url) to your linkedin( profile)?\b", re.I), "linkedin"),
+    (re.compile(r"^(please )?(share|provide|include|add|paste|enter)( us)?( with)? (a |the )?(link|url) to your github( profile)?\b", re.I), "github"),
+    # "Provide any relevant profile URLs (LinkedIn, Google Scholar, GitHub)" (x5).
+    (re.compile(r"^(please )?(provide|share|list|add)( any)?( relevant| other)? (profile )?(urls?|links?)\b", re.I), "links_combined"),
+    (re.compile(r"^google scholar( (profile|url|link))?$", re.I), "google_scholar"),
     (re.compile(r"^(your |please (provide|include|share) (your )?)?(personal )?(website|portfolio)( url| link| website| site)?$", re.I), "website"),
 )
 
@@ -515,6 +522,13 @@ _DECISIONS_NOT_FACTS = (
     # "[Compensation] Do you accept the listed salary range for this role" (x2).
     re.compile(r"\b(accept|agree to).{0,24}\b(salary|compensation|pay)\s*(range|band)?\b",
                re.I),
+    # R48-2: "Please acknowledge that you have read and agree to our Privacy
+    # Policy" (x6, required) and "I consent to have my personal data disclosed
+    # to other Momentum Group entities" (x2) were SCREENING and went to the
+    # model gate, which rightly had nothing. They are the privacy consent.
+    re.compile(r"\b(acknowledge|confirm|agree|accept)\b.{0,60}\b(privacy (policy|notice|statement)|"
+               r"terms (of (use|service)|and conditions|& conditions))\b", re.I),
+    re.compile(r"\bconsent to\b.{0,40}\b(personal data|my data|data (being )?(processed|disclosed|shared))\b", re.I),
 )
 
 _AI_POLICY = re.compile(
@@ -706,6 +720,8 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
     document = document_key_for(label)
     if document:
         return document
+    if kind == FieldKind.FILE and re.search(r"\bcover letter\b", label or "", re.I):
+        return "cover_letter"
 
     if kind == FieldKind.BOOLEAN:
         return None

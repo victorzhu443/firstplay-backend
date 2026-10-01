@@ -688,6 +688,7 @@ PROFILE_FIELDS = {
         ("twitter", "", 9),
         ("street_address_2", "", 28),
         ("years_experience", "0", 6),
+        ("google_scholar", "", 2),
     ],
     "education": [
         ("university", "Cornell University", 14),
