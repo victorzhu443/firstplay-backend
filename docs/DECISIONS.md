@@ -1793,7 +1793,7 @@ normalised label — the hypothesis list the next turn starts from.
 | baseline, with Jev | 74.2% ($0.12) | 76.5% ($0.07) |
 | round 1, deterministic only | 68.0% | 71.5% |
 | round 1, with Jev | 76.4% ($0.13) | 80.5% ($0.20) |
-| round 1 ceiling: new facts set, with Jev | 85.1% | 80.8% |
+| round 1 ceiling: new facts set, with Jev | 85.2% | 81.8% |
 
 The ceiling row uses a temporary copy of the profile with every new fact
 given a placeholder (`profile_ceiling.json`); it is what the applicant
