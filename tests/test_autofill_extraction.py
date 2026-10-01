@@ -684,3 +684,74 @@ def test_custom_address_questions_derive_from_the_stored_location():
     assert memory_key_for("question_2", "Country") == "country_of_residence"
     assert memory_key_for("question_3", "Address Line 1") == "street_address"
     assert memory_key_for("question_4", "City") == "city_of_residence"
+
+
+def test_the_uk_adjustments_wording_is_memory_only_not_screening():
+    """Maven Securities 8043552: answered "No" by the model gate before this pattern."""
+    from app.autofill.classify import classify, memory_only_key_for
+    from app.autofill.schema import FieldClass, FieldKind
+
+    label = ("If you require any support or adjustments during the recruitment process, "
+             "please let us know")
+    assert memory_only_key_for(label) == "accommodation_needs"
+    assert classify("question_123", label, FieldKind.SINGLE_SELECT, option_count=2) == FieldClass.LEGAL
+    # Housing is not an accommodation request.
+    assert memory_only_key_for("Will you need housing accommodation in Seattle?") is None
+
+
+def _sierra():
+    import json, os
+    path = os.path.join(os.path.dirname(__file__), "fixtures", "ashby_sierra_posting.json")
+    with open(path) as handle:
+        return json.load(handle)
+
+
+def test_ashby_posting_api_becomes_a_form_with_exact_paths_as_keys():
+    """Sierra 34b31b67: 23 field entries over three sections, keyed by path."""
+    from app.autofill.ashby_api import parse_ashby_posting, looks_like_posting
+    from app.autofill.schema import FieldClass, FieldKind
+
+    payload = _sierra()
+    assert looks_like_posting(payload)
+    form = parse_ashby_posting(payload, org="sierra")
+
+    assert form.source == "ashby_api" and form.ats == "ashby" and form.company == "sierra"
+    assert form.title.startswith("Software Engineer Intern")
+    assert len(form.fields) == 23
+    by_key = {f.key: f for f in form.fields}
+
+    email = by_key["_systemfield_email"]
+    assert email.kind == FieldKind.TEXT and email.required and email.field_class == FieldClass.CORE
+    assert by_key["_systemfield_resume"].kind == FieldKind.FILE
+    assert by_key["_systemfield_name"].field_class == FieldClass.CORE
+
+    office = by_key["d9ecd718-2aef-4471-8e84-f5b024f9c337"]
+    assert office.kind == FieldKind.SINGLE_SELECT and [o.label for o in office.options] == [
+        "San Francisco office", "New York office", "No preference"]
+    communities = by_key["0d0053a3-8a88-4c1b-878e-3322901e0116"]
+    assert communities.kind == FieldKind.MULTI_SELECT and len(communities.options) == 9 and not communities.required
+    university = by_key["53e63c20-c2fa-4bd6-9245-a263de41b14e"]
+    assert university.kind == FieldKind.SINGLE_SELECT and len(university.options) == 102
+    assert by_key["d804034a-44ba-402e-a2da-25eca674c052"].kind == FieldKind.LONG_TEXT
+    assert "University  do" not in university.label   # the NBSP is normalised
+
+
+def test_ashby_hidden_and_deactivated_entries_are_not_fields():
+    from app.autofill.ashby_api import parse_ashby_posting
+
+    payload = _sierra()
+    sections = payload["data"]["jobPosting"]["applicationForm"]["sections"]
+    sections[2]["isHidden"] = True
+    sections[0]["fieldEntries"][0]["field"]["isDeactivated"] = True
+    form = parse_ashby_posting(payload)
+    assert len(form.fields) == 23 - 5 - 1
+
+
+def test_the_router_takes_an_ashby_posting_or_a_dom_extract():
+    from app.routers.autofill import _parse_form
+
+    posting = _parse_form("ashby", _sierra()["data"]["jobPosting"])
+    assert posting.source == "ashby_api" and len(posting.fields) == 23
+    dom = _parse_form("ashby", {"posting_id": "x", "controls": [
+        {"tag": "input", "type": "email", "name": "_systemfield_email", "label": "Email", "required": True}]})
+    assert dom.source == "ashby_dom" and len(dom.fields) == 1

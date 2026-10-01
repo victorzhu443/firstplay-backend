@@ -1352,7 +1352,699 @@ Next is Ashby, on the same protocol; then Workday, then Oracle.
 
 ---
 
+## 40. Widening the profile-answer gate: multi-selects, class standing, background
+
+After §39, 184 requirements remained across 101 boards. Sorted by hand,
+about 50 were bounded decisions from facts the applicant already holds:
+term availability, class standing, clearance, career fairs, prior
+internships, the GPA scale. The gate of §25 could not reach them for three
+reasons, none of them about the model.
+
+| gap | example | why the gate missed it |
+|---|---|---|
+| multi-selects refused | General Matter "When are you available… check all that apply"; Optiver's 11 offices; Rocket Lab's clearance list | the gate accepted single-choice and boolean only |
+| state too thin | Compeer "current academic status"; QuEra "highest level of education obtained"; Varda "seeking a Spring internship?" | no class standing, no today's date, no term calendar in state |
+| facts absent | BTI "US government security clearance?"; Perpay "fall career fair?"; Klaviyo "prior internships"; Radix "GPA range" | not in the profile at all |
+
+Arithmetic questions (a GPA to a bucket, a graduation year) stay in code;
+they were already answered by `match_numeric_bucket` where the label was
+recognised.
+
+**Decision.** A MULTI_SELECT with at most 12 options is asked as one Noul
+per option: tick at p ≥ 0.90, no at p ≤ 0.10, anything between leaves the
+whole field with the applicant, carrying the partial set as a suggestion.
+Batches are cut by question count, not request count. `_applicant_state`
+adds `today`, class standing derived from the education dates (academic
+years start in August; four years assumed when only the graduation date is
+stored), an availability note that names the month each term starts, and a
+whitelisted `background` dict of four new onboarding facts —
+`security_clearance`, `attended_career_fair`, `prior_internships`,
+`gpa_scale`. Protected and contact data still never reach the state.
+
+**Three things went wrong on the way, each caught by the live model on the
+board that exposed the question**, run in-process against the frozen posting
+with per-option beliefs printed:
+
+1. *A silent profile guessed.* Asked "would the applicant tick this option?",
+   the Noul put "Never held a clearance" at 0.90 with no clearance fact in
+   the profile — a plausible guess about a student, exactly on the
+   threshold. The wording now makes silence a no ("if the profile says
+   nothing that bears on the option, it does not apply — the applicant
+   decides"); the same option fell to 0.28 and the field went to review.
+2. *The note contradicted a fact.* "Any listed term is acceptable" beside an
+   earliest start of May 2027 left "Spring 2027" at p = 0.50. The note now
+   states the rule (a term applies only if it starts on or after the
+   earliest start) and the calendar (Spring = January, Summer = May/June,
+   Fall = August/September, Winter = December/January); Spring fell to 0.15
+   and the field filled at 0.89.
+3. *"Not Applicable" is not a proposition.* With the clearance fact present,
+   every level scored ≤ 0.05 and "Not Applicable" 0.15 — a model does not
+   read the opt-out as something one ticks. When every concrete option is a
+   confident no and exactly one option means none, that one is chosen by
+   elimination with the weakest no's confidence (0.93 on Rocket Lab).
+
+**Before / after, real Jev, the applicant's real profile** (facts rows used a
+temporary profile copy carrying the four new facts; nothing was written into
+the real profile):
+
+| board · question | before | after |
+|---|---|---|
+| General Matter · available terms (multi) | review | Summer 2027 · 0.89 |
+| Compeer · current academic status | review | Junior · 1.00 |
+| QuEra · highest level of education obtained | review | Some College, No Degree · 0.87 |
+| General Matter · active clearances (multi), fact present | review | Never held a clearance · 0.92 |
+| Rocket Lab · active clearances (multi), fact present | review | Not Applicable · 0.93 by elimination |
+| BTI360 · US government clearance?, fact present | review | No · 1.00 |
+| Perpay · fall career fair?, fact present | review | No · 0.97 |
+| Klaviyo · prior internships, fact present | review | 1 · 0.94 |
+| Radix · GPA range, fact present | review | 0.0 – 4.0 · 0.89 |
+| Optiver · offices open to (multi) | review | review — the profile is silent on offices, and the model now says so |
+| Varda · seeking a Spring internship? | review | review at 0.56 — for a term-flexible applicant with a May 2027 earliest start, a Spring 2028 role is open; the question is genuinely undetermined |
+
+Cost: about $0.0001 per multi-select field; a plan with three of them is
+still under 2 s end to end.
+
+**Held-out check.** Ten fresh boards (round 8): 10 model decisions, every one
+traceable to a stored fact (graduation year ×3, degree level, degree
+subject, work-eligibility statement, education status, based in, nationality
+— all from education and legal_status) and no multi-select on those forms.
+One policy catch: Maven Securities' UK-worded "If you require any support or
+adjustments during the recruitment process" was classified SCREENING and
+the gate answered it "No" from nothing. It is disability-adjacent; it is now
+a memory-only pattern and is replayed only from the stored answer.
+
+**Still open.** The multi-select write path has not yet run through the
+installed extension (the tab was hidden every time; it fills on the next
+look). The four facts are not yet in Victor's profile; until he adds them
+those questions stay amber, by design.
+
+---
+
+## 41. A plan is a function of the engine, and a fill must not outlive the worker
+
+The first attempt to see §40's multi-select write through the installed
+extension (General Matter, 2026-09-28) produced neither a fill nor a clean
+failure, and the console explained both halves:
+
+- `plan ready 2.2s (plan from cache)` — the session plan cache is keyed on
+  posting and profile, so the plan served was the one built *before* the
+  gate was widened. Twelve minutes of waiting tested nothing.
+- `could not run the fill in the page's world (… the message channel closed
+  before a response was received); falling back` and `filled 756.7s` — the
+  content script asked the service worker to run the page-world fill while
+  the tab was hidden; the worker's `executeScript` sat in §37's visibility
+  wait, MV3 stopped the idle worker, the channel closed, and the fill fell
+  back to the isolated world, where 15 selects could not be driven.
+
+**Decision.** The backend exposes an `engine` fingerprint — a hash of the
+autofill package's source — on the plan response and the health route, and
+the extension's cache key carries it (0.4.20): a backend change is never
+served a stale plan. The content script waits for visibility *itself* before
+asking the worker, so the worker's call lasts seconds (hydration), not
+minutes; and a closed channel is retried once before any fallback, because
+it is the worker having been stopped, not a page problem.
+
+**Measurement note.** The same session showed a hazard in the tooling that
+had nothing to do with the product: two shell commands run concurrently
+share one working directory, and a `cd` in one moved the other. A checkout
+meant for the extension repository ran in the backend's. Nothing was lost
+(the commit had already landed and been pushed), but every command since
+names its repository explicitly.
+
+---
+
+## 42. Plan latency: the gates run in the same breath
+
+Victor's target is a fill under one second. The extension's own numbers on
+round 9 (0.4.20, window on screen): page settled 0.3–2.2 s, plan ready
+1.0–4.5 s (backend 0.6–2.1 s), fill 0.3–1.6 s on seven boards and 14–27 s
+on three. The fill outliers are being measured per tier (0.4.21) before
+anything is changed there. The plan side was measured first:
+
+| board | first visit, before | after | second visit |
+|---|---|---|---|
+| Truveta | 783 ms = classify 433 → answer 348 | 367 ms | 2 ms |
+| DV Trading | 2,114 ms = classify 409 → match 319 → answer 1,377 | 1,294 ms | 5 ms |
+| Amperesand | 689 ms = classify 349 → answer 338 | 317 ms | 2 ms |
+| HPR | 590 ms = classify 258 → match 331 | 918 ms* | — |
+
+Every millisecond of a first-visit plan is Jev round trips (230–2,400 ms
+each, the spread is the network's), run one after another because each
+gate consumed the previous one's output. But the profile-answer gate needs
+only the form and the profile, and the option mismatches memory already
+knows about need only the stored value and the option list. Both now run
+concurrently with theme classification (a two-worker pool around one HTTP
+client), and their results are kept for whichever fields the themes leave
+open; mismatches that appear only once a theme resolves are matched
+afterwards, as before. Model decisions are identical in both modes on all
+four boards.
+
+\* HPR's "after" was slower because one call took 571 ms instead of 331 —
+the per-call spread is larger than the structural gain on a small form.
+The structural gain is one round trip per plan; the spread belongs to the
+model host and is bounded by the 4 s budget of §28.
+
+**Where this leaves the target.** A repeat visit is instant (the session
+cache, now keyed on the engine). A first visit is one Jev round trip plus
+whatever the page itself takes to settle, and the request goes out at first
+sight of the posting, so on most boards the plan is ready before the page
+is. What remains above one second is the fill's own outliers — next.
+
+---
+
+## 43. The fill under one second: where its time went, and a race the oracle caught
+
+Victor's target: "filling it out in under 1 s is the optimal case." With
+the hidden-tab wait no longer counted as fill (0.4.22) and per-tier timing
+(0.4.21), the window on screen, the fill measured:
+
+| board (0.4.22) | fill | where |
+|---|---|---|
+| Truveta | 100 ms | nothing over 20 ms |
+| Rocket Lab | 735 ms | picks 581 ms — thirteen react-selects, each confirmed on a 40 ms poll in turn |
+| General Matter | 2,351 ms | lookups 863 ms; picks 1,383 ms with the Location geocoder's 804 ms network wait *inside* a pick |
+
+The 14–27 s readings of §42's round were the hidden-tab wait; the fill
+itself had never been slow.
+
+**Decisions (0.4.23–0.4.24).**
+- Picks are fired in one pass and their readbacks awaited together, polled
+  at frame rate. Rocket Lab's picks: 581 → 20 ms; fill 735 → 158 ms.
+- A typeahead with no loader (Location) is typed during the parallel
+  lookups tier, so its network wait overlaps the loader lookups instead of
+  following them. General Matter's fill: 2,351 → 828 ms, all of it the
+  geocoder's own latency, which now sets the floor.
+- Loader results are cached per control and term, and the last plan's
+  school / degree / discipline terms are looked up the moment the next
+  board settles — before its plan arrives. Pacific Fusion, the next board
+  opened: lookups 65 ms, fill 145 ms.
+
+**The race (0.4.25).** With picks confirmed on the widget's *held* state, the
+dry-run submit ran before the form had committed the values: Pacific
+Fusion, Rocket Lab and General Matter each showed correctly filled selects
+carrying a stale "required" flag, and the console printed `plan said FILL`
+rows for them. Two page probes settled it: firing four picks in one tick
+rendered all four values correctly (so nothing was lost), and a fresh
+dry-run on the untouched page read the same fields as valid (so the flags
+were a timing artefact). The rendered value is the commit signal when the
+tab is visible — the wrapper owns the value, so the display changes only
+once the form state has it — and the held state is used only when hidden;
+the dry-run waits one frame after the last write. The oracle of §32 caught
+a defect the fill's own readback could not see, which is what it is for.
+
+**State of the target.** Fill: 0.1–0.2 s on boards without a geocoder,
+~0.8 s with one (the network sets it). Plan: instant on a repeat visit,
+one Jev round trip on a first visit (§42), overlapped with the page's own
+settling. The remaining above-one-second cases are the page loading and
+the model host's latency spread, neither of which the extension controls.
+
+---
+
+## 44. One pick per frame: two react-select picks in one tick lose the first
+
+§43's account of the dry-run race was half right. 0.4.25 confirmed picks
+on the rendered value and gave the form a frame before the dry-run, and
+Lightmatter still printed `plan said FILL` for four correctly displayed
+selects. So the theory was tested on the page, with a dry-run submit after
+each variant, on two of those selects:
+
+| picks | form's verdict after a dry-run submit |
+|---|---|
+| both fired in the same tick, 150 ms wait | first flagged **required**, second valid |
+| one per frame (rAF + macrotask between), 150 ms wait | both valid |
+
+Both variants *displayed* both values — react-select keeps its own
+selected value — which is why the readback, the display check and the
+first probe of §43 all passed. Greenhouse's wrapper folds each change into
+the form's state from a closure over the previous state; two changes in
+one tick and the second overwrites the first. The form's own validation
+was the only observer that could see it, which is the point of §32.
+
+**Decision (0.4.26).** Picks run one per frame, as they had until 0.4.23;
+the concurrency that was worth having stays in the lookups tier, where it
+belongs. A pick confirms on its rendered value, or on its held state once a
+frame has passed (some widgets, Lightmatter's gender select among them,
+never expose a readable display and ran the whole 2 s wait). Thirteen
+selects now cost roughly a quarter of a second rather than 581 ms, and the
+dry-run reports what the form will actually submit.
+
+**Lesson recorded.** A confirmation that reads the widget is not a
+confirmation that reads the form. When the oracle and the readback
+disagree, the oracle is right until proven otherwise on the page.
+
+---
+
+## 45. Greenhouse, closed out
+
+Victor: "so are we almost done with greenhouse applications and can move on
+to ashby?" The answer, with the numbers as of 2026-09-29:
+
+| | |
+|---|---|
+| boards opened | 132 |
+| excluded (closed since listing, employer-hosted redirect, network error) | 16 |
+| **live boards measured through the installed extension** | **116** |
+| fields filled | 1,849 |
+| "known but could not be entered" | 21 in total; 0 since 0.4.19, across 64 consecutive unseen boards |
+| false "still required" over filled fields | 0 on 0.4.26+ (Lightmatter, Pacific Fusion, Rocket Lab, Insurify, OpenTable) |
+| fill, tab on screen | 0.1–0.4 s without a geocoder; ~0.8–0.9 s with one (network floor) |
+| first-visit plan | one Jev round trip (§42); repeat visit instant (engine-keyed cache, §41) |
+
+Round 10 drew from sources never sampled before — the Simplify Summer
+2026 and New-Grad lists — because the original pool was exhausted. Of the
+first six intern postings four had closed since listing; the New-Grad list,
+liveness-checked against the board API first, gave 77 live boards. Five ran
+before the window was covered for the day: GITAI 15, Cloudflare 17,
+Katalyst 12, OpenTable 16, Insurify 18 — 78 filled, 0 entry failures, no
+false flags. New-grad forms ask the same shapes with different words; the
+gate answered them from the same facts.
+
+**Defects found in this closing pass, and where they went.**
+- One-pass pick firing (0.4.23) lost every pick but the last in the form's
+  state while every widget displayed correctly — §44, fixed 0.4.26.
+- A pick covered mid-fill waited the whole 2 s cap per select (Rocket Lab,
+  25.6 s in picks) — 0.4.27 caps the wait at twelve frames when hidden.
+- A loader that never answered held OpenTable's lookups tier for 8.7 s —
+  0.4.28 gives up at 3 s and names slow lookups.
+
+**What remains is not Greenhouse.** Essays, consents, disclosures, bespoke
+questions, custom self-identification wording, and one profile gap
+(education start date). Two coverage candidates stay open from §39:
+availability/term selects beyond the ones the gate now reaches, and class
+year as a stored fact rather than a derivation.
+
+**Decision.** Greenhouse is done for this pass. Ashby next, on the same
+protocol: a held-out draw from the Simplify lists (never sampled for
+Ashby), the installed extension, the form's own validation as oracle, one
+PR and one entry per iteration.
+
+---
+
+## 46. Ashby exposes its form after all: ApiJobPosting
+
+§22 and the Ashby adapter's docstring said Ashby has no form-schema API —
+the posting API and `window.__appData` carry only metadata — so Ashby plans
+waited for the DOM to settle (≥ 500 ms) before a request could be made.
+Starting the Ashby pass from first principles meant checking that claim
+before building on it.
+
+**What the page actually does.** Its HTML (47 KB) carries no fields. Its
+network traffic shows one GraphQL route, `jobs.ashbyhq.com/api/non-user-graphql`,
+and its front-end bundle holds the operations as graphql-js ASTs. Printing
+the `ApiJobPosting` AST back to query text and replaying it from Python —
+no cookies, no auth — returned the posting **and** `applicationForm`:
+sections, each with `fieldEntries` carrying `field.{type, path, title,
+selectableValues}` and `isRequired`. Sierra's form: 23 entries in three
+sections; types String, Email, Phone, File, LongText, Number, ValueSelect
+(3-option radios and a 102-option combobox alike), MultiValueSelect.
+
+**The join is exact.** Every rendered control's `id` and `name` equal the
+field's `path` (`_systemfield_email`, `_systemfield_name`, or a UUID), and
+the field's container carries `data-field-path` and `data-field-entry-id`.
+Radio and checkbox options carry a per-load prefix on their ids but sit
+inside that container, labelled by their option text. Nothing has to be
+matched by label.
+
+**Decision.** Ashby gets the Greenhouse shape: the extension fetches
+`ApiJobPosting` at first sight of the posting (query text checked in as
+`ashby_posting.graphql`), the backend normalises the `jobPosting` object
+(`ashby_api.py`, keyed by path, hidden and deactivated entries dropped), the
+plan is cached like a Greenhouse plan, and the page is used only for
+writing — the container's `data-field-path` locates each field. The DOM
+adapter stays as the fallback. Because Ashby's posting page moves to
+`/application` without a page load, the content script watches the path.
+
+**Two things that do not carry over from Greenhouse.**
+1. *The page autosaves.* Every value written triggers `ApiSetFormValue` to
+   Ashby's server, and a résumé attach creates an upload handle and an S3
+   PUT. This is the page's own draft behaviour — not a submission, which is
+   a separate `ApiSubmitSingleApplicationFormAction` the extension never
+   calls — but an Ashby fill is never purely local the way a Greenhouse
+   fill is. Recorded here so nobody is surprised by the network tab.
+2. *Validation is per-container.* Ashby does not set `aria-invalid`; it
+   renders an error message inside the field's container. The dry-run
+   oracle reads those too, and picks the button that says "Submit
+   Application" rather than the first `type=submit` — the résumé upload
+   button is one as well.
+
+**Measured next**, on the 100-posting Ashby draw: what the DOM path filled
+before this change, what the API path fills after it, and the fill time
+against the one-second target.
+
+---
+
+## 47. One hundred Ashby applications
+
+Drawn from the Simplify intern and new-grad lists (never sampled for Ashby
+before), one posting per organisation, 56 intern and 44 new-grad SWE-family
+titles, every one confirmed live through Ashby's posting API. Run on
+2026-09-29 through the installed extension (0.4.35, the API path of §46),
+with each page's own outcome record as the log.
+
+| | |
+|---|---|
+| applications | 100, 100 organisations |
+| fields filled | 702 |
+| left for the applicant | 246 (essays, consents, bespoke questions, office preferences) |
+| "known but could not be entered" | 4 on the first pass; 0 after the fixes below on re-run (two were yes/no guards, two an employer-scoped geocoder now reported as a mismatch) |
+| forms with nothing left for the applicant | 20 |
+| fill, median | 88 ms; 74 ms on the 68 forms without a geocoder |
+| fill, under one second | 83 of 100 |
+| fill, worst | 3.5 s — Notion's Location geocoder |
+| first-visit plan, median | 0.9 s (one Jev round trip, §42); repeat visits from cache |
+
+**What carried over from Greenhouse unchanged.** The profile memory, the
+themes and aliases, the widened gate (§40) including multi-selects, the
+résumé attach, the plan cache, the per-tier timing, the one-at-a-time
+guard, the hidden-tab rules — and the protocol itself: held-out draw,
+installed extension, one PR and one entry per iteration.
+
+**What did not, and what replaced it.**
+1. *The form definition.* Not the DOM: Ashby's `ApiJobPosting` (§46). The
+   DOM baseline on Sierra filled 14 in 9.3 s; the API path fills 16 in 33 ms.
+2. *The oracle.* Ashby validates only on its server, so a submit click is
+   both blind and one block from a real submission. Never clicked; the plan
+   carries each field's required flag and the check is local.
+3. *Visibility.* Ashby renders its form client-side whether or not the tab
+   is looked at, so an Ashby tab fills in the background (0.4.34). Chrome's
+   intensive throttling of long-hidden tabs then bit every setTimeout-based
+   wait; the settle loop and the pre-check waits use unthrottled sleeps
+   (0.4.35).
+4. *Autosave.* Every written value is posted to Ashby as a draft. Not a
+   submission, but not local either.
+
+**Defects found by the run, each fixed and re-verified.**
+- Color Health: "Are you based in the San Francisco Bay Area?" is a checkbox;
+  the location theme handed it "Ithaca, NY". A yes/no control now takes yes
+  or no and nothing else; other values go to the model gate. Re-run: 0
+  failures.
+- Siftstack: "Do you have any offers…?" got the stored "None" from the
+  timeline theme, which bypassed the guard computed themes had. Stored
+  themes pass through it now. Re-run: 0 failures.
+- Espa and Fanvue: first read as a retry-timing defect (0.4.37 gives a
+  geocoder 3.5 s, strips punctuation from shortened terms, and types the
+  stored location as soon as the form renders — the warm-up that pays for
+  Greenhouse's education lookups). The re-run on 0.4.37 failed the same
+  way in 0.9 s, so it was not timing: both fields are plain `Location`
+  geocoders with no option list, and both return "Netherlands | New Zealand
+  | West" for "Ithaca, NY" while thirty other organisations' geocoders
+  return Ithaca. The geocoder is scoped to where the employer hires. The
+  widget worked and the form's answer set excludes the applicant's value,
+  so 0.4.38 reports it as a mismatch for the applicant, with what was
+  offered, rather than as a field the filler could not enter. Two of the
+  hundred, both employers outside the applicant's country.
+
+**The one-second question.** Without a geocoder the fill is 8–175 ms, which
+is not the bottleneck anywhere. With one it is the geocoder's own latency
+(0.4–3.3 s, 32 of 100 forms), and the only lever is to start it before the
+plan arrives, which 0.4.37 does. The first-visit plan is the model's round
+trip; the page's own settle is 0.3–2 s. A repeat visit is instant.
+
+## 48. Everything except the essays — round 1
+
+Victor, 2026-09-30: "create it so that for Greenhouse and for Ashby it
+fills out everything except for the essays. Everything else is a simple
+decision. Make sure to continuously train and test and train and test and
+hypothesize." This entry is the loop's first turn and the record of how
+each turn runs.
+
+**The loop.** (1) Measure coverage offline over frozen forms with the real
+profile; (2) cluster what is not filled and name a mechanism per cluster;
+(3) implement with tests; (4) measure the delta offline; (5) run a fresh
+held-out draw through the installed extension and let the page say what is
+still wanted; (6) record, one PR. Essays are out of scope by definition:
+LONG_TEXT, and single-line controls whose opening words ask for one.
+
+**The measurement.** `python -m app.autofill.coverage [--model] [--profile]`
+scores two frozen corpora: 578 deduplicated Greenhouse forms
+(`corpus-large`, 16,485 fields) and a new Ashby corpus of 413 live
+SWE-family `ApiJobPosting` definitions frozen 2026-09-30 from the Simplify
+lists (`corpus-ashby`, 4,475 fields; the API returns 429 above two parallel
+requests — the first attempt at eight workers "failed" 353 of 459). Coverage
+= filled ÷ (fields − essays − files). A stated decision to leave a field
+blank counts as covered: the skip list, nothing recorded for an optional
+secondary fact, an untriggered follow-up. The report keeps every uncovered
+field with label, kind, options, class and the plan's reason, grouped by
+normalised label — the hypothesis list the next turn starts from.
+
+| coverage, real profile | Greenhouse | Ashby |
+|---|---|---|
+| baseline, deterministic only | 65.2% | 64.8% |
+| baseline, with Jev | 74.2% ($0.12) | 76.5% ($0.07) |
+| round 1, deterministic only | 68.0% | 71.5% |
+| round 1, with Jev | 76.4% ($0.13) | 80.5% ($0.20) |
+| round 1 ceiling: new facts set, with Jev | 85.2% | 81.8% |
+
+The ceiling row uses a temporary copy of the profile with every new fact
+given a placeholder (`profile_ceiling.json`); it is what the applicant
+reaches by answering the onboarding questions below, not a claim about the
+engine. Nothing was written to the real profile.
+
+**What the baseline said was missing, and the mechanism chosen for each.**
+
+| cluster (Greenhouse × Ashby, baseline) | mechanism | needs the applicant? |
+|---|---|---|
+| Education start month/year, 411 forms × 2 | the fact `education.start_date` already exists; it is unset | yes |
+| Ashby custom text fields restating a core fact — Current Location ×37, Current Company ×22, "Please provide your LinkedIn profile" ×10, phone ×8, School/University/Degree ×8 each, Last Name ×4 | exact aliases, plus `CORE_LABEL_PATTERNS` for sentence-shaped labels ("Your Phone Number", "Please include your LinkedIn profile", "GitHub or Portfolio URL") on text controls only | no |
+| "If other, please specify" ×24, "Please specify" ×24, "Please provide additional detail" ×19, "If other, please explain" ×15 | an optional follow-up whose preceding *choice* was settled and was not "Other"/yes is blank by decision; required ones and "if yes" wordings stay with the existing conditional rule | no |
+| protected answers against custom wording — veteran sentence options ×40, "Veteran Status" Yes/No ×13 | polarity read from the opening words ("No, I am not a veteran…" is a no; "I don't wish to answer", "Not applicable", "None" carry none), so the stored answer lands on the one option with its polarity. Still memory-only, still unique-winner | no |
+| consents — 284 fields to review; SMS opt-in ×21, Privacy Statement ×16, Terms ×11, certifications | a `consents` section of standing decisions (privacy_notice, truthful_certification, terms_and_conditions, sms_messages, marketing_communications, interview_recording, background_check). Buckets by wording; the AI-policy attestation and arbitration match no bucket and stay human. Unset bucket = human, with the reason naming the key to set | yes |
+| "How did you hear about us?" with no careers-site option ×46 required | `heard_about_fallback`: ordered second choices, exact match only; "College Recruiting – Careers Services" no longer counts as the employer's own site | yes |
+| Website / Portfolio ×154 (+Twitter ×9, Address 2 ×28) | the skip list already answers these; counted as blank by choice. `street_address_2`, `twitter` added as optional secondary facts: unrecorded + optional = blank | no |
+| "Ideal end date" ×8, "When do you plan on ending your internship?" ×15 | new stored theme `INTERNSHIP_END` (`preferences.internship_end`); the gate had read it as graduation | yes |
+| "Are you currently a Freshman or Sophomore?" (Base Power ×5) as a checkbox | computed from class standing (start or graduation date) | no |
+| essays in single-line controls — "What excites you about Talos?", "Additional information or a note…" | classified NARRATIVE by opening words; out of scope | — |
+| desired salary ×24, interview language ×6, years of experience ×6, transgender ×41, sexual orientation ×44 | new facts (`desired_salary`, `interview_language`, `years_experience`, `transgender`, `sexual_orientation`); `years_experience` joins the gate's background facts | yes |
+
+**What is deliberately not done.** No model touches a protected or consent
+field: the polarity reader is string logic and the consents are the
+applicant's own standing decisions, chosen once in setup. A certification
+that answers are true is replayed only when `truthful_certification` is set,
+and the applicant still reviews every form before submitting. A gender menu
+without a decline option, an "Other" that was chosen, a required follow-up —
+all stay for review.
+
+**The held-out round, R48-1 (2026-10-01).** Twelve unused Ashby
+organisations through the installed extension (0.4.38) in a hidden tab:
+103 fields filled, 42 left for the applicant, fill 60 ms–4.6 s (median
+0.4 s; 9 of 12 under one second). Three forms — Crusoe, Fab, Exegy —
+reported a sponsorship / worked-here yes/no as *filled* while the local
+check still wanted it. A DOM read showed why: Ashby's Boolean field is two
+buttons toggling `aria-pressed` with a hidden checkbox behind them; the
+filler's lone-checkbox rule had "left it unchecked" for a No and called
+that an answer. Pressing the No button by hand flipped `aria-pressed` —
+that is the control. Extension 0.4.39 drives the buttons and believes only
+a pressed one; the local check counts a pressed button. Saronic's
+College/University pick also failed its own confirmation: the option is
+three spans (name, country, domain), so its text is longer than what the
+input shows; a non-empty prefix is now the proof. Both go to the next
+round's re-run once the extension is reloaded. The Greenhouse side of the
+draw (12 live, unused boards) ran one board — IMC, 20 filled, 12 review, 0
+failures, 1.07 s — before the browser window left the screen; Greenhouse
+tabs fill only while visible (§45), so the remaining eleven wait for the
+window. Their plans, built through the backend with the real profile,
+leave for review only unset facts (consents, start date, salary), four
+bespoke questions, and three model reads under threshold.
+
+**Verification.** 600 tests, offline. The coverage numbers above are from
+the frozen corpora with the real profile and the real Jev; the ceiling from
+the placeholder copy; the live numbers from each page's own outcome record.
+
+**Next turns, in order of fields recovered:** the applicant's onboarding
+answers (the ceiling row); Ashby's `_systemfield_education_history` block
+(40 forms, 38 required — a repeatable school/degree/dates widget the filler
+does not drive yet); protected multi-select taxonomies ("East Asian" vs a
+stored "Asian": a finer stored answer, not a model); the bespoke yes/no
+remainder through the gate with the new background facts.
+
+## 49. Everything except the essays — round 2, the live hundreds, and the second pass
+
+**The live hundreds (2026-10-01).** Victor: "those were only four runs, let's
+do 100 runs across Greenhouse and 100 across Ashby" — on extension 0.4.39
+with his round-1 facts answered (start date, address, salary, consents,
+fallbacks, two protected answers). Draws: 100 unused Ashby organisations
+from the frozen corpus and 100 live, unused Greenhouse postings (68
+boards), both in `survey/draws/draw_r48_2_*.json`.
+
+| Ashby, 100 organisations | |
+|---|---|
+| fields filled | 719 |
+| left for the applicant | 250 |
+| "known but could not be entered" | 1 — Rivian/VW's Location geocoder (5.9 s, no match) |
+| fills that did not land | 2 text fields reported filled yet still wanted (Atominvest "notice period", TELUS "Phone") — to inspect |
+| forms with nothing left | 22 |
+| fill, median | 110 ms; 83 of 100 under one second |
+| hidden tab | yes throughout; four organisations needed a second visit after a page navigated mid-poll |
+
+The Greenhouse hundred is drawn and batched but Greenhouse tabs fill only
+while the window is on screen (§45); 8 of 100 ran before the window was
+hidden (all 0 could-not-enter) and the rest wait for it. Recorded as they
+land in `survey/survey_results.jsonl`, round R48-2.
+
+**The unanswered list, as asked.** "Compile the questions we couldn't
+answer, decide yes or no whether we have the information, and answer it as
+well." Every R48 posting (112 Ashby, 112 Greenhouse) re-planned through the
+backend with the real profile; every entry still for review clustered by
+label. `docs/unanswered-R48.md` is the table: 443 clusters with a decision
+each — YES (profile holds it; a wiring gap), NO (not in the profile),
+PARTLY, MAYBE (model read under threshold), ESSAY, N/A (follow-ups,
+attestations outside the standing consents).
+
+| still unanswered of 3,741 entries | Ashby | Greenhouse | total |
+|---|---|---|---|
+| after round 1 | 291 | 372 | 663 |
+| after round 2 (deterministic) | 271 | 338 | 609 |
+| after the second pass | 261 | 336 | 597 |
+
+**Round 2, deterministic — the YES rows.** Salary expectations were
+unanswered with `desired_salary` stored because nothing routed the label to
+it: a `DESIRED_SALARY` theme with a local pattern (×23 across the draw).
+"Please acknowledge that you have read and agree to our Privacy Policy" ×6
+and "I consent to have my personal data disclosed" ×2 were SCREENING; both
+are the privacy consent now. "Please share a link to your LinkedIn profile
+if you have one" ×5, "Provide any relevant profile URLs" ×5 and "Google
+Scholar" ×2 join the sentence-shaped core patterns. A `File` input labelled
+"Cover Letter" (Ashby, ×10) follows the skip list. "Are you currently based
+in the United States?" (×2, checkbox) is computed from the stored country.
+An `INTERNSHIP_END` local pattern.
+
+**The second pass — the agent Victor asked for.** After every other gate,
+over SCREENING free-text fields still for review (never essays, protected,
+consent, documents, follow-ups), the Jev binder is asked two bounded
+questions per field with the profile's non-protected keys as state: a Noul
+"does the profile contain the specific information this asks for", and a
+Choice over the profile's own keys naming the one whose stored value answers
+it. A second call verifies the chosen value against the question. Three
+gates (0.90 covered, 0.85 key, 0.90 verified) and the value written is the
+stored one, never model text. A question below the coverage bar keeps its
+review state with the reason "not in your profile (n% that it is covered)"
+— the yes/no, on the form. Audit of every answer it wrote across the 224
+postings, read by hand:
+
+| filled | key | examples |
+|---|---|---|
+| 6 | github | "What's your Github profile URL?", "GitHub or technical portfolio URL" |
+| 4 | linkedin | "What's your LinkedIn link?", "LinkedIn Profile, if available" |
+| 1 each | earliest_start, preferred_last_name, pronouns, website_other | "When are you available for internship?", "What is your preferred last name?", "If you prefer to self-describe your pronouns…", "Other website (Portfolio, GitHub, etc.)" |
+
+14 of 14 correct. It declined 44 as not in the profile, left 33 as
+"touches it but no single value answers" (eight of those "Please provide
+your university email address", correctly — the profile does not say which
+email is the university one; "Where did you complete your undergraduate
+degree?" — correctly, he has not), and one failed verification ("Years of
+work experience?" → "0"). Cost: two Jev calls per form that has such a
+field.
+
+**What the NO column says to ask next** (counts across the 224):
+IMC's high-school graduation year, test-score type and SAT/ACT (12 each,
+one employer), PhD advisor (5), preferred work location / office choice
+(12), non-compete disclosure (3), prior application to the same company
+(13), languages / ML libraries proficiency multi-selects (8). The ESSAY
+column is 75; the N/A column 35.
+
+**Also found live and fixed in 0.4.39 (R48-1), re-verified in R48-2.**
+Crusoe, Fab, Exegy, Saronic re-run clean: yes/no buttons read pressed,
+Saronic's university lands in 0.4 s.
+
+## 50. The learning loop: an agent that improves from what the applicant does
+
+Victor, 2026-10-01: "build an agent that as we use it improves and
+understands what I do to answer questions and starts being able to answer
+my own questions … build these in parallel, then test and iterate; the goal
+is to do this based off of research about agents."
+
+**What the literature says that applies here, and what it does not.**
+- *Memory kinds.* CoALA (Sumers et al., 2023) separates an agent's
+  episodic memory (what happened), semantic memory (facts about the world
+  and the self) and procedural memory (how to act). The profile is semantic
+  memory; the plan engine, themes and aliases are procedural; what was
+  missing was the episodic layer — nothing recorded what the applicant
+  actually typed when the engine left a field to them.
+- *Learning from verbal feedback.* Reflexion (Shinn et al., 2023) improves
+  an agent without weight updates by storing natural-language reflections
+  on past failures and conditioning later attempts on them. Here the
+  "reflection" is concrete and cheap: the applicant's own answer to the
+  question the engine could not answer.
+- *A growing library.* Voyager (Wang et al., 2023) accumulates verified
+  skills and retrieves them later. The analogue is a growing set of
+  learned facts, each verified by the person it describes (they typed it,
+  and they accept the generalisation).
+- *Reflection into higher-level facts.* Generative Agents (Park et al.,
+  2023) periodically synthesise observations into higher-level
+  statements. The generalisation step below — "this answer is a stable
+  fact about you, not about this company" — is that synthesis, bounded to
+  a yes/no and a key choice so Jev can make it.
+- *What does not transfer.* These systems let a model write to memory
+  freely. A job application is submitted under a real person's name, so
+  nothing a model composes is ever written; the model only decides whether
+  an answer the applicant gave is reusable and under which key.
+
+**The design (three memories, one contract).**
+1. *Episodic, automatic.* The extension watches the fields the plan knew
+   about; when the applicant's value differs from the plan's, or the plan
+   had none, the (question, answer) pair is sent to the local backend
+   with the profile and comes back saved under `answers[fingerprint]`.
+   The next form that asks the same question replays it verbatim — the
+   path `Memory.recall_answer` already had, now fed.
+2. *Semantic, proposed.* For each such pair the backend asks Jev two
+   bounded questions with the non-protected profile as state: is this a
+   stable fact or preference that would be the same on any employer's
+   form (Noul), and which existing profile key does it belong to, or is it
+   new (Choice). Only at 0.90 / 0.85 does a *proposal* come back — set
+   this key to this value. Proposals are never applied by the model; the
+   applicant accepts or ignores each in the popup. Protected and consent
+   questions are never proposed as facts.
+3. *Procedural, reused.* Accepted facts live in `profile.learned` and
+   enter the second pass's catalogue and the gate's state, so the engine
+   answers that question itself from then on.
+
+**How it is measured.** Offline: `python -m app.autofill.learn_eval`
+replays a simulated applicant across the frozen corpora and reports the
+replay rate (how many identical later questions the loop answers) with
+sample sizes. Live: the count of questions the applicant had to answer
+twice, which should fall toward zero as the profile learns.
+
+**Built in parallel, then corrected by the research.** Two forks worked
+against the contract above at the same time (backend PR #24,
+`autofill/16-learning`; extension PR #12, 0.4.40–0.4.42) while a third
+agent wrote `docs/research/learning-agents.md` — 53 sources on agent
+memory, correction learning, the incumbent products, ATS terms, Chrome Web
+Store policy and self-identification law. Three findings changed the build
+before it was tested: (1) Chromium Autofill's per-field votes and the
+absence of any published stable-vs-company-specific rule → a fact is
+proposed only after the same answer at two different organisations
+(`MIN_SUPPORT_COMPANIES = 2`); exact-question replay still needs one. (2)
+Mixed-initiative evidence that pre-applied suggestions reduce agency, and
+a June 2026 budget-matched study showing memory gains must be measured as
+fewer repeated questions rather than benchmark lift → propose-then-accept
+stays, and the metric is questions-asked-twice. (3) Chrome Web Store
+Limited Use treats learning as a post-install change in data handling →
+an opt-in switch in the popup, off by default, with the disclosure in
+plain words. Also noted: Ashby's robots.txt disallows `/api/`, so posting
+reads stay to the applicant's own open posting; self-identification is
+never generalised or judged.
+
+**Measured offline** (`python -m app.autofill.learn_eval`, deterministic
+simulation of an applicant answering every open SCREENING text/select
+question in corpus order):
+
+| corpus | forms | simulated answers | later occurrences of the same label | replayed | rate |
+|---|---|---|---|---|---|
+| Greenhouse | 578 | 1,045 | 1,666 | 1,571 | 94.3% |
+| Ashby | 413 | 360 | 234 | 226 | 96.6% |
+
+The remainder is the same label on a select whose option set differs. With
+the model on 60 Ashby forms: 55 simulated answers produced 3 proposals
+(citizenship, work authorisation, sponsorship), none applied. Backend: 620
+tests; extension: 23 node cases for the capture rules. The live test on a
+real form follows the reload to 0.4.42 and is recorded in the README log.
+
+---
+
 ## Current state
+
+For coverage of the "everything except the essays" goal see §48; the
+figures below are the earlier 42-posting measurement.
 
 Measured against 42 unique live SWE-intern postings, 909 fields:
 

@@ -25,6 +25,7 @@ re-applied to the threshold each time, so raising `AUTOFILL_CONFIDENCE` later
 tightens historical entries too rather than grandfathering them in.
 """
 import hashlib
+import re
 import json
 import logging
 import os
@@ -32,9 +33,9 @@ from typing import Dict, List, Optional, Tuple
 
 from app.autofill.classify import normalize_label
 from app.autofill.themes import THEME_CRITERIA, QuestionTheme
-from app.autofill.schema import FormField
+from app.autofill.schema import FieldKind, FormField
 from app.exceptions import JevServiceError
-from app.jev_client import JevClient, choice, get_jev_client
+from app.jev_client import JevClient, choice, get_jev_client, noul
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,71 @@ _OPTION_INSTRUCTIONS = (
     "expresses it."
 )
 
+
+#: Per-option yes/no for a "check all that apply" question. A Noul wants an
+#: observable situation on each side, and an undetermined proposition comes
+#: back near 0.5 — which is exactly what the caller treats as "ask the
+#: applicant".
+_APPLIES_INSTRUCTIONS = (
+    "You are filling a job application for the applicant described in state.applicant; "
+    "state.form.earlier_answers lists what is already answered on this form. The form asks "
+    "a select-all-that-apply question. Judge whether ONE option truthfully applies to this "
+    "applicant, using only facts stated in the profile and earlier answers. If the profile "
+    "says nothing that bears on the option, it does NOT apply here — the applicant decides. "
+    "An option that means none / not applicable / never held / no is the one that applies "
+    "when the profile states the applicant has none of the things the question lists."
+)
+
+#: Noul thresholds for one option of a multi-select. Between them the option
+#: is undecided and the whole field stays with the applicant.
+MULTI_YES = 0.90
+MULTI_NO = 0.10
+
+#: The opt-out entry of a "check all that apply" list. A Noul scores "Not
+#: Applicable" low as a proposition even when the profile says the applicant
+#: has none of the listed things (Rocket Lab's clearance list: every level
+#: at p<=0.05, "Not Applicable" at 0.15). When every concrete option is
+#: confidently ruled out and exactly one option means none, that one is the
+#: answer by elimination — and its confidence is the weakest of those no's.
+_NONE_OPTION = re.compile(
+    r"\b(none|not applicable|n/?a|never held|no clearance|do not have|i do not have|neither)\b", re.I
+)
+
+_COVERED_INSTRUCTIONS = (
+    "state.profile lists what the applicant has recorded about themselves, as key: value. "
+    "Decide whether that profile contains the specific information this free-text question "
+    "asks for. 'Contains' means a value that directly states it — not something from which it "
+    "could be guessed. A question about the applicant's own words, opinions, motivations, "
+    "stories, references, or anything not stated is NOT covered."
+)
+_KEY_INSTRUCTIONS = (
+    "state.profile lists the applicant's recorded facts as key: value. Choose the ONE key whose "
+    "stored value, written verbatim into this field, truthfully answers the question. Choose "
+    "'none' when no single value does, when the field wants prose, or when the value would be "
+    "only loosely related (a graduation date is not a start date; a current location is not an "
+    "address; an email is not a university email unless it says so)."
+)
+_VERIFY_INSTRUCTIONS = (
+    "state.profile is the applicant's recorded information. A proposed answer is about to be "
+    "written into a free-text field on a job application under the applicant's name. Judge "
+    "whether it is a truthful, directly responsive answer to the question as asked."
+)
+
+_STABLE_INSTRUCTIONS = (
+    "The applicant corrected or supplied an answer on a job application form. state.profile "
+    "lists what the applicant has recorded about themselves. Decide whether the answer is a "
+    "stable fact or standing preference about the applicant — something that would be answered "
+    "the same way on any employer's form asking the same question — as opposed to something "
+    "specific to this company, this role, this posting, or this moment (a reason for interest, "
+    "a referral name, an office choice for this employer, an essay, a date that depends on this "
+    "role)."
+)
+_WHERE_INSTRUCTIONS = (
+    "state.profile lists the applicant's recorded facts as key: value (some empty). Choose the "
+    "ONE key this answer is the value of — the same kind of information, so that storing the "
+    "answer under that key would answer this question on other forms. Choose 'new' when no "
+    "listed key is that kind of information."
+)
 
 _ANSWER_INSTRUCTIONS = (
     "You are filling a job application for the applicant described in state.applicant. "
@@ -370,8 +436,9 @@ class JevBinder:
             if len(field.options) > 254:
                 out[request_id] = (None, 0.0)
                 continue
-            signature = "answer::{}::{}::{}".format(
-                field.label[:80], "|".join(o.label for o in field.options)[:200], state_hash
+            signature = "answer::{}::{}::{}::{}".format(
+                field.kind.value, field.label[:80],
+                "|".join(o.label for o in field.options)[:200], state_hash,
             )
             cached = self._options.get(signature)
             if cached is not None:
@@ -379,12 +446,23 @@ class JevBinder:
                 continue
             pending.append((request_id, field, signature))
 
-        for start in range(0, len(pending), MAX_QUESTIONS_PER_CALL):
-            batch = pending[start:start + MAX_QUESTIONS_PER_CALL]
+        # Batched by *questions*, not requests: a multi-select is one question
+        # per option, and the call cap is on questions.
+        batch: List[Tuple[str, FormField, str]] = []
+        weight = 0
+        for item in pending:
+            cost = len(item[1].options) if item[1].kind == FieldKind.MULTI_SELECT else 1
+            if batch and weight + cost > MAX_QUESTIONS_PER_CALL:
+                out.update(self._answer_batch(state, [(r, f) for r, f, _sig in batch]))
+                for request_id, _field, signature in batch:
+                    self._options.put(signature, *out.get(request_id, (None, 0.0)))
+                batch, weight = [], 0
+            batch.append(item)
+            weight += cost
+        if batch:
             out.update(self._answer_batch(state, [(r, f) for r, f, _sig in batch]))
             for request_id, _field, signature in batch:
-                label, confidence = out.get(request_id, (None, 0.0))
-                self._options.put(signature, label, confidence)
+                self._options.put(signature, *out.get(request_id, (None, 0.0)))
 
         return out
 
@@ -394,7 +472,24 @@ class JevBinder:
         questions = {}
         option_labels: Dict[str, Dict[str, str]] = {}
 
+        multi: Dict[str, List[Tuple[str, str]]] = {}   # request_id -> [(question_id, option label)]
+
         for request_id, field in batch:
+            if field.kind == FieldKind.MULTI_SELECT:
+                per_option = []
+                for index, option in enumerate(field.options):
+                    question_id = "{}__opt_{}".format(request_id, index)
+                    questions[question_id] = noul(
+                        "{}\n\nQuestion on the form: {}\nOption being judged: {}".format(
+                            _APPLIES_INSTRUCTIONS, field.label, option.label
+                        ),
+                        true_means="The profile states facts under which the applicant would tick this option.",
+                        false_means="The profile rules this option out, or says nothing that bears on it.",
+                    )
+                    per_option.append((question_id, option.label))
+                multi[request_id] = per_option
+                continue
+
             criteria = {}
             labels = {}
             for index, option in enumerate(field.options):
@@ -409,16 +504,34 @@ class JevBinder:
             )
 
         decision = self._decide(
-            state, questions, description="answer {} question(s) from the profile".format(len(batch))
+            state, questions, description="answer {} question(s) from the profile".format(len(questions))
         )
 
         self.calls += 1
         self.cost_usd += decision.cost_usd
-        self.questions_asked += len(batch)
+        self.questions_asked += len(questions)
 
-        out: Dict[str, Tuple[Optional[str], float]] = {}
+        out: Dict[str, Tuple[Optional[object], float]] = {}
 
         for request_id, _field in batch:
+            if request_id in multi:
+                picked: List[str] = []
+                decidedness = 1.0
+                for question_id, label in multi[request_id]:
+                    answer = decision.get(question_id)
+                    p = answer.belief() if answer is not None else 0.5
+                    if p >= MULTI_YES:
+                        picked.append(label)
+                    # Below MULTI_NO is a confident no; in between, undecided.
+                    # Either way the field's confidence is its least-decided option.
+                    decidedness = min(decidedness, max(p, 1.0 - p))
+                if not picked:
+                    picked, decidedness = self._none_by_elimination(multi[request_id], decision)
+                # An empty selection is not an answer to a required question;
+                # report it as undecided so the field stays with the applicant.
+                out[request_id] = (picked or None, decidedness if picked else 0.0)
+                continue
+
             answer = decision.get(request_id)
             if answer is None or not answer.choice or answer.choice == "unsure":
                 out[request_id] = (None, answer.belief() if answer else 0.0)
@@ -426,6 +539,155 @@ class JevBinder:
             out[request_id] = (option_labels[request_id].get(answer.choice), answer.belief())
 
         return out
+
+    @staticmethod
+    def _none_by_elimination(per_option, decision):
+        """The list's single none-option, when every other option is a confident no."""
+        none_options = [(q, label) for q, label in per_option if _NONE_OPTION.search(label)]
+        if len(none_options) != 1:
+            return [], 0.0
+        weakest_no = 1.0
+        for question_id, label in per_option:
+            if (question_id, label) == none_options[0]:
+                continue
+            answer = decision.get(question_id)
+            p = answer.belief() if answer is not None else 0.5
+            if p > MULTI_NO:
+                return [], 0.0
+            weakest_no = min(weakest_no, 1.0 - p)
+        return [none_options[0][1]], weakest_no
+
+    def second_pass(
+        self, state: Dict[str, object], requests: List[Tuple[str, FormField, Dict[str, str]]]
+    ) -> Dict[str, Tuple[Optional[str], float, float]]:
+        """For a free-text question nothing matched: is it covered, and by which fact?
+
+        Victor, 2026-10-01: "compile the questions we couldn't answer, decide
+        yes or no whether we have the information, and answer it as well."
+        Two bounded questions per field, from the profile alone: a Noul —
+        does the profile contain the specific information this question asks
+        for — and a Choice over the profile's own keys naming the fact that
+        answers it. The answer written is the stored value of that key, never
+        text the model composed. Essays, protected and consent fields never
+        arrive here (the caller's eligibility rule).
+
+        Returns request_id -> (profile key or None, covered probability,
+        key-choice confidence).
+        """
+        if not requests:
+            return {}
+        state_hash = hashlib.sha1(
+            json.dumps(state.get("profile", {}), sort_keys=True, default=str).encode()
+        ).hexdigest()[:12]
+        out: Dict[str, Tuple[Optional[str], float, float]] = {}
+        pending = []
+        for request_id, field, catalog in requests:
+            signature = "second::{}::{}".format(field.label[:100], state_hash)
+            cached = self._options.get(signature)
+            if cached is not None:
+                key, packed = cached
+                out[request_id] = (key, packed, packed)
+                continue
+            pending.append((request_id, field, catalog, signature))
+        for start in range(0, len(pending), max(1, MAX_QUESTIONS_PER_CALL // 2)):
+            batch = pending[start:start + max(1, MAX_QUESTIONS_PER_CALL // 2)]
+            questions = {}
+            for request_id, field, catalog, _sig in batch:
+                questions[request_id + "__cov"] = noul(
+                    _COVERED_INSTRUCTIONS + "\n\nQuestion on the form: " + field.label,
+                    true_means="state.profile holds the specific fact this question asks for, stated plainly.",
+                    false_means="The question asks for something the profile does not state, or only hints at.",
+                )
+                criteria = {key: "{}: {}".format(key, value[:80]) for key, value in catalog.items()}
+                criteria["none"] = "No single profile entry answers this question."
+                questions[request_id + "__key"] = choice(
+                    _KEY_INSTRUCTIONS + "\n\nQuestion on the form: " + field.label, criteria,
+                )
+            decision = self._decide(state, questions, description="second pass over {} text question(s)".format(len(batch)))
+            self.calls += 1
+            self.cost_usd += decision.cost_usd
+            self.questions_asked += len(questions)
+            for request_id, field, catalog, signature in batch:
+                cov = decision.get(request_id + "__cov")
+                picked = decision.get(request_id + "__key")
+                p_cov = cov.belief() if cov is not None else 0.0
+                key = picked.choice if picked is not None and picked.choice and picked.choice != "none" else None
+                p_key = picked.confidence if picked is not None and key else 0.0
+                if key is not None and key not in catalog:
+                    key, p_key = None, 0.0
+                out[request_id] = (key, p_cov, p_key)
+                self._options.put(signature, key, min(p_cov, p_key) if key else p_cov)
+        return out
+
+    def judge_observations(
+        self, state: Dict[str, object], items: List[Tuple[str, str, str, Dict[str, str]]]
+    ) -> Dict[str, Tuple[float, Optional[str], float]]:
+        """Is a correction the applicant made a stable fact, and where does it live?
+
+        The semantic step of the learning loop (§50). For each (id, question,
+        answer, catalog): a Noul — would this answer be the same on any
+        employer's form, i.e. a fact or standing preference about the
+        applicant rather than something about this company, role or moment —
+        and a Choice over the profile's own keys plus "new" naming where it
+        belongs. Reflexion-style: the applicant's edit is the verbal feedback;
+        this turns it into a candidate for memory rather than a one-off.
+
+        Returns id -> (stable probability, key or "new" or None, key confidence).
+        """
+        if not items:
+            return {}
+        out: Dict[str, Tuple[float, Optional[str], float]] = {}
+        step = max(1, MAX_QUESTIONS_PER_CALL // 2)
+        for start in range(0, len(items), step):
+            batch = items[start:start + step]
+            questions = {}
+            for item_id, question, answer, catalog in batch:
+                questions[item_id + "__stable"] = noul(
+                    _STABLE_INSTRUCTIONS + "\n\nQuestion on the form: {}\nThe applicant's answer: {}".format(question, answer),
+                    true_means="A fact or standing preference about the applicant; the same answer belongs on any employer's form asking this.",
+                    false_means="Specific to this company, role, posting or moment, or free prose, or a one-off.",
+                )
+                criteria = {key: "{}: {}".format(key, (value or "(empty)")[:60]) for key, value in catalog.items()}
+                criteria["new"] = "None of these keys; this is a new kind of fact about the applicant."
+                questions[item_id + "__key"] = choice(
+                    _WHERE_INSTRUCTIONS + "\n\nQuestion on the form: {}\nThe applicant's answer: {}".format(question, answer),
+                    criteria,
+                )
+            decision = self._decide(state, questions, description="judge {} correction(s) for memory".format(len(batch)))
+            self.calls += 1
+            self.cost_usd += decision.cost_usd
+            self.questions_asked += len(questions)
+            for item_id, _q, _a, catalog in batch:
+                stable = decision.get(item_id + "__stable")
+                where = decision.get(item_id + "__key")
+                p_stable = stable.belief() if stable is not None else 0.0
+                key = where.choice if where is not None and where.choice and where.choice != "unsure" else None
+                p_key = where.confidence if where is not None and key else 0.0
+                if key is not None and key != "new" and key not in catalog:
+                    key, p_key = None, 0.0
+                out[item_id] = (p_stable, key, p_key)
+        return out
+
+    def verify_values(
+        self, state: Dict[str, object], items: List[Tuple[str, str, str]]
+    ) -> Dict[str, float]:
+        """Is writing this stored value into this field a truthful, direct answer?"""
+        if not items:
+            return {}
+        questions = {
+            request_id: noul(
+                _VERIFY_INSTRUCTIONS + "\n\nQuestion on the form: {}\nProposed answer: {}".format(label, value),
+                true_means="The proposed answer is exactly what this applicant would truthfully write here.",
+                false_means="The answer is off-topic, only partly responsive, in the wrong form, or not supported by the profile.",
+            )
+            for request_id, label, value in items
+        }
+        decision = self._decide(state, questions, description="verify {} second-pass answer(s)".format(len(items)))
+        self.calls += 1
+        self.cost_usd += decision.cost_usd
+        self.questions_asked += len(questions)
+        return {request_id: (decision.get(request_id).belief() if decision.get(request_id) is not None else 0.0)
+                for request_id, _l, _v in items}
 
     def _decide(self, state, questions, description):
         """One call, behind a circuit breaker.

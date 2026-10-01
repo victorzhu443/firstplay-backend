@@ -1,0 +1,1228 @@
+{
+ "data": {
+  "jobPosting": {
+   "id": "34b31b67-268c-4270-b48f-72e59064c96e",
+   "title": "Software Engineer Intern, Agent (Summer 2027)",
+   "departmentName": "Early Career",
+   "departmentExternalName": "Early Career",
+   "locationName": "San Francisco, CA",
+   "locationAddress": null,
+   "workplaceType": "OnSite",
+   "employmentType": "Intern",
+   "descriptionHtml": "<h2><strong>About us</strong></h2><p style=\"min-height:1.5em\">Sierra is the leading platform for customer-facing AI agents, working with many of the world's biggest brands \u2014 including The GAP, Rocket Mortgage, SoFi, Sutter Health, and SoftBank \u2014 to transform how they serve customers and grow their businesses. We are primarily an in-person company based in San Francisco, with growing offices across North America, Europe, and Asia.</p><p style=\"min-height:1.5em\">We are guided by a set of values that are at the core of our actions and define our culture: Trust, Customer Obsession, Craftsmanship, Intensity, and a commitment to balancing Family along the way. These values are the foundation of our work, and we are committed to upholding them in everything we do.</p><p style=\"min-height:1.5em\">Our co-founders are<a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://www.linkedin.com/in/brettaylor/\"> <u>Bret Taylor</u></a> and<a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://www.linkedin.com/in/claybavor/\"> <u>Clay Bavor</u></a>. Bret currently serves as Board Chair of OpenAI. Previously, he was co-CEO of Salesforce (which had acquired the company he founded, Quip) and CTO of Facebook. Bret was also one of Google's earliest product managers and co-creator of Google Maps. Before founding Sierra, Clay spent 18 years at Google, where he most recently led Google Labs. Earlier, he started and led Google\u2019s AR/VR effort, Project Starline, and Google Lens. Before that, Clay led the product and design teams for Google Workspace.</p><p style=\"min-height:1.5em\">As a Software Engineer Intern, Agent, you'll work directly on production AI agents for Sierra's customers. You'll gain hands-on experience contributing to the design and development of AI agents, shipping features, and learning from real-world use cases at scale. If you're hungry to shape and learn from the most important technological wave in history, come build at Sierra.</p><div style=\"min-height:1.2em;margin-top:0;margin-bottom:0\">\u00a0</div><h2><strong>What you'll bring</strong></h2><ul style=\"min-height:1.5em\"><li><p style=\"min-height:1.5em\">Pursuing a bachelor's or master's degree in computer science or a related field</p></li><li><p style=\"min-height:1.5em\">Strong technical problem-solving skills, especially in fast-changing, ambiguous environments</p></li><li><p style=\"min-height:1.5em\">A builder and tinkerer\u2019s mindset with high agency - you find creative ways to overcome obstacles and ship</p></li><li><p style=\"min-height:1.5em\">Excellent communication skills - clear, direct, and persuasive across technical and non-technical audiences</p></li></ul><h2><strong>Even better</strong></h2><ul style=\"min-height:1.5em\"><li><p style=\"min-height:1.5em\">Experience building or deploying AI/LLM systems in production</p></li><li><p style=\"min-height:1.5em\">Familiarity with tools that power today's AI agents: eval frameworks, agent tooling, RAG pipelines, and prompt engineering</p></li><li><p style=\"min-height:1.5em\">Prior experience with React, TypeScript, and/or Go</p></li></ul><h2>Intern qualifications</h2><ul style=\"min-height:1.5em\"><li><p style=\"min-height:1.5em\"><strong>The intern program is open to students graduating December 2027 - June 2028</strong></p></li><li><p style=\"min-height:1.5em\"><strong>Note:</strong> The full benefits listed below are available only to full-time employees. Interns are eligible for a monthly stipend for health insurance, daily lunch, and, of course, free alphorn lessons.</p></li></ul><h2><strong>Our values</strong></h2><ul style=\"min-height:1.5em\"><li><p style=\"min-height:1.5em\"><strong>Trust: </strong>We build trust with our customers with our accountability, empathy, quality, and responsiveness. We build trust in AI by making it more accessible, safe, and useful. We build trust with each other by showing up for each other professionally and personally, creating an environment that enables all of us to do our best work.</p></li><li><p style=\"min-height:1.5em\"><strong>Customer Obsession: </strong>We deeply understand our customers\u2019 business goals and relentlessly focus on driving outcomes, not just technical milestones. Everyone at the company knows and spends time with our customers. When our customer is having an issue, we drop everything and fix it.</p></li><li><p style=\"min-height:1.5em\"><strong>Craftsmanship: </strong>We get the details right, from the words on the page to the system architecture. We have good taste. When we notice something isn\u2019t right, we take the time to fix it. We are proud of the products we produce. We continuously self-reflect to continuously self-improve.</p></li><li><p style=\"min-height:1.5em\"><strong>Intensity: </strong>We know we don\u2019t have the luxury of patience. We play to win. We care about our product being the best, and when it isn\u2019t, we fix it. When we fail, we talk about it openly and without blame so we succeed the next time.</p></li><li><p style=\"min-height:1.5em\"><strong>Family: </strong>We know that balance and intensity are compatible, and we model it in our actions and processes. We are the best technology company for parents. We support and respect each other and celebrate each other\u2019s personal and professional achievements.</p></li></ul><h2><strong>What we offer</strong></h2><p style=\"min-height:1.5em\">We want our benefits to reflect our values and offer the following to full-time employees:</p><ul style=\"min-height:1.5em\"><li><p style=\"min-height:1.5em\">Flexible (unlimited) paid time off</p></li><li><p style=\"min-height:1.5em\">Medical, dental, and vision benefits for you and your family</p></li><li><p style=\"min-height:1.5em\">Life insurance and disability benefits</p></li><li><p style=\"min-height:1.5em\">Retirement plan dependent on country of employment</p></li><li><p style=\"min-height:1.5em\">Parental leave</p></li><li><p style=\"min-height:1.5em\">Fertility and family building benefits through Carrot</p></li><li><p style=\"min-height:1.5em\">Lunch, as well as delicious snacks and coffee to keep you energized\u00a0</p></li><li><p style=\"min-height:1.5em\">Discretionary benefit stipend giving people the ability to spend where it matters most</p></li><li><p style=\"min-height:1.5em\">Free alphorn lessons</p></li></ul><p style=\"min-height:1.5em\">These benefits are further detailed in Sierra's policies, may vary by region, and are subject to change at any time, consistent with the terms of any applicable compensation or benefits plans. Eligible full-time employees can participate in Sierra's equity plans subject to the terms of the applicable plans and policies.</p><h2><strong>Be you, with us</strong></h2><p style=\"min-height:1.5em\">We're working to bring the transformative power of AI to every organization in the world. To do so, it is important to us that the diversity of our employees represents the diversity of our customers. We believe that our work and culture are better when we encourage, support, and respect different skills and experiences represented within our team. We encourage you to apply even if your experience doesn't precisely match the job description. We strive to evaluate all applicants consistently without regard to race, color, religion, gender, national origin, age, disability, veteran status, pregnancy, gender expression or identity, sexual orientation, citizenship, or any other legally protected class.</p>",
+   "isListed": true,
+   "isConfidential": false,
+   "teamNames": [
+    "Early Career",
+    "Intern"
+   ],
+   "recaptchaAction": "job_apply",
+   "surveyForms": [],
+   "secondaryLocationNames": [
+    "New York, NY"
+   ],
+   "compensationTierSummary": null,
+   "compensationTiers": [],
+   "applicationDeadline": null,
+   "compensationTierGuideUrl": null,
+   "scrapeableCompensationSalarySummary": null,
+   "compensationPhilosophyHtml": null,
+   "applicationLimitCalloutHtml": "<p>Please Note: You will be limited to submitting one application for a new grad role. We ask that you select the role that you are most interested in. Thanks!</p>",
+   "shouldAskForTextingConsent": false,
+   "shouldAskForWhatsAppConsent": false,
+   "candidateTextingPrivacyPolicyUrl": null,
+   "candidateTextingTermsAndConditionsUrl": null,
+   "legalEntityNameForTextingConsent": "Sierra Technologies Japan K.K.",
+   "automatedProcessingLegalNotice": null,
+   "applicationForm": {
+    "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86",
+    "errorMessages": [],
+    "formErrors": [],
+    "sourceFormDefinitionId": "{\"kind\":\"CompositeFormDefinitionId-JobPostingApplicationFormV2\",\"formDefinitionId\":\"58a4a5a9-b15f-4a18-9437-136a9955cd6f\",\"jobPostingId\":\"34b31b67-268c-4270-b48f-72e59064c96e\",\"jobBoardSuperType\":\"External\"}",
+    "formControls": [
+     {
+      "identifier": "b58d1b8a-3037-4b3a-9fda-9a043307f761",
+      "title": "Submit"
+     }
+    ],
+    "sections": [
+     {
+      "title": null,
+      "descriptionHtml": null,
+      "isHidden": null,
+      "fieldEntries": [
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_79f65cc4-a75a-4a56-b153-4c84362b6d6e",
+        "field": {
+         "id": "7198580c-3b54-40d4-87ff-7419556ccc6a",
+         "path": "79f65cc4-a75a-4a56-b153-4c84362b6d6e",
+         "humanReadablePath": "",
+         "title": "Legal First Name",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "String",
+         "__autoSerializationID": "StringField"
+        },
+        "fieldValue": null,
+        "isRequired": false,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_cebf8ac4-1da4-45d0-9721-8225bc5d1f2b",
+        "field": {
+         "id": "5a2cd3c3-8644-44c5-9187-6b5b8262bd1a",
+         "path": "cebf8ac4-1da4-45d0-9721-8225bc5d1f2b",
+         "humanReadablePath": "",
+         "title": "Legal Last Name",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "String",
+         "__autoSerializationID": "StringField"
+        },
+        "fieldValue": null,
+        "isRequired": false,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86__systemfield_name",
+        "field": {
+         "id": "552bf704-a483-458e-b0ad-8f73eb79cbcb",
+         "path": "_systemfield_name",
+         "humanReadablePath": "Name",
+         "title": "Preferred First & Last Name",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "String",
+         "__autoSerializationID": "StringField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_79da8807-b2cf-4d61-bcbf-41b4147359fe",
+        "field": {
+         "id": "79da8807-b2cf-4d61-bcbf-41b4147359fe",
+         "path": "79da8807-b2cf-4d61-bcbf-41b4147359fe",
+         "humanReadablePath": "",
+         "title": "Name pronounciation",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "String",
+         "__autoSerializationID": "StringField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": "<p>Please spell your name phonetically.</p>",
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86__systemfield_email",
+        "field": {
+         "id": "b963ceb9-103e-4e79-a4d3-45d8e77fa90b",
+         "path": "_systemfield_email",
+         "humanReadablePath": "Email",
+         "title": "Email",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "Email",
+         "__autoSerializationID": "EmailField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_25c173bb-c9e7-47b1-9f06-cbdb72d096bb",
+        "field": {
+         "id": "25c173bb-c9e7-47b1-9f06-cbdb72d096bb",
+         "path": "25c173bb-c9e7-47b1-9f06-cbdb72d096bb",
+         "humanReadablePath": "",
+         "title": "Phone",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "Phone",
+         "__autoSerializationID": "PhoneField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86__systemfield_resume",
+        "field": {
+         "id": "56d67e22-c027-4201-a6e7-aa38ad84e535",
+         "path": "_systemfield_resume",
+         "humanReadablePath": "Resume",
+         "title": "Resume",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "File",
+         "__autoSerializationID": "FileField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_df38637a-4c5a-453c-8abd-9d01da2f8958",
+        "field": {
+         "id": "df38637a-4c5a-453c-8abd-9d01da2f8958",
+         "path": "df38637a-4c5a-453c-8abd-9d01da2f8958",
+         "humanReadablePath": "",
+         "title": "LinkedIn",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "String",
+         "__autoSerializationID": "StringField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_98db0e5d-f304-401a-b408-54af110779bb",
+        "field": {
+         "id": "98db0e5d-f304-401a-b408-54af110779bb",
+         "path": "98db0e5d-f304-401a-b408-54af110779bb",
+         "humanReadablePath": "",
+         "title": "GitHub or personal website",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "String",
+         "__autoSerializationID": "StringField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_d804034a-44ba-402e-a2da-25eca674c052",
+        "field": {
+         "id": "d804034a-44ba-402e-a2da-25eca674c052",
+         "path": "d804034a-44ba-402e-a2da-25eca674c052",
+         "humanReadablePath": "",
+         "title": "Why are you excited to join us at Sierra?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "LongText",
+         "__autoSerializationID": "LongTextField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_82ce80a9-cbeb-4bf7-83fb-ea746c961158",
+        "field": {
+         "id": "82ce80a9-cbeb-4bf7-83fb-ea746c961158",
+         "path": "82ce80a9-cbeb-4bf7-83fb-ea746c961158",
+         "humanReadablePath": "",
+         "title": "What qualities do you believe make someone a great Agent Engineer, and how do your skills and experiences make you the best candidate for this role?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "LongText",
+         "__autoSerializationID": "LongTextField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_e1041df4-f2a4-4af2-99fc-37382aafaa8b",
+        "field": {
+         "id": "e1041df4-f2a4-4af2-99fc-37382aafaa8b",
+         "path": "e1041df4-f2a4-4af2-99fc-37382aafaa8b",
+         "humanReadablePath": "",
+         "title": "What's your favorite junk food?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "String",
+         "__autoSerializationID": "StringField"
+        },
+        "fieldValue": null,
+        "isRequired": false,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_d9ecd718-2aef-4471-8e84-f5b024f9c337",
+        "field": {
+         "id": "d9ecd718-2aef-4471-8e84-f5b024f9c337",
+         "path": "d9ecd718-2aef-4471-8e84-f5b024f9c337",
+         "humanReadablePath": "",
+         "title": "Which Sierra office would you prefer to work from?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "ValueSelect",
+         "selectableValues": [
+          {
+           "label": "San Francisco office",
+           "value": "San Francisco office"
+          },
+          {
+           "label": "New York office",
+           "value": "New York office"
+          },
+          {
+           "label": "No preference",
+           "value": "No preference",
+           "isArchived": false
+          }
+         ],
+         "__autoSerializationID": "ValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": "<p><em>Sierra has US offices in San Francisco and New York City, and we'd love to know where you'd most like to be based. Please select your top pick. We'll do our best to consider your preferences, though we can't guarantee a match to a specific office.</em></p>",
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_ad2e98c1-3dd8-4d73-9c9e-890ba485f7eb",
+        "field": {
+         "id": "ad2e98c1-3dd8-4d73-9c9e-890ba485f7eb",
+         "path": "ad2e98c1-3dd8-4d73-9c9e-890ba485f7eb",
+         "humanReadablePath": "",
+         "title": "Are you legally authorized to work in the United States?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "ValueSelect",
+         "selectableValues": [
+          {
+           "label": "Yes",
+           "value": "Yes"
+          },
+          {
+           "label": "No",
+           "value": "No",
+           "isArchived": false
+          }
+         ],
+         "__autoSerializationID": "ValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_3e145cee-a83c-4212-9b46-b598248556e8",
+        "field": {
+         "id": "3e145cee-a83c-4212-9b46-b598248556e8",
+         "path": "3e145cee-a83c-4212-9b46-b598248556e8",
+         "humanReadablePath": "",
+         "title": "Will you now or in the future require visa sponsorship to work in the United States?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "ValueSelect",
+         "selectableValues": [
+          {
+           "label": "Yes",
+           "value": "Yes"
+          },
+          {
+           "label": "No",
+           "value": "No"
+          }
+         ],
+         "__autoSerializationID": "ValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       }
+      ]
+     },
+     {
+      "title": "Education Information",
+      "descriptionHtml": "<p><em>This information helps our University Recruiting team understand your academic background and anticipated graduation timeline.</em></p>",
+      "isHidden": null,
+      "fieldEntries": [
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_53e63c20-c2fa-4bd6-9245-a263de41b14e",
+        "field": {
+         "id": "53e63c20-c2fa-4bd6-9245-a263de41b14e",
+         "path": "53e63c20-c2fa-4bd6-9245-a263de41b14e",
+         "humanReadablePath": "",
+         "title": "What University\u00a0 do you currently attend?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "ValueSelect",
+         "selectableValues": [
+          {
+           "label": "Arizona State",
+           "value": "Arizona State"
+          },
+          {
+           "label": "Auburn",
+           "value": "Auburn",
+           "isArchived": false
+          },
+          {
+           "label": "Boston University",
+           "value": "Boston University",
+           "isArchived": false
+          },
+          {
+           "label": "Brown",
+           "value": "Brown",
+           "isArchived": false
+          },
+          {
+           "label": "Caltech",
+           "value": "Caltech",
+           "isArchived": false
+          },
+          {
+           "label": "Carleton University",
+           "value": "Carleton University",
+           "isArchived": false
+          },
+          {
+           "label": "Carngie Melon",
+           "value": "Carngie Melon",
+           "isArchived": false
+          },
+          {
+           "label": "Case Western Reserve",
+           "value": "Case Western Reserve",
+           "isArchived": false
+          },
+          {
+           "label": "Colorado School of Mines",
+           "value": "Colorado School of Mines",
+           "isArchived": false
+          },
+          {
+           "label": "Columbia",
+           "value": "Columbia",
+           "isArchived": false
+          },
+          {
+           "label": "Concordia University",
+           "value": "Concordia University",
+           "isArchived": false
+          },
+          {
+           "label": "Cornell",
+           "value": "Cornell",
+           "isArchived": false
+          },
+          {
+           "label": "Dalhousie University",
+           "value": "Dalhousie University",
+           "isArchived": false
+          },
+          {
+           "label": "Dartmouth",
+           "value": "Dartmouth",
+           "isArchived": false
+          },
+          {
+           "label": "Drexel",
+           "value": "Drexel",
+           "isArchived": false
+          },
+          {
+           "label": "Duke",
+           "value": "Duke",
+           "isArchived": false
+          },
+          {
+           "label": "George Mason",
+           "value": "George Mason",
+           "isArchived": false
+          },
+          {
+           "label": "Georgia Tech",
+           "value": "Georgia Tech",
+           "isArchived": false
+          },
+          {
+           "label": "Harvard",
+           "value": "Harvard",
+           "isArchived": false
+          },
+          {
+           "label": "Harvey Mudd",
+           "value": "Harvey Mudd",
+           "isArchived": false
+          },
+          {
+           "label": "Indiana University",
+           "value": "Indiana University",
+           "isArchived": false
+          },
+          {
+           "label": "Iowa State",
+           "value": "Iowa State",
+           "isArchived": false
+          },
+          {
+           "label": "McGill",
+           "value": "McGill",
+           "isArchived": false
+          },
+          {
+           "label": "McMaster University",
+           "value": "McMaster University",
+           "isArchived": false
+          },
+          {
+           "label": "Michigan State",
+           "value": "Michigan State",
+           "isArchived": false
+          },
+          {
+           "label": "MIT",
+           "value": "MIT",
+           "isArchived": false
+          },
+          {
+           "label": "NC State",
+           "value": "NC State",
+           "isArchived": false
+          },
+          {
+           "label": "Northeastern",
+           "value": "Northeastern",
+           "isArchived": false
+          },
+          {
+           "label": "Northwestern",
+           "value": "Northwestern",
+           "isArchived": false
+          },
+          {
+           "label": "NYU",
+           "value": "NYU",
+           "isArchived": false
+          },
+          {
+           "label": "Ohio State",
+           "value": "Ohio State",
+           "isArchived": false
+          },
+          {
+           "label": "Oregon State",
+           "value": "Oregon State",
+           "isArchived": false
+          },
+          {
+           "label": "Penn State",
+           "value": "Penn State",
+           "isArchived": false
+          },
+          {
+           "label": "Princeton",
+           "value": "Princeton",
+           "isArchived": false
+          },
+          {
+           "label": "Purdue",
+           "value": "Purdue",
+           "isArchived": false
+          },
+          {
+           "label": "Queen's University",
+           "value": "Queen's University",
+           "isArchived": false
+          },
+          {
+           "label": "Rice",
+           "value": "Rice",
+           "isArchived": false
+          },
+          {
+           "label": "RPI",
+           "value": "RPI",
+           "isArchived": false
+          },
+          {
+           "label": "Rutgers-New Brunswick",
+           "value": "Rutgers-New Brunswick",
+           "isArchived": false
+          },
+          {
+           "label": "San Jose State University",
+           "value": "San Jose State University",
+           "isArchived": false
+          },
+          {
+           "label": "Santa Clara University",
+           "value": "Santa Clara University",
+           "isArchived": false
+          },
+          {
+           "label": "Simon Fraser University",
+           "value": "Simon Fraser University",
+           "isArchived": false
+          },
+          {
+           "label": "Stanford",
+           "value": "Stanford",
+           "isArchived": false
+          },
+          {
+           "label": "Stevens Institute for Technology",
+           "value": "Stevens Institute for Technology",
+           "isArchived": false
+          },
+          {
+           "label": "Stony Brook",
+           "value": "Stony Brook",
+           "isArchived": false
+          },
+          {
+           "label": "Texas A&M",
+           "value": "Texas A&M",
+           "isArchived": false
+          },
+          {
+           "label": "Toronto Metropolitan University",
+           "value": "Toronto Metropolitan University",
+           "isArchived": false
+          },
+          {
+           "label": "Tufts",
+           "value": "Tufts",
+           "isArchived": false
+          },
+          {
+           "label": "UC Berkeley",
+           "value": "UC Berkeley",
+           "isArchived": false
+          },
+          {
+           "label": "UC Davis",
+           "value": "UC Davis",
+           "isArchived": false
+          },
+          {
+           "label": "UC Irvine",
+           "value": "UC Irvine",
+           "isArchived": false
+          },
+          {
+           "label": "UC San Diego",
+           "value": "UC San Diego",
+           "isArchived": false
+          },
+          {
+           "label": "UC Santa Barbara",
+           "value": "UC Santa Barbara",
+           "isArchived": false
+          },
+          {
+           "label": "UC Santa Cruz",
+           "value": "UC Santa Cruz",
+           "isArchived": false
+          },
+          {
+           "label": "UCLA",
+           "value": "UCLA",
+           "isArchived": false
+          },
+          {
+           "label": "UIUC",
+           "value": "UIUC",
+           "isArchived": false
+          },
+          {
+           "label": "UMass Amherst",
+           "value": "UMass Amherst",
+           "isArchived": false
+          },
+          {
+           "label": "UNC Chapel Hill",
+           "value": "UNC Chapel Hill",
+           "isArchived": false
+          },
+          {
+           "label": "Universit\u00e9 de Montr\u00e9al",
+           "value": "Universit\u00e9 de Montr\u00e9al",
+           "isArchived": false
+          },
+          {
+           "label": "Universit\u00e9 Laval",
+           "value": "Universit\u00e9 Laval",
+           "isArchived": false
+          },
+          {
+           "label": "University at Buffalo (SUNY)",
+           "value": "University at Buffalo (SUNY)",
+           "isArchived": false
+          },
+          {
+           "label": "University of Alberta",
+           "value": "University of Alberta",
+           "isArchived": false
+          },
+          {
+           "label": "University of Arizona",
+           "value": "University of Arizona",
+           "isArchived": false
+          },
+          {
+           "label": "University of British Columbia",
+           "value": "University of British Columbia",
+           "isArchived": false
+          },
+          {
+           "label": "University of Calgary",
+           "value": "University of Calgary",
+           "isArchived": false
+          },
+          {
+           "label": "University of Central Florida",
+           "value": "University of Central Florida",
+           "isArchived": false
+          },
+          {
+           "label": "University of Chicago",
+           "value": "University of Chicago",
+           "isArchived": false
+          },
+          {
+           "label": "University of Colorado Boulder",
+           "value": "University of Colorado Boulder",
+           "isArchived": false
+          },
+          {
+           "label": "University of Connecticut",
+           "value": "University of Connecticut",
+           "isArchived": false
+          },
+          {
+           "label": "University of Delaware",
+           "value": "University of Delaware",
+           "isArchived": false
+          },
+          {
+           "label": "University of Florida",
+           "value": "University of Florida",
+           "isArchived": false
+          },
+          {
+           "label": "University of Guelph",
+           "value": "University of Guelph",
+           "isArchived": false
+          },
+          {
+           "label": "University of Illinois Chicago",
+           "value": "University of Illinois Chicago",
+           "isArchived": false
+          },
+          {
+           "label": "University of Iowa",
+           "value": "University of Iowa",
+           "isArchived": false
+          },
+          {
+           "label": "University of Manitoba",
+           "value": "University of Manitoba",
+           "isArchived": false
+          },
+          {
+           "label": "University of Maryland",
+           "value": "University of Maryland",
+           "isArchived": false
+          },
+          {
+           "label": "University of Michigan",
+           "value": "University of Michigan",
+           "isArchived": false
+          },
+          {
+           "label": "University of Minnesota",
+           "value": "University of Minnesota",
+           "isArchived": false
+          },
+          {
+           "label": "University of Notre Dame",
+           "value": "University of Notre Dame",
+           "isArchived": false
+          },
+          {
+           "label": "University of Oregon",
+           "value": "University of Oregon",
+           "isArchived": false
+          },
+          {
+           "label": "University of Ottawa",
+           "value": "University of Ottawa",
+           "isArchived": false
+          },
+          {
+           "label": "University of Pennsylvania",
+           "value": "University of Pennsylvania",
+           "isArchived": false
+          },
+          {
+           "label": "University of Pittsburgh",
+           "value": "University of Pittsburgh",
+           "isArchived": false
+          },
+          {
+           "label": "University of Rochester",
+           "value": "University of Rochester",
+           "isArchived": false
+          },
+          {
+           "label": "University of Saskatchewan",
+           "value": "University of Saskatchewan",
+           "isArchived": false
+          },
+          {
+           "label": "University of Tennessee",
+           "value": "University of Tennessee",
+           "isArchived": false
+          },
+          {
+           "label": "University of Toronto",
+           "value": "University of Toronto",
+           "isArchived": false
+          },
+          {
+           "label": "University of Utah",
+           "value": "University of Utah",
+           "isArchived": false
+          },
+          {
+           "label": "University of Victoria",
+           "value": "University of Victoria",
+           "isArchived": false
+          },
+          {
+           "label": "University of Virginia",
+           "value": "University of Virginia",
+           "isArchived": false
+          },
+          {
+           "label": "University of Washington",
+           "value": "University of Washington",
+           "isArchived": false
+          },
+          {
+           "label": "University of Waterloo",
+           "value": "University of Waterloo",
+           "isArchived": false
+          },
+          {
+           "label": "University of Wisconsin",
+           "value": "University of Wisconsin",
+           "isArchived": false
+          },
+          {
+           "label": "USC",
+           "value": "USC",
+           "isArchived": false
+          },
+          {
+           "label": "UT Austin",
+           "value": "UT Austin",
+           "isArchived": false
+          },
+          {
+           "label": "Vanderbilt",
+           "value": "Vanderbilt",
+           "isArchived": false
+          },
+          {
+           "label": "Virginia Tech",
+           "value": "Virginia Tech",
+           "isArchived": false
+          },
+          {
+           "label": "Western University",
+           "value": "Western University",
+           "isArchived": false
+          },
+          {
+           "label": "WPI",
+           "value": "WPI",
+           "isArchived": false
+          },
+          {
+           "label": "Yale",
+           "value": "Yale",
+           "isArchived": false
+          },
+          {
+           "label": "York University",
+           "value": "York University",
+           "isArchived": false
+          },
+          {
+           "label": "Other",
+           "value": "Other",
+           "isArchived": false
+          }
+         ],
+         "__autoSerializationID": "ValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_fe0cc46c-aabf-426f-9043-7f98c60ae224",
+        "field": {
+         "id": "fe0cc46c-aabf-426f-9043-7f98c60ae224",
+         "path": "fe0cc46c-aabf-426f-9043-7f98c60ae224",
+         "humanReadablePath": "",
+         "title": "What is your GPA?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "Number",
+         "__autoSerializationID": "NumberField"
+        },
+        "fieldValue": null,
+        "isRequired": false,
+        "descriptionHtml": "<p><em>If your institution uses a GPA or equivalent grading system, please share your current cumulative GPA. This information is considered alongside the full context of your application and is not subject to a minimum requirement.</em></p>",
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_210dbcf8-c3b7-4a5f-b162-ea4a32c3d877",
+        "field": {
+         "id": "210dbcf8-c3b7-4a5f-b162-ea4a32c3d877",
+         "path": "210dbcf8-c3b7-4a5f-b162-ea4a32c3d877",
+         "humanReadablePath": "",
+         "title": "What is your ancitipated graduation season?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "ValueSelect",
+         "selectableValues": [
+          {
+           "label": "Winter 2027",
+           "value": "Winter 2027"
+          },
+          {
+           "label": "Spring 2028",
+           "value": "Spring 2028",
+           "isArchived": false
+          },
+          {
+           "label": "Summer 2028",
+           "value": "Summer 2028",
+           "isArchived": false
+          },
+          {
+           "label": "Fall 2028",
+           "value": "Fall 2028",
+           "isArchived": false
+          }
+         ],
+         "__autoSerializationID": "ValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       }
+      ]
+     },
+     {
+      "title": "Community & Events",
+      "descriptionHtml": "<p><em>The following questions help our University Recruiting team understand which student communities and recruiting events candidates engage with. Your response is optional and will not be used in evaluating your application.</em></p>",
+      "isHidden": null,
+      "fieldEntries": [
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_0d0053a3-8a88-4c1b-878e-3322901e0116",
+        "field": {
+         "id": "0d0053a3-8a88-4c1b-878e-3322901e0116",
+         "path": "0d0053a3-8a88-4c1b-878e-3322901e0116",
+         "humanReadablePath": "",
+         "title": "Are you a member of, or involved with, any of the following communities or organizations?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "MultiValueSelect",
+         "selectableValues": [
+          {
+           "label": "ColorStack",
+           "value": "ColorStack"
+          },
+          {
+           "label": "Rewriting the Code",
+           "value": "Rewriting the Code",
+           "isArchived": false
+          },
+          {
+           "label": "CodePath",
+           "value": "CodePath",
+           "isArchived": false
+          },
+          {
+           "label": "Break Through Tech",
+           "value": "Break Through Tech",
+           "isArchived": false
+          },
+          {
+           "label": "NSBE",
+           "value": "NSBE",
+           "isArchived": false
+          },
+          {
+           "label": "SHPE",
+           "value": "SHPE",
+           "isArchived": false
+          },
+          {
+           "label": "Girls Who Code",
+           "value": "Girls Who Code",
+           "isArchived": false
+          },
+          {
+           "label": "Other",
+           "value": "Other",
+           "isArchived": false
+          },
+          {
+           "label": "None / Prefer not to answer",
+           "value": "None / Prefer not to answer",
+           "isArchived": false
+          }
+         ],
+         "__autoSerializationID": "MultiValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": false,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_117ebb06-eeae-4fb3-a973-c36c7c98aa6a",
+        "field": {
+         "id": "117ebb06-eeae-4fb3-a973-c36c7c98aa6a",
+         "path": "117ebb06-eeae-4fb3-a973-c36c7c98aa6a",
+         "humanReadablePath": "",
+         "title": "Do you plan to attend any of the following events this recruiting season?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "MultiValueSelect",
+         "selectableValues": [
+          {
+           "label": "Grace Hopper Celebration",
+           "value": "Grace Hopper Celebration"
+          },
+          {
+           "label": "AfroTech",
+           "value": "AfroTech",
+           "isArchived": false
+          },
+          {
+           "label": "NSBE Annual Convention",
+           "value": "NSBE Annual Convention",
+           "isArchived": false
+          },
+          {
+           "label": "SHPE National Convention",
+           "value": "SHPE National Convention",
+           "isArchived": false
+          },
+          {
+           "label": "Tapia Conference",
+           "value": "Tapia Conference",
+           "isArchived": false
+          },
+          {
+           "label": "Out4UnderGrad",
+           "value": "Out4UnderGrad",
+           "isArchived": false
+          },
+          {
+           "label": "None / Not sure yet",
+           "value": "None / Not sure yet",
+           "isArchived": false
+          }
+         ],
+         "__autoSerializationID": "MultiValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": false,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_86c4a69d-956f-4d12-a302-8d866b7e1428",
+        "field": {
+         "id": "86c4a69d-956f-4d12-a302-8d866b7e1428",
+         "path": "86c4a69d-956f-4d12-a302-8d866b7e1428",
+         "humanReadablePath": "",
+         "title": "How did you hear about this opportunity?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "ValueSelect",
+         "selectableValues": [
+          {
+           "label": "Blog or news article",
+           "value": "Blog or news article"
+          },
+          {
+           "label": "Company website",
+           "value": "Company website"
+          },
+          {
+           "label": "Current employee",
+           "value": "Current employee"
+          },
+          {
+           "label": "Event",
+           "value": "Event"
+          },
+          {
+           "label": "LinkedIn",
+           "value": "LinkedIn"
+          },
+          {
+           "label": "Other",
+           "value": "Other"
+          },
+          {
+           "label": "Podcast",
+           "value": "Podcast"
+          },
+          {
+           "label": "Search engine",
+           "value": "Search engine"
+          }
+         ],
+         "__autoSerializationID": "ValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_ac18c033-947b-4f52-904b-a824413d8490",
+        "field": {
+         "id": "ac18c033-947b-4f52-904b-a824413d8490",
+         "path": "ac18c033-947b-4f52-904b-a824413d8490",
+         "humanReadablePath": "",
+         "title": "We use Metaview, an AI notetaking tool, to streamline interviews by recoding and summarizing discussions, enabling interviewers to be fully present without manual notetaking. With your approval, it silently records notes during interviews. Can Metaview transcribe all your interviews?",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "ValueSelect",
+         "selectableValues": [
+          {
+           "label": "Yes",
+           "value": "Yes"
+          },
+          {
+           "label": "No",
+           "value": "No"
+          }
+         ],
+         "__autoSerializationID": "ValueSelectField"
+        },
+        "fieldValue": null,
+        "isRequired": true,
+        "descriptionHtml": null,
+        "isHidden": null
+       },
+       {
+        "id": "f804c834-fa86-4e1f-9d70-ab4e269b6b86_faed879b-d4f9-40f7-92a6-8b6327c2b61b",
+        "field": {
+         "id": "faed879b-d4f9-40f7-92a6-8b6327c2b61b",
+         "path": "faed879b-d4f9-40f7-92a6-8b6327c2b61b",
+         "humanReadablePath": "",
+         "title": "Anything else? (Optional)",
+         "isNullable": false,
+         "isPrivate": false,
+         "isDeactivated": false,
+         "isMany": false,
+         "metadata": {},
+         "type": "LongText",
+         "__autoSerializationID": "LongTextField"
+        },
+        "fieldValue": null,
+        "isRequired": false,
+        "descriptionHtml": "<p>Is there anything else we should know about your candidacy or interest in Sierra?</p>",
+        "isHidden": null
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}
