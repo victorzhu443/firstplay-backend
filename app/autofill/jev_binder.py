@@ -196,6 +196,22 @@ _VERIFY_INSTRUCTIONS = (
     "whether it is a truthful, directly responsive answer to the question as asked."
 )
 
+_STABLE_INSTRUCTIONS = (
+    "The applicant corrected or supplied an answer on a job application form. state.profile "
+    "lists what the applicant has recorded about themselves. Decide whether the answer is a "
+    "stable fact or standing preference about the applicant — something that would be answered "
+    "the same way on any employer's form asking the same question — as opposed to something "
+    "specific to this company, this role, this posting, or this moment (a reason for interest, "
+    "a referral name, an office choice for this employer, an essay, a date that depends on this "
+    "role)."
+)
+_WHERE_INSTRUCTIONS = (
+    "state.profile lists the applicant's recorded facts as key: value (some empty). Choose the "
+    "ONE key this answer is the value of — the same kind of information, so that storing the "
+    "answer under that key would answer this question on other forms. Choose 'new' when no "
+    "listed key is that kind of information."
+)
+
 _ANSWER_INSTRUCTIONS = (
     "You are filling a job application for the applicant described in state.applicant. "
     "state.form.earlier_answers lists what has already been answered on this same form. "
@@ -601,6 +617,55 @@ class JevBinder:
                     key, p_key = None, 0.0
                 out[request_id] = (key, p_cov, p_key)
                 self._options.put(signature, key, min(p_cov, p_key) if key else p_cov)
+        return out
+
+    def judge_observations(
+        self, state: Dict[str, object], items: List[Tuple[str, str, str, Dict[str, str]]]
+    ) -> Dict[str, Tuple[float, Optional[str], float]]:
+        """Is a correction the applicant made a stable fact, and where does it live?
+
+        The semantic step of the learning loop (§50). For each (id, question,
+        answer, catalog): a Noul — would this answer be the same on any
+        employer's form, i.e. a fact or standing preference about the
+        applicant rather than something about this company, role or moment —
+        and a Choice over the profile's own keys plus "new" naming where it
+        belongs. Reflexion-style: the applicant's edit is the verbal feedback;
+        this turns it into a candidate for memory rather than a one-off.
+
+        Returns id -> (stable probability, key or "new" or None, key confidence).
+        """
+        if not items:
+            return {}
+        out: Dict[str, Tuple[float, Optional[str], float]] = {}
+        step = max(1, MAX_QUESTIONS_PER_CALL // 2)
+        for start in range(0, len(items), step):
+            batch = items[start:start + step]
+            questions = {}
+            for item_id, question, answer, catalog in batch:
+                questions[item_id + "__stable"] = noul(
+                    _STABLE_INSTRUCTIONS + "\n\nQuestion on the form: {}\nThe applicant's answer: {}".format(question, answer),
+                    true_means="A fact or standing preference about the applicant; the same answer belongs on any employer's form asking this.",
+                    false_means="Specific to this company, role, posting or moment, or free prose, or a one-off.",
+                )
+                criteria = {key: "{}: {}".format(key, (value or "(empty)")[:60]) for key, value in catalog.items()}
+                criteria["new"] = "None of these keys; this is a new kind of fact about the applicant."
+                questions[item_id + "__key"] = choice(
+                    _WHERE_INSTRUCTIONS + "\n\nQuestion on the form: {}\nThe applicant's answer: {}".format(question, answer),
+                    criteria,
+                )
+            decision = self._decide(state, questions, description="judge {} correction(s) for memory".format(len(batch)))
+            self.calls += 1
+            self.cost_usd += decision.cost_usd
+            self.questions_asked += len(questions)
+            for item_id, _q, _a, catalog in batch:
+                stable = decision.get(item_id + "__stable")
+                where = decision.get(item_id + "__key")
+                p_stable = stable.belief() if stable is not None else 0.0
+                key = where.choice if where is not None and where.choice and where.choice != "unsure" else None
+                p_key = where.confidence if where is not None and key else 0.0
+                if key is not None and key != "new" and key not in catalog:
+                    key, p_key = None, 0.0
+                out[item_id] = (p_stable, key, p_key)
         return out
 
     def verify_values(

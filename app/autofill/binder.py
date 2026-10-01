@@ -998,6 +998,7 @@ def _applicant_state(memory: Memory, today: Optional[date] = None) -> Dict[str, 
         "needs_sponsorship_by_country": dict((memory.per_country or {}).get("needs_sponsorship", {})),
         "education": dict(memory.education or {}),
         "preferences": preferences,
+        "learned": {k: v for k, v in (getattr(memory, "learned", None) or {}).items() if v},
         "current_location": (memory.facts or {}).get("current_location"),
         "employers": [
             (e.get("name") if isinstance(e, dict) else str(e)) for e in (getattr(memory, "employers", None) or [])
@@ -1032,7 +1033,7 @@ SECOND_PASS = True
 #: Profile keys the second pass may write. Files never; protected and consent
 #: sections never; nothing a model composed. Values come from memory.lookup so
 #: a phone number is formatted the way the first pass formats it.
-_SECOND_PASS_SECTIONS = ("facts", "education", "preferences", "legal_status")
+_SECOND_PASS_SECTIONS = ("facts", "education", "preferences", "legal_status", "learned")
 _SECOND_PASS_EXCLUDE = {"resume_file", "cover_letter", "transcript_file", "personal_preferences"}
 
 
