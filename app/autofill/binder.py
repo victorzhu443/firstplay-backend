@@ -296,6 +296,23 @@ def _within_options(resolution: Optional[Resolution], field: FormField) -> Optio
                 needs_review=True,
                 reason="this is a yes/no question; {!r} is not an answer to it".format(str(resolution.value)[:30]),
             )
+    # A numeric control takes a number. A phone number becomes its digits
+    # (TELUS asks "Phone" as a Number field); "8 weeks +" into "notice period
+    # (in months)" is not an answer and goes back for review.
+    if getattr(field, "numeric", False) and resolution.value is not None and not resolution.values:
+        text = str(resolution.value).strip()
+        digits = re.sub(r"\D", "", text)
+        if re.fullmatch(r"-?\d+([.,]\d+)?", text):
+            pass
+        elif len(digits) >= 7 and re.fullmatch(r"[\d\s().+-]+", text):
+            resolution.value = digits
+        else:
+            return Resolution(
+                field_key=field.key, value=None, source=FillSource.HUMAN, confidence=0.0,
+                needs_review=True,
+                reason="this field takes a number; {!r} is not one".format(text[:30]),
+            )
+
     if not field.options or (resolution.value is None and not resolution.values):
         return resolution
 

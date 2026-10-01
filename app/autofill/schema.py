@@ -153,6 +153,11 @@ class FormField(BaseModel):
     field_class: FieldClass = FieldClass.UNKNOWN
     required: bool = False
     options: List[FieldOption] = Field(default_factory=list)
+    #: The control accepts only a number (Ashby's `Number` type, rendered as
+    #: <input type=number>). Kept as a flag rather than a FieldKind so every
+    #: text rule still applies; the binder refuses to call a non-numeric
+    #: value filled (R48-2: "8 weeks +" into "notice period (in months)").
+    numeric: bool = False
 
     def _allowed_sources(self) -> frozenset:
         allowed = ALLOWED_FILL_SOURCES.get(self.field_class, frozenset())
