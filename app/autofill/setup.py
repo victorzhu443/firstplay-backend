@@ -35,6 +35,10 @@ NOTES: Dict[str, str] = {
     "heard_about": "how you usually find roles, e.g. 'LinkedIn'",
     "postal_code": "your home zip / postal code",
     "links_combined": "one line for forms that ask for any of your links",
+    "security_clearance": "'None' unless you hold or held one; else the level, e.g. 'Secret'",
+    "attended_career_fair": "'Yes' if you met employers at a career fair or on campus this cycle",
+    "prior_internships": "how many internships / co-ops you have completed, e.g. '1'",
+    "gpa_scale": "the scale your GPA is on, e.g. '4.0'",
 }
 
 #: Suggested answers for the protected questions. Any phrasing works — the

@@ -1352,6 +1352,294 @@ Next is Ashby, on the same protocol; then Workday, then Oracle.
 
 ---
 
+## 40. Widening the profile-answer gate: multi-selects, class standing, background
+
+After §39, 184 requirements remained across 101 boards. Sorted by hand,
+about 50 were bounded decisions from facts the applicant already holds:
+term availability, class standing, clearance, career fairs, prior
+internships, the GPA scale. The gate of §25 could not reach them for three
+reasons, none of them about the model.
+
+| gap | example | why the gate missed it |
+|---|---|---|
+| multi-selects refused | General Matter "When are you available… check all that apply"; Optiver's 11 offices; Rocket Lab's clearance list | the gate accepted single-choice and boolean only |
+| state too thin | Compeer "current academic status"; QuEra "highest level of education obtained"; Varda "seeking a Spring internship?" | no class standing, no today's date, no term calendar in state |
+| facts absent | BTI "US government security clearance?"; Perpay "fall career fair?"; Klaviyo "prior internships"; Radix "GPA range" | not in the profile at all |
+
+Arithmetic questions (a GPA to a bucket, a graduation year) stay in code;
+they were already answered by `match_numeric_bucket` where the label was
+recognised.
+
+**Decision.** A MULTI_SELECT with at most 12 options is asked as one Noul
+per option: tick at p ≥ 0.90, no at p ≤ 0.10, anything between leaves the
+whole field with the applicant, carrying the partial set as a suggestion.
+Batches are cut by question count, not request count. `_applicant_state`
+adds `today`, class standing derived from the education dates (academic
+years start in August; four years assumed when only the graduation date is
+stored), an availability note that names the month each term starts, and a
+whitelisted `background` dict of four new onboarding facts —
+`security_clearance`, `attended_career_fair`, `prior_internships`,
+`gpa_scale`. Protected and contact data still never reach the state.
+
+**Three things went wrong on the way, each caught by the live model on the
+board that exposed the question**, run in-process against the frozen posting
+with per-option beliefs printed:
+
+1. *A silent profile guessed.* Asked "would the applicant tick this option?",
+   the Noul put "Never held a clearance" at 0.90 with no clearance fact in
+   the profile — a plausible guess about a student, exactly on the
+   threshold. The wording now makes silence a no ("if the profile says
+   nothing that bears on the option, it does not apply — the applicant
+   decides"); the same option fell to 0.28 and the field went to review.
+2. *The note contradicted a fact.* "Any listed term is acceptable" beside an
+   earliest start of May 2027 left "Spring 2027" at p = 0.50. The note now
+   states the rule (a term applies only if it starts on or after the
+   earliest start) and the calendar (Spring = January, Summer = May/June,
+   Fall = August/September, Winter = December/January); Spring fell to 0.15
+   and the field filled at 0.89.
+3. *"Not Applicable" is not a proposition.* With the clearance fact present,
+   every level scored ≤ 0.05 and "Not Applicable" 0.15 — a model does not
+   read the opt-out as something one ticks. When every concrete option is a
+   confident no and exactly one option means none, that one is chosen by
+   elimination with the weakest no's confidence (0.93 on Rocket Lab).
+
+**Before / after, real Jev, the applicant's real profile** (facts rows used a
+temporary profile copy carrying the four new facts; nothing was written into
+the real profile):
+
+| board · question | before | after |
+|---|---|---|
+| General Matter · available terms (multi) | review | Summer 2027 · 0.89 |
+| Compeer · current academic status | review | Junior · 1.00 |
+| QuEra · highest level of education obtained | review | Some College, No Degree · 0.87 |
+| General Matter · active clearances (multi), fact present | review | Never held a clearance · 0.92 |
+| Rocket Lab · active clearances (multi), fact present | review | Not Applicable · 0.93 by elimination |
+| BTI360 · US government clearance?, fact present | review | No · 1.00 |
+| Perpay · fall career fair?, fact present | review | No · 0.97 |
+| Klaviyo · prior internships, fact present | review | 1 · 0.94 |
+| Radix · GPA range, fact present | review | 0.0 – 4.0 · 0.89 |
+| Optiver · offices open to (multi) | review | review — the profile is silent on offices, and the model now says so |
+| Varda · seeking a Spring internship? | review | review at 0.56 — for a term-flexible applicant with a May 2027 earliest start, a Spring 2028 role is open; the question is genuinely undetermined |
+
+Cost: about $0.0001 per multi-select field; a plan with three of them is
+still under 2 s end to end.
+
+**Held-out check.** Ten fresh boards (round 8): 10 model decisions, every one
+traceable to a stored fact (graduation year ×3, degree level, degree
+subject, work-eligibility statement, education status, based in, nationality
+— all from education and legal_status) and no multi-select on those forms.
+One policy catch: Maven Securities' UK-worded "If you require any support or
+adjustments during the recruitment process" was classified SCREENING and
+the gate answered it "No" from nothing. It is disability-adjacent; it is now
+a memory-only pattern and is replayed only from the stored answer.
+
+**Still open.** The multi-select write path has not yet run through the
+installed extension (the tab was hidden every time; it fills on the next
+look). The four facts are not yet in Victor's profile; until he adds them
+those questions stay amber, by design.
+
+---
+
+## 41. A plan is a function of the engine, and a fill must not outlive the worker
+
+The first attempt to see §40's multi-select write through the installed
+extension (General Matter, 2026-09-28) produced neither a fill nor a clean
+failure, and the console explained both halves:
+
+- `plan ready 2.2s (plan from cache)` — the session plan cache is keyed on
+  posting and profile, so the plan served was the one built *before* the
+  gate was widened. Twelve minutes of waiting tested nothing.
+- `could not run the fill in the page's world (… the message channel closed
+  before a response was received); falling back` and `filled 756.7s` — the
+  content script asked the service worker to run the page-world fill while
+  the tab was hidden; the worker's `executeScript` sat in §37's visibility
+  wait, MV3 stopped the idle worker, the channel closed, and the fill fell
+  back to the isolated world, where 15 selects could not be driven.
+
+**Decision.** The backend exposes an `engine` fingerprint — a hash of the
+autofill package's source — on the plan response and the health route, and
+the extension's cache key carries it (0.4.20): a backend change is never
+served a stale plan. The content script waits for visibility *itself* before
+asking the worker, so the worker's call lasts seconds (hydration), not
+minutes; and a closed channel is retried once before any fallback, because
+it is the worker having been stopped, not a page problem.
+
+**Measurement note.** The same session showed a hazard in the tooling that
+had nothing to do with the product: two shell commands run concurrently
+share one working directory, and a `cd` in one moved the other. A checkout
+meant for the extension repository ran in the backend's. Nothing was lost
+(the commit had already landed and been pushed), but every command since
+names its repository explicitly.
+
+---
+
+## 42. Plan latency: the gates run in the same breath
+
+Victor's target is a fill under one second. The extension's own numbers on
+round 9 (0.4.20, window on screen): page settled 0.3–2.2 s, plan ready
+1.0–4.5 s (backend 0.6–2.1 s), fill 0.3–1.6 s on seven boards and 14–27 s
+on three. The fill outliers are being measured per tier (0.4.21) before
+anything is changed there. The plan side was measured first:
+
+| board | first visit, before | after | second visit |
+|---|---|---|---|
+| Truveta | 783 ms = classify 433 → answer 348 | 367 ms | 2 ms |
+| DV Trading | 2,114 ms = classify 409 → match 319 → answer 1,377 | 1,294 ms | 5 ms |
+| Amperesand | 689 ms = classify 349 → answer 338 | 317 ms | 2 ms |
+| HPR | 590 ms = classify 258 → match 331 | 918 ms* | — |
+
+Every millisecond of a first-visit plan is Jev round trips (230–2,400 ms
+each, the spread is the network's), run one after another because each
+gate consumed the previous one's output. But the profile-answer gate needs
+only the form and the profile, and the option mismatches memory already
+knows about need only the stored value and the option list. Both now run
+concurrently with theme classification (a two-worker pool around one HTTP
+client), and their results are kept for whichever fields the themes leave
+open; mismatches that appear only once a theme resolves are matched
+afterwards, as before. Model decisions are identical in both modes on all
+four boards.
+
+\* HPR's "after" was slower because one call took 571 ms instead of 331 —
+the per-call spread is larger than the structural gain on a small form.
+The structural gain is one round trip per plan; the spread belongs to the
+model host and is bounded by the 4 s budget of §28.
+
+**Where this leaves the target.** A repeat visit is instant (the session
+cache, now keyed on the engine). A first visit is one Jev round trip plus
+whatever the page itself takes to settle, and the request goes out at first
+sight of the posting, so on most boards the plan is ready before the page
+is. What remains above one second is the fill's own outliers — next.
+
+---
+
+## 43. The fill under one second: where its time went, and a race the oracle caught
+
+Victor's target: "filling it out in under 1 s is the optimal case." With
+the hidden-tab wait no longer counted as fill (0.4.22) and per-tier timing
+(0.4.21), the window on screen, the fill measured:
+
+| board (0.4.22) | fill | where |
+|---|---|---|
+| Truveta | 100 ms | nothing over 20 ms |
+| Rocket Lab | 735 ms | picks 581 ms — thirteen react-selects, each confirmed on a 40 ms poll in turn |
+| General Matter | 2,351 ms | lookups 863 ms; picks 1,383 ms with the Location geocoder's 804 ms network wait *inside* a pick |
+
+The 14–27 s readings of §42's round were the hidden-tab wait; the fill
+itself had never been slow.
+
+**Decisions (0.4.23–0.4.24).**
+- Picks are fired in one pass and their readbacks awaited together, polled
+  at frame rate. Rocket Lab's picks: 581 → 20 ms; fill 735 → 158 ms.
+- A typeahead with no loader (Location) is typed during the parallel
+  lookups tier, so its network wait overlaps the loader lookups instead of
+  following them. General Matter's fill: 2,351 → 828 ms, all of it the
+  geocoder's own latency, which now sets the floor.
+- Loader results are cached per control and term, and the last plan's
+  school / degree / discipline terms are looked up the moment the next
+  board settles — before its plan arrives. Pacific Fusion, the next board
+  opened: lookups 65 ms, fill 145 ms.
+
+**The race (0.4.25).** With picks confirmed on the widget's *held* state, the
+dry-run submit ran before the form had committed the values: Pacific
+Fusion, Rocket Lab and General Matter each showed correctly filled selects
+carrying a stale "required" flag, and the console printed `plan said FILL`
+rows for them. Two page probes settled it: firing four picks in one tick
+rendered all four values correctly (so nothing was lost), and a fresh
+dry-run on the untouched page read the same fields as valid (so the flags
+were a timing artefact). The rendered value is the commit signal when the
+tab is visible — the wrapper owns the value, so the display changes only
+once the form state has it — and the held state is used only when hidden;
+the dry-run waits one frame after the last write. The oracle of §32 caught
+a defect the fill's own readback could not see, which is what it is for.
+
+**State of the target.** Fill: 0.1–0.2 s on boards without a geocoder,
+~0.8 s with one (the network sets it). Plan: instant on a repeat visit,
+one Jev round trip on a first visit (§42), overlapped with the page's own
+settling. The remaining above-one-second cases are the page loading and
+the model host's latency spread, neither of which the extension controls.
+
+---
+
+## 44. One pick per frame: two react-select picks in one tick lose the first
+
+§43's account of the dry-run race was half right. 0.4.25 confirmed picks
+on the rendered value and gave the form a frame before the dry-run, and
+Lightmatter still printed `plan said FILL` for four correctly displayed
+selects. So the theory was tested on the page, with a dry-run submit after
+each variant, on two of those selects:
+
+| picks | form's verdict after a dry-run submit |
+|---|---|
+| both fired in the same tick, 150 ms wait | first flagged **required**, second valid |
+| one per frame (rAF + macrotask between), 150 ms wait | both valid |
+
+Both variants *displayed* both values — react-select keeps its own
+selected value — which is why the readback, the display check and the
+first probe of §43 all passed. Greenhouse's wrapper folds each change into
+the form's state from a closure over the previous state; two changes in
+one tick and the second overwrites the first. The form's own validation
+was the only observer that could see it, which is the point of §32.
+
+**Decision (0.4.26).** Picks run one per frame, as they had until 0.4.23;
+the concurrency that was worth having stays in the lookups tier, where it
+belongs. A pick confirms on its rendered value, or on its held state once a
+frame has passed (some widgets, Lightmatter's gender select among them,
+never expose a readable display and ran the whole 2 s wait). Thirteen
+selects now cost roughly a quarter of a second rather than 581 ms, and the
+dry-run reports what the form will actually submit.
+
+**Lesson recorded.** A confirmation that reads the widget is not a
+confirmation that reads the form. When the oracle and the readback
+disagree, the oracle is right until proven otherwise on the page.
+
+---
+
+## 45. Greenhouse, closed out
+
+Victor: "so are we almost done with greenhouse applications and can move on
+to ashby?" The answer, with the numbers as of 2026-09-29:
+
+| | |
+|---|---|
+| boards opened | 132 |
+| excluded (closed since listing, employer-hosted redirect, network error) | 16 |
+| **live boards measured through the installed extension** | **116** |
+| fields filled | 1,849 |
+| "known but could not be entered" | 21 in total; 0 since 0.4.19, across 64 consecutive unseen boards |
+| false "still required" over filled fields | 0 on 0.4.26+ (Lightmatter, Pacific Fusion, Rocket Lab, Insurify, OpenTable) |
+| fill, tab on screen | 0.1–0.4 s without a geocoder; ~0.8–0.9 s with one (network floor) |
+| first-visit plan | one Jev round trip (§42); repeat visit instant (engine-keyed cache, §41) |
+
+Round 10 drew from sources never sampled before — the Simplify Summer
+2026 and New-Grad lists — because the original pool was exhausted. Of the
+first six intern postings four had closed since listing; the New-Grad list,
+liveness-checked against the board API first, gave 77 live boards. Five ran
+before the window was covered for the day: GITAI 15, Cloudflare 17,
+Katalyst 12, OpenTable 16, Insurify 18 — 78 filled, 0 entry failures, no
+false flags. New-grad forms ask the same shapes with different words; the
+gate answered them from the same facts.
+
+**Defects found in this closing pass, and where they went.**
+- One-pass pick firing (0.4.23) lost every pick but the last in the form's
+  state while every widget displayed correctly — §44, fixed 0.4.26.
+- A pick covered mid-fill waited the whole 2 s cap per select (Rocket Lab,
+  25.6 s in picks) — 0.4.27 caps the wait at twelve frames when hidden.
+- A loader that never answered held OpenTable's lookups tier for 8.7 s —
+  0.4.28 gives up at 3 s and names slow lookups.
+
+**What remains is not Greenhouse.** Essays, consents, disclosures, bespoke
+questions, custom self-identification wording, and one profile gap
+(education start date). Two coverage candidates stay open from §39:
+availability/term selects beyond the ones the gate now reaches, and class
+year as a stored fact rather than a derivation.
+
+**Decision.** Greenhouse is done for this pass. Ashby next, on the same
+protocol: a held-out draw from the Simplify lists (never sampled for
+Ashby), the installed extension, the form's own validation as oracle, one
+PR and one entry per iteration.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

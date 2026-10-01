@@ -684,3 +684,16 @@ def test_custom_address_questions_derive_from_the_stored_location():
     assert memory_key_for("question_2", "Country") == "country_of_residence"
     assert memory_key_for("question_3", "Address Line 1") == "street_address"
     assert memory_key_for("question_4", "City") == "city_of_residence"
+
+
+def test_the_uk_adjustments_wording_is_memory_only_not_screening():
+    """Maven Securities 8043552: answered "No" by the model gate before this pattern."""
+    from app.autofill.classify import classify, memory_only_key_for
+    from app.autofill.schema import FieldClass, FieldKind
+
+    label = ("If you require any support or adjustments during the recruitment process, "
+             "please let us know")
+    assert memory_only_key_for(label) == "accommodation_needs"
+    assert classify("question_123", label, FieldKind.SINGLE_SELECT, option_count=2) == FieldClass.LEGAL
+    # Housing is not an accommodation request.
+    assert memory_only_key_for("Will you need housing accommodation in Seattle?") is None
