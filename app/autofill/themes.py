@@ -83,6 +83,8 @@ class QuestionTheme(str, Enum):
     WILLING_TO_RELOCATE = "willing_to_relocate"
     IN_OFFICE_TOLERANCE = "in_office_tolerance"
     EARLIEST_START = "earliest_start"
+    INTERNSHIP_END = "internship_end"
+    DESIRED_SALARY = "desired_salary"
     TIMELINE_NOTES = "timeline_notes"
     HEARD_ABOUT = "heard_about"
     PERSONAL_PREFERENCES = "personal_preferences"
@@ -164,6 +166,12 @@ THEME_CRITERIA: Dict[str, str] = {
     QuestionTheme.EARLIEST_START.value:
         "Asks the earliest date the candidate could start, or their notice "
         "period.",
+    QuestionTheme.INTERNSHIP_END.value:
+        "Asks when the candidate's internship or placement would end, or their "
+        "ideal or latest end date.",
+    QuestionTheme.DESIRED_SALARY.value:
+        "Asks what salary, compensation, pay or rate the candidate expects, "
+        "desires or requires.",
     QuestionTheme.TIMELINE_NOTES.value:
         "Asks about deadlines, competing offers or timing constraints the "
         "employer should know about.",
@@ -216,6 +224,8 @@ THEME_RESOLVERS: Dict[QuestionTheme, Resolver] = {
     QuestionTheme.WILLING_TO_RELOCATE: Resolver.STORED,
     QuestionTheme.IN_OFFICE_TOLERANCE: Resolver.STORED,
     QuestionTheme.EARLIEST_START: Resolver.STORED,
+    QuestionTheme.INTERNSHIP_END: Resolver.STORED,
+    QuestionTheme.DESIRED_SALARY: Resolver.STORED,
     QuestionTheme.TIMELINE_NOTES: Resolver.STORED,
     QuestionTheme.HEARD_ABOUT: Resolver.STORED,
     QuestionTheme.PERSONAL_PREFERENCES: Resolver.STORED,
@@ -243,6 +253,8 @@ THEME_MEMORY_KEYS: Dict[QuestionTheme, str] = {
     QuestionTheme.WILLING_TO_RELOCATE: "open_to_relocation",
     QuestionTheme.IN_OFFICE_TOLERANCE: "in_office_tolerance",
     QuestionTheme.EARLIEST_START: "earliest_start",
+    QuestionTheme.INTERNSHIP_END: "internship_end",
+    QuestionTheme.DESIRED_SALARY: "desired_salary",
     QuestionTheme.TIMELINE_NOTES: "timeline_notes",
     QuestionTheme.HEARD_ABOUT: "heard_about",
     QuestionTheme.PERSONAL_PREFERENCES: "personal_preferences",

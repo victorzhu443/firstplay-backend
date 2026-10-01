@@ -176,6 +176,26 @@ _NONE_OPTION = re.compile(
     r"\b(none|not applicable|n/?a|never held|no clearance|do not have|i do not have|neither)\b", re.I
 )
 
+_COVERED_INSTRUCTIONS = (
+    "state.profile lists what the applicant has recorded about themselves, as key: value. "
+    "Decide whether that profile contains the specific information this free-text question "
+    "asks for. 'Contains' means a value that directly states it — not something from which it "
+    "could be guessed. A question about the applicant's own words, opinions, motivations, "
+    "stories, references, or anything not stated is NOT covered."
+)
+_KEY_INSTRUCTIONS = (
+    "state.profile lists the applicant's recorded facts as key: value. Choose the ONE key whose "
+    "stored value, written verbatim into this field, truthfully answers the question. Choose "
+    "'none' when no single value does, when the field wants prose, or when the value would be "
+    "only loosely related (a graduation date is not a start date; a current location is not an "
+    "address; an email is not a university email unless it says so)."
+)
+_VERIFY_INSTRUCTIONS = (
+    "state.profile is the applicant's recorded information. A proposed answer is about to be "
+    "written into a free-text field on a job application under the applicant's name. Judge "
+    "whether it is a truthful, directly responsive answer to the question as asked."
+)
+
 _ANSWER_INSTRUCTIONS = (
     "You are filling a job application for the applicant described in state.applicant. "
     "state.form.earlier_answers lists what has already been answered on this same form. "
@@ -520,6 +540,89 @@ class JevBinder:
                 return [], 0.0
             weakest_no = min(weakest_no, 1.0 - p)
         return [none_options[0][1]], weakest_no
+
+    def second_pass(
+        self, state: Dict[str, object], requests: List[Tuple[str, FormField, Dict[str, str]]]
+    ) -> Dict[str, Tuple[Optional[str], float, float]]:
+        """For a free-text question nothing matched: is it covered, and by which fact?
+
+        Victor, 2026-10-01: "compile the questions we couldn't answer, decide
+        yes or no whether we have the information, and answer it as well."
+        Two bounded questions per field, from the profile alone: a Noul —
+        does the profile contain the specific information this question asks
+        for — and a Choice over the profile's own keys naming the fact that
+        answers it. The answer written is the stored value of that key, never
+        text the model composed. Essays, protected and consent fields never
+        arrive here (the caller's eligibility rule).
+
+        Returns request_id -> (profile key or None, covered probability,
+        key-choice confidence).
+        """
+        if not requests:
+            return {}
+        state_hash = hashlib.sha1(
+            json.dumps(state.get("profile", {}), sort_keys=True, default=str).encode()
+        ).hexdigest()[:12]
+        out: Dict[str, Tuple[Optional[str], float, float]] = {}
+        pending = []
+        for request_id, field, catalog in requests:
+            signature = "second::{}::{}".format(field.label[:100], state_hash)
+            cached = self._options.get(signature)
+            if cached is not None:
+                key, packed = cached
+                out[request_id] = (key, packed, packed)
+                continue
+            pending.append((request_id, field, catalog, signature))
+        for start in range(0, len(pending), max(1, MAX_QUESTIONS_PER_CALL // 2)):
+            batch = pending[start:start + max(1, MAX_QUESTIONS_PER_CALL // 2)]
+            questions = {}
+            for request_id, field, catalog, _sig in batch:
+                questions[request_id + "__cov"] = noul(
+                    _COVERED_INSTRUCTIONS + "\n\nQuestion on the form: " + field.label,
+                    true_means="state.profile holds the specific fact this question asks for, stated plainly.",
+                    false_means="The question asks for something the profile does not state, or only hints at.",
+                )
+                criteria = {key: "{}: {}".format(key, value[:80]) for key, value in catalog.items()}
+                criteria["none"] = "No single profile entry answers this question."
+                questions[request_id + "__key"] = choice(
+                    _KEY_INSTRUCTIONS + "\n\nQuestion on the form: " + field.label, criteria,
+                )
+            decision = self._decide(state, questions, description="second pass over {} text question(s)".format(len(batch)))
+            self.calls += 1
+            self.cost_usd += decision.cost_usd
+            self.questions_asked += len(questions)
+            for request_id, field, catalog, signature in batch:
+                cov = decision.get(request_id + "__cov")
+                picked = decision.get(request_id + "__key")
+                p_cov = cov.belief() if cov is not None else 0.0
+                key = picked.choice if picked is not None and picked.choice and picked.choice != "none" else None
+                p_key = picked.confidence if picked is not None and key else 0.0
+                if key is not None and key not in catalog:
+                    key, p_key = None, 0.0
+                out[request_id] = (key, p_cov, p_key)
+                self._options.put(signature, key, min(p_cov, p_key) if key else p_cov)
+        return out
+
+    def verify_values(
+        self, state: Dict[str, object], items: List[Tuple[str, str, str]]
+    ) -> Dict[str, float]:
+        """Is writing this stored value into this field a truthful, direct answer?"""
+        if not items:
+            return {}
+        questions = {
+            request_id: noul(
+                _VERIFY_INSTRUCTIONS + "\n\nQuestion on the form: {}\nProposed answer: {}".format(label, value),
+                true_means="The proposed answer is exactly what this applicant would truthfully write here.",
+                false_means="The answer is off-topic, only partly responsive, in the wrong form, or not supported by the profile.",
+            )
+            for request_id, label, value in items
+        }
+        decision = self._decide(state, questions, description="verify {} second-pass answer(s)".format(len(items)))
+        self.calls += 1
+        self.cost_usd += decision.cost_usd
+        self.questions_asked += len(questions)
+        return {request_id: (decision.get(request_id).belief() if decision.get(request_id) is not None else 0.0)
+                for request_id, _l, _v in items}
 
     def _decide(self, state, questions, description):
         """One call, behind a circuit breaker.

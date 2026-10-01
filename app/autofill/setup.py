@@ -39,6 +39,22 @@ NOTES: Dict[str, str] = {
     "attended_career_fair": "'Yes' if you met employers at a career fair or on campus this cycle",
     "prior_internships": "how many internships / co-ops you have completed, e.g. '1'",
     "gpa_scale": "the scale your GPA is on, e.g. '4.0'",
+    "twitter": "handle or URL; leave empty to leave the field blank",
+    "street_address_2": "apartment or suite; leave empty to leave it blank",
+    "years_experience": "years of industry experience as a number, internships included if you count them",
+    "heard_about_fallback": "sources to pick when the menu lacks heard_about, in order, separated by |",
+    "internship_end": "month and year your internship would end, e.g. 'August 2027'",
+    "desired_salary": "what you type when asked for salary expectations",
+    "interview_language": "the language you'd pick for a coding interview",
+    "transgender": "exactly as you'd answer it, e.g. \"I don't wish to answer\"",
+    "sexual_orientation": "exactly as you'd answer it, e.g. \"I don't wish to answer\"",
+    "privacy_notice": "'Agree' to accept privacy notices/data-processing statements every time; empty to decide each time",
+    "truthful_certification": "'Agree' to certify your answers are true every time (you still review before submit)",
+    "terms_and_conditions": "'Agree' to accept terms/codes of conduct every time; empty to decide each time",
+    "sms_messages": "'Yes' or 'No' to recruiting text messages",
+    "marketing_communications": "'Yes' or 'No' to marketing / talent-community emails",
+    "interview_recording": "'Yes' or 'No' to recorded interviews; empty to decide each time",
+    "background_check": "'Yes' to authorise background checks every time; empty to decide each time",
 }
 
 #: Suggested answers for the protected questions. Any phrasing works — the

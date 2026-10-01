@@ -22,7 +22,8 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.autofill.format import OPTION_MISMATCH, match_option, option_for_bool
+from app.autofill.classify import FOLLOW_UP_ON_OTHER, is_follow_up, normalize_label
+from app.autofill.format import OPTION_MISMATCH, _as_bool, match_option, option_for_bool
 from app.autofill.memory import Memory, Resolution
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField, FormSchema
 from app.autofill.themes import (
@@ -222,6 +223,14 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
      re.compile(r"\b(currently (located|based|live)|where .{0,30}"
                r"(based|work from|intend to work))", re.I)),
     (QuestionTheme.HEARD_ABOUT, re.compile(r"\bhear about\b", re.I)),
+    # R48-2: "What is your desired salary?" x6, "What are your salary
+    # expectations?" x5+3, "Desired Salary" x3, "annual base salary
+    # expectations" — all went unanswered with desired_salary stored.
+    (QuestionTheme.DESIRED_SALARY,
+     re.compile(r"\b(desired|expected|target|anticipated)\s+(annual\s+)?(base\s+)?(salary|compensation|pay|rate)\b"
+                r"|\b(salary|compensation|pay)\s+(expectation|requirement)s?\b|\bexpected base\b", re.I)),
+    (QuestionTheme.INTERNSHIP_END,
+     re.compile(r"\b(ideal |anticipated |expected )?end date\b|\bending your internship\b|\binternship end\b", re.I)),
     (QuestionTheme.EARLIEST_START,
      re.compile(r"\b(earliest|notice period|start date|when .{0,20}start)\b", re.I)),
     (QuestionTheme.TIMELINE_NOTES,
@@ -496,6 +505,16 @@ def _resolve_stored(
 
     option = match_option(stored, field) if field.options else None
 
+    # "How did you hear about us?" where the menu has no careers-site option
+    # (x46 required across 578 Greenhouse forms, x27 on Ashby): the applicant's
+    # ordered second choices, each tried as an exact match against the menu.
+    if option is None and field.options and theme == QuestionTheme.HEARD_ABOUT:
+        for fallback in (memory.preferences.get("heard_about_fallback") or "").split("|"):
+            option = match_option(fallback.strip(), field) if fallback.strip() else None
+            if option is not None:
+                key = "heard_about_fallback"
+                break
+
     # A multi-select answered from a single stored value selects exactly that
     # option. This is the "select all that apply" case where only one applies —
     # distinct from the cohort case, where the answer is genuinely a set.
@@ -621,6 +640,63 @@ def _resolve_option_mismatches(
         entry.reason = "your stored answer, matched to this form's wording"
 
 
+def _skip_untriggered_follow_up(entry, order, position, by_key, fields=None) -> bool:
+    """Leave an optional "If other, please specify" blank when nothing triggered it.
+
+    x24 "If other, please specify", x20 "Please specify", x18 "Please provide
+    additional detail if appropriate.", x14 "If other, please explain" across
+    578 Greenhouse forms — almost all optional, all sent to review. The field
+    applies only when the answer before it was "Other" (or, for an "if yes"
+    wording, yes). With that preceding answer settled and not a trigger, blank
+    is the answer; with it unsettled, the follow-up stays for review alongside
+    it. Required follow-ups are never skipped here.
+    """
+    if entry.required or not entry.needs_review or entry.skipped or entry.satisfied_by:
+        return False
+    if not is_follow_up(entry.label or ""):
+        return False
+    # "If yes, …" / "If you answered …" wordings belong to _resolve_conditionals,
+    # which also knows how to pick a form's own "N/A" option and how to treat a
+    # required follow-up. This rule takes only the labels that rule cannot read.
+    if _CONDITIONAL.search(entry.label or ""):
+        return False
+    index = position.get(entry.field_key)
+    if not index:
+        return False
+    previous = None
+    for offset in range(index - 1, -1, -1):
+        candidate = by_key.get(order[offset])
+        if candidate is None or candidate.skipped or candidate.satisfied_by:
+            continue
+        previous = candidate
+        break
+    if previous is None or previous.needs_review or not (previous.value or previous.values):
+        return False
+    answers = [str(v) for v in (previous.values or [previous.value])]
+    wants_other = bool(FOLLOW_UP_ON_OTHER.search(normalize_label(entry.label or "")))
+    # A follow-up hangs off a *choice*. Crusoe's "Additional information or a
+    # note you want to share" sits after a links field; a URL is not an answer
+    # anything can follow up on, so that field is not a follow-up at all.
+    parent = (fields or {}).get(previous.field_key)
+    if parent is not None and not parent.options and parent.kind != FieldKind.BOOLEAN:
+        if not any(_as_bool(a) is not None or normalize_label(a).startswith("other") for a in answers):
+            return False
+    if wants_other:
+        triggered = any(normalize_label(a).startswith("other") for a in answers)
+    else:
+        triggered = any(a.strip().lower().startswith(("y", "i am ", "i do ", "i have ")) for a in answers)
+    if triggered:
+        return False
+    entry.skipped = "follow-up to {!r}, which you answered {!r}".format(
+        (previous.label or "")[:40], answers[0][:24])
+    entry.reason = entry.skipped
+    entry.needs_review = False
+    entry.value = None
+    entry.values = []
+    entry.source = FillSource.MEMORY
+    return True
+
+
 def _resolve_conditionals(entries: List[FillPlanEntry], form: FormSchema) -> None:
     """Mark a follow-up inapplicable when the question it depends on said no.
 
@@ -637,8 +713,12 @@ def _resolve_conditionals(entries: List[FillPlanEntry], form: FormSchema) -> Non
     order = [f.key for f in form.fields]
     position = {key: index for index, key in enumerate(order)}
     by_key = {e.field_key: e for e in entries}
+    fields_by_key = {f.key: f for f in form.fields}
 
     for entry in entries:
+        if _skip_untriggered_follow_up(entry, order, position, by_key, fields_by_key):
+            continue
+
         if not _CONDITIONAL.search(entry.label or ""):
             continue
 
@@ -726,6 +806,7 @@ _BACKGROUND_FACTS = (
     "attended_career_fair",   # career fair / saw us on campus, 12 source variants
     "prior_internships",      # Klaviyo "how many prior internships", counts
     "gpa_scale",              # Radix "your university's GPA range"
+    "years_experience",       # Wealth.com "professional experience writing backend code?", x6 "years of industry experience"
     "current_job_title",
     "current_employer",
 )
@@ -736,6 +817,79 @@ _STANDING = {
     3: "third-year (junior)",
     4: "fourth-year (senior)",
 }
+
+
+_CLASS_YEARS = re.compile(
+    r"\b(freshman|freshmen|sophomore|junior|senior|first[- ]year|second[- ]year|third[- ]year|"
+    r"fourth[- ]year|final[- ]year)\b", re.I)
+_CLASS_EXCLUDE = re.compile(r"\b(senior (software|engineer|developer|level|role|position)|years? of)\b", re.I)
+
+
+def _class_standing_answer(field: FormField, memory: Memory) -> Optional[Resolution]:
+    """Answer "Are you currently a Freshman or Sophomore?" from the calendar.
+
+    Base Power (Ashby, x5) asks it as a checkbox; the enrollment theme handed
+    it "Currently Enrolled" and the yes/no guard refused. Class standing is
+    arithmetic on the stored start or graduation date, so the answer is
+    whether the standing the dates give is one of the years the label names.
+    """
+    two_way = (field.kind == FieldKind.SINGLE_SELECT and len(field.options) == 2
+               and all(_as_bool(o.label) is not None for o in field.options))
+    if field.kind != FieldKind.BOOLEAN and not two_way:
+        return None
+    label = field.label or ""
+    if not _CLASS_YEARS.search(label) or _CLASS_EXCLUDE.search(label):
+        return None
+    if not re.search(r"\b(are you|currently|student|undergraduate|program)\b", label, re.I):
+        return None
+    standing = _class_standing(memory.education, date.today())
+    if not standing or standing.startswith(("graduated", "not yet")):
+        return None
+    ordinal = {"first year": "freshman", "second year": "sophomore", "third year": "junior",
+               "fourth year": "senior", "final year": "senior", "freshmen": "freshman"}
+    named = {ordinal.get(m.lower().replace("-", " "), m.lower()) for m in _CLASS_YEARS.findall(label)}
+    found = re.search(r"\((freshman|sophomore|junior|senior)\)", standing)
+    if not found:
+        return None
+    mine = found.group(1)
+    answer = mine in named
+    option = option_for_bool(answer, field) if field.options else None
+    value = option.label if option else ("Yes" if answer else "No")
+    return Resolution(field_key=field.key, value=value, source=FillSource.MEMORY,
+                      reason="computed: you are a {} by your stored dates".format(mine))
+
+
+_BASED_IN = re.compile(r"\b(based|located|living|live|reside|residing|physically located)\s+(in|within)\b", re.I)
+_COUNTRY_NAMES = {"US": "united states", "CA": "canada", "UK": "united kingdom", "IE": "ireland", "DE": "germany", "IN": "india"}
+
+
+def _based_in_country_answer(field: FormField, memory: Memory) -> Optional[Resolution]:
+    """"Are you currently based in the United States?" from the stored country.
+
+    R48-2: two Ashby forms asked it as a checkbox; the location theme handed
+    them "Ithaca, NY" and the yes/no guard refused. The country named in the
+    label against the applicant's country of residence is arithmetic, not
+    judgement. Only a *country* — "based in the Bay Area" stays with the gate.
+    """
+    two_way = (field.kind == FieldKind.SINGLE_SELECT and len(field.options) == 2
+               and all(_as_bool(o.label) is not None for o in field.options))
+    if field.kind != FieldKind.BOOLEAN and not two_way:
+        return None
+    label = field.label or ""
+    code = country_in_label(label)
+    if not code or not _BASED_IN.search(label):
+        return None
+    mine = (memory.lookup("country_of_residence") or "").strip().lower()
+    if not mine:
+        return None
+    mine_code = next((c for c, name in _COUNTRY_NAMES.items() if name in mine or mine in (c.lower(), "usa", "u.s.", "u.s.a.") and c == "US"), None)
+    if mine_code is None:
+        return None
+    answer = mine_code == code
+    option = option_for_bool(answer, field) if field.options else None
+    value = option.label if option else ("Yes" if answer else "No")
+    return Resolution(field_key=field.key, value=value, source=FillSource.MEMORY,
+                      reason="computed: you live in {}".format(memory.lookup("country_of_residence")))
 
 
 def _class_standing(education: Dict[str, str], today: date) -> Optional[str]:
@@ -864,6 +1018,108 @@ def _model_may_answer(field: FormField) -> bool:
     elif field.kind not in (FieldKind.SINGLE_SELECT, FieldKind.BOOLEAN):
         return False
     return field.allows_model_judgement()
+
+
+#: The second pass (§49): a free-text question is filled from the profile only
+#: when the model is this sure the profile covers it, this sure which key
+#: answers it, and this sure the value is a direct answer. Three gates, because
+#: a wrong free-text answer is written under the applicant's name.
+SECOND_PASS_COVERED = 0.90
+SECOND_PASS_KEY = 0.85
+SECOND_PASS_VERIFY = 0.90
+SECOND_PASS = True
+
+#: Profile keys the second pass may write. Files never; protected and consent
+#: sections never; nothing a model composed. Values come from memory.lookup so
+#: a phone number is formatted the way the first pass formats it.
+_SECOND_PASS_SECTIONS = ("facts", "education", "preferences", "legal_status")
+_SECOND_PASS_EXCLUDE = {"resume_file", "cover_letter", "transcript_file", "personal_preferences"}
+
+
+def _profile_catalog(memory: Memory) -> Dict[str, str]:
+    catalog: Dict[str, str] = {}
+    for section in _SECOND_PASS_SECTIONS:
+        for key, value in (getattr(memory, section, None) or {}).items():
+            if key in _SECOND_PASS_EXCLUDE or not value or memory.is_blank(str(value)):
+                continue
+            shown = memory.lookup(key) if key == "phone" else str(value)
+            if shown:
+                catalog[key] = str(shown)[:120]
+    for key in ("full_name", "country_of_residence", "state_of_residence", "city_of_residence"):
+        value = memory.lookup(key)
+        if value:
+            catalog[key] = str(value)[:120]
+    return catalog
+
+
+def _second_pass_eligible(entry: FillPlanEntry, field: FormField) -> bool:
+    if not entry.needs_review or entry.skipped or entry.satisfied_by or entry.attach:
+        return False
+    if field.kind != FieldKind.TEXT or field.options:
+        return False
+    if field.field_class != FieldClass.SCREENING or not field.allows_model_judgement():
+        return False
+    reason = entry.reason or ""
+    if "needs your detail" in reason or "form requires it" in reason:
+        return False
+    if is_follow_up(field.label or ""):
+        return False
+    return True
+
+
+def _second_pass(entries: List[FillPlanEntry], form: FormSchema, memory: Memory, binder) -> None:
+    """Answer the free-text remainder from the profile, or say plainly it is not there.
+
+    Runs after every other gate over SCREENING text fields still marked for
+    review. The model decides whether the profile covers the question and
+    which stored value answers it; a second call verifies the value against
+    the question; only then is it written, as MODEL_DECISION with the key
+    named in the reason. A question the profile does not cover keeps its
+    review state and gets the reason "not in your profile", which is the
+    yes/no the applicant asked for.
+    """
+    if not SECOND_PASS or binder is None or not hasattr(binder, "second_pass"):
+        return
+    fields = {f.key: f for f in form.fields}
+    candidates = [(index, entry) for index, entry in enumerate(entries)
+                  if fields.get(entry.field_key) is not None and _second_pass_eligible(entry, fields[entry.field_key])]
+    if not candidates:
+        return
+    catalog = _profile_catalog(memory)
+    if not catalog:
+        return
+    earlier = [
+        {"question": (e.label or "")[:120], "answer": e.values or e.value}
+        for e in entries
+        if (e.value or e.values) and not e.needs_review and not e.skipped and not e.satisfied_by
+    ]
+    state = _answer_state(form, memory, earlier)
+    state["profile"] = catalog
+    requests = [("sp_{}".format(index), fields[entry.field_key], catalog) for index, entry in candidates]
+    decided = binder.second_pass(state, requests)
+
+    to_verify = []
+    for index, entry in candidates:
+        key, p_cov, p_key = decided.get("sp_{}".format(index), (None, 0.0, 0.0))
+        if key and p_cov >= SECOND_PASS_COVERED and p_key >= SECOND_PASS_KEY:
+            to_verify.append((index, entry, key, p_cov, p_key))
+        else:
+            entry.reason = "not in your profile ({:.0%} that it is covered)".format(p_cov) if p_cov < 0.5 else                 "your profile may cover this ({:.0%}), but no single stored fact answers it".format(p_cov)
+    if not to_verify:
+        return
+    verified = binder.verify_values(state, [("sp_{}".format(i), fields[e.field_key].label, catalog[k]) for i, e, k, _c, _k in to_verify])
+    for index, entry, key, p_cov, p_key in to_verify:
+        p_ok = verified.get("sp_{}".format(index), 0.0)
+        if p_ok < SECOND_PASS_VERIFY:
+            entry.reason = "second pass: {} looked like the answer but did not verify ({:.0%})".format(key, p_ok)
+            continue
+        entry.value = catalog[key]
+        entry.values = []
+        entry.source = FillSource.MODEL_DECISION
+        entry.confidence = min(p_cov, p_key, p_ok)
+        entry.needs_review = False
+        entry.theme = "profile.{}".format(key)
+        entry.reason = "second pass: your {} answers this ({:.0%} covered, {:.0%} verified)".format(key, p_cov, p_ok)
 
 
 def _answer_state(form: FormSchema, memory: Memory, earlier: List[Dict[str, object]]) -> Dict[str, object]:
@@ -1107,6 +1363,8 @@ def resolve_form(
 
     for field in form.fields:
         resolution = _within_options(memory.resolve(field), field)
+        if resolution is None:
+            resolution = _class_standing_answer(field, memory) or _based_in_country_answer(field, memory)
         if resolution is not None:
             resolved[field.key] = resolution
         else:
@@ -1187,6 +1445,7 @@ def resolve_form(
     _mark_satisfied_alternates(entries, form)
     _resolve_conditionals(entries, form)
     _answer_from_profile(entries, form, memory, binder, speculative)
+    _second_pass(entries, form, memory, binder)
 
     return FillPlan(
         posting_id=form.posting_id,
