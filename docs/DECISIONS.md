@@ -1290,6 +1290,68 @@ count, so a "0 filled" on a hidden tab is never logged as a defect.
 
 ---
 
+## 39. One hundred held-out Greenhouse boards
+
+The run Victor asked for — "try and go through 100 different applications
+and check if everything is filled properly for greenhouse" — finished on
+2026-09-28 with the installed extension (0.4.19) and the backend at this
+branch. Every board was drawn from the ledger and never reused; the form's
+own validation after a dry-run submit is the oracle.
+
+| | |
+|---|---|
+| boards opened | 110 |
+| excluded | 9 (8 postings closed since the freeze, 1 redirected to the employer's own domain — the click-to-run case, out of scope for the auto-fill hosts) |
+| **live boards measured** | **101** |
+| fields filled green | 1,625 |
+| "known but could not be entered" | 21 — 1 on Pacific Fusion (fixed 0.4.18), 19 on Lightmatter (fixed 0.4.19), 1 in round 4 (Coinbase-era, fixed 0.4.6) |
+| boards with zero entry failures | 98 / 101 |
+| boards where the form wanted nothing more after the fill | 29 / 101 |
+| rounds 6–7 (38 boards, after 0.4.19) | 641 filled, **0** could not be entered |
+
+Per round:
+
+| round | boards | filled | could not enter |
+|---|---|---|---|
+| 1 | 2 | 46 | 0 |
+| 2 | 12 | 182 | 1 |
+| 3 | 9 | 149 | 0 |
+| 4 | 17 | 252 | 1 |
+| 5 | 23 | 355 | 19 |
+| 6 | 35 | 593 | 0 |
+| 7 | 3 | 48 | 0 |
+
+**What the forms still wanted**, 184 requirements across the 101 boards,
+classified by hand from the `form wants:` lines:
+
+| kind | count | disposition |
+|---|---|---|
+| bespoke per-company question (which department, lift 50 lb, tutored a class, FINRA disclosures) | 58 | applicant; no taxonomy reaches these |
+| essay / free prose | 26 | out of scope by §14 |
+| consent / acknowledgement | 15 | out of scope by §21 |
+| office / location preference | 14 | applicant; a preference per posting |
+| availability / term (start date, duration, hours, which semesters) | 14 | **coverage candidate**: term multi-selects and preferred-start selects recur |
+| profile or alias gap | 13 | 6 fixed this round (State/Province/Region, Province/State, Legal First/Last Name, required conditionals); street address and county need a stored fact |
+| custom self-identification wording (gender, race, pronouns, veteran, age range, LGBTQ, household occupation) | 13 | applicant, by rule — a protected answer is replayed only on an exact match and never inferred |
+| source / referral variant (career fair, campus, options without an own-site entry) | 12 | applicant |
+| academic detail not in profile (SAT/ACT, GPA range, grading scale, high-school year, academic status) | 10 | **coverage candidate**: class year from the stored start date; SAT/ACT would be new facts |
+| pay expectation | 5 | applicant |
+| security clearance | 4 | applicant |
+
+**Defects found in rounds 6–7 and their fixes.** Xaira's required
+sponsorship conditional and Compeer's required "if yes, explain" (§38's
+follow-up; PR #19), Visier's "Province/State", DRW's "Legal First Name" /
+"Legal Last Name" — each an alias or binder change with a test, each
+re-verified on the board that exposed it (Xaira re-run: 19 filled, the
+conditional no longer wanted).
+
+**Decision.** Greenhouse is done for this pass: the widget layer has had zero
+entry failures over 38 consecutive unseen boards, and what remains is
+either policy (essays, consents, protected wording) or profile content.
+Next is Ashby, on the same protocol; then Workday, then Oracle.
+
+---
+
 ## Current state
 
 Measured against 42 unique live SWE-intern postings, 909 fields:

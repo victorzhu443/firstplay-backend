@@ -112,6 +112,8 @@ CORE_LABEL_ALIASES = {
     "gpa undergraduate": "gpa",            # Freeform: "GPA (Undergraduate)"
     "state": "state_of_residence",
     "state province": "state_of_residence",
+    "state province region": "state_of_residence",  # TransMarket: "State/Province/Region:"
+    "province state": "state_of_residence",         # Visier (Canada): "Province/State"
     "state if n a select other": "state_of_residence",   # Chicago Trading
     "what is your preferred first name": "preferred_first_name",  # NISC
     "country": "country_of_residence",
@@ -143,6 +145,10 @@ CORE_LABEL_ALIASES = {
     "linkedin github personal website or portfolio": "links_combined",
     "website portfolio": "links_combined",
     # identity extras
+    # DRW 7957243 asks the legal name as two custom questions beside the
+    # standard ones; the stored name is the legal one.
+    "legal first name": "first_name",
+    "legal last name": "last_name",
     "preferred first name": "preferred_first_name",   # x72, the single largest
     "preferred name": "preferred_first_name",
     # Asked alongside the first-name variant. Its own key rather than an alias

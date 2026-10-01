@@ -649,6 +649,27 @@ def _resolve_conditionals(entries: List[FillPlanEntry], form: FormSchema) -> Non
             )
             continue
 
+        # Required, and no way to say "not applicable": the form will refuse a
+        # blank. Xaira 5225658007 asks "If you answered 'No' ... will you
+        # require sponsorship?" with only Yes / No and marks it required; a
+        # citizen's truthful answer is the one the sponsorship theme already
+        # gave ("No"), so a confident answer of the entry's own stands. With
+        # no such answer, the field stays for the applicant rather than being
+        # hidden as "answered by a sibling" and blocking submission unseen
+        # (Compeer 5404994008: a required "If yes, please explain").
+        if field is not None and field.required:
+            if entry.value and not entry.needs_review and not entry.skipped:
+                entry.reason = "not applicable after your '{}' above, but required — answered {!r} from your profile".format(
+                    str(previous.value)[:24], str(entry.value)[:24]
+                )
+                continue
+            entry.needs_review = True
+            entry.satisfied_by = None
+            entry.reason = "not applicable after your '{}' above, but this form requires an answer".format(
+                str(previous.value)[:24]
+            )
+            continue
+
         entry.needs_review = False
         entry.satisfied_by = previous.field_key
         entry.reason = "not applicable — you answered '{}' to the question above".format(
