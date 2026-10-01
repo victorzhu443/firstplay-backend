@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.autofill.ashby import parse_ashby_dom
+from app.autofill.ashby_api import looks_like_posting, parse_ashby_posting
 from app.autofill import ENGINE
 from app.autofill.binder import DeterministicBinder, FillPlan, resolve_form
 from app.autofill.greenhouse import parse_greenhouse_job
@@ -94,6 +95,11 @@ def _parse_form(ats: str, payload: Dict[str, Any]) -> FormSchema:
         return parse_greenhouse_job(payload)
 
     if ats == "ashby":
+        # The GraphQL `jobPosting` (with its applicationForm) when the
+        # extension fetched it; the DOM extract otherwise (older clients,
+        # or a page whose operation failed).
+        if looks_like_posting(payload):
+            return parse_ashby_posting(payload, org=payload.get("_org"))
         return parse_ashby_dom(payload)
 
     raise HTTPException(

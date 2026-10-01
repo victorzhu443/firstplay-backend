@@ -70,6 +70,9 @@ class FillPlanEntry(BaseModel):
     source: FillSource
     confidence: float = 1.0
     needs_review: bool = False
+    #: The form's own required flag, so a client can check "still wants"
+    #: without asking the page (Ashby validates only on its server, §47).
+    required: bool = False
     reason: Optional[str] = None
     theme: Optional[str] = None
 
@@ -270,6 +273,20 @@ def _within_options(resolution: Optional[Resolution], field: FormField) -> Optio
     """
     if resolution is None or resolution.needs_review or resolution.skipped:
         return resolution
+    # A yes/no control takes yes or no and nothing else. Color Health (Ashby)
+    # asks "Are you based in the San Francisco Bay Area?" as a checkbox; the
+    # location theme handed it "Ithaca, NY" and the filler rightly refused.
+    # Left for the model gate, which answers such questions from the profile.
+    if field.kind == FieldKind.BOOLEAN and resolution.value is not None and not resolution.values:
+        if not re.match(r"^(yes|no|true|false|y|n)$", str(resolution.value).strip(), re.I):
+            return Resolution(
+                field_key=field.key,
+                value=None,
+                source=FillSource.HUMAN,
+                confidence=0.0,
+                needs_review=True,
+                reason="this is a yes/no question; {!r} is not an answer to it".format(str(resolution.value)[:30]),
+            )
     if not field.options or (resolution.value is None and not resolution.values):
         return resolution
 
@@ -1089,7 +1106,7 @@ def resolve_form(
     resolved: Dict[str, Resolution] = {}
 
     for field in form.fields:
-        resolution = memory.resolve(field)
+        resolution = _within_options(memory.resolve(field), field)
         if resolution is not None:
             resolved[field.key] = resolution
         else:
@@ -1120,7 +1137,10 @@ def resolve_form(
                         theme, field, memory, company, form.country, form.remote
                     ), field)
                 elif kind == Resolver.STORED:
-                    resolution = _resolve_stored(theme, field, memory)
+                    # Through the same guard as computed themes: Siftstack
+                    # asked "Do you have any offers…?" as a checkbox and the
+                    # timeline theme handed it the stored "None".
+                    resolution = _within_options(_resolve_stored(theme, field, memory), field)
 
                 # A theme recognised but not confidently enough to act on is a
                 # suggestion, not an answer.
@@ -1141,6 +1161,7 @@ def resolve_form(
                     needs_review=True,
                     reason="nothing stored answers this yet",
                     theme=theme_name,
+                    required=field.required,
                 )
             )
             continue
@@ -1157,6 +1178,7 @@ def resolve_form(
                 reason=resolution.reason or resolution.skipped,
                 skipped=resolution.skipped,
                 theme=theme_name,
+                required=field.required,
             )
         )
 
