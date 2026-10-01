@@ -108,8 +108,13 @@ def test_a_company_specific_answer_is_kept_for_that_question_only():
 def test_a_stable_answer_for_an_empty_existing_key_is_proposed_not_applied():
     memory = Memory(facts={"phone": "1", "twitter": ""})
     binder = _binder({"Twitter handle": (0.97, "twitter", 0.95)})
-    result = learn(memory, [_obs("Twitter handle", "@ada")], binder=binder)
-    assert [(p.key, p.value, p.section, p.support) for p in result.proposals] == [("twitter", "@ada", "facts", 1)]
+    first = learn(memory, [_obs("Twitter handle", "@ada", company="Acme")], binder=binder)
+    # One company is remembered (exact replay) but not yet proposed: the
+    # two-company vote rule (docs/research/learning-agents.md §2).
+    assert first.proposals == [] and memory.learned_pending["twitter"]["support"] == 1
+    assert any("second company" in i["why"] for i in first.ignored)
+    result = learn(memory, [_obs("Twitter handle", "@ada", company="Beta")], binder=binder)
+    assert [(p.key, p.value, p.section, p.support) for p in result.proposals] == [("twitter", "@ada", "facts", 2)]
     assert memory.facts["twitter"] == ""                       # not applied
     assert memory.learned_pending["twitter"]["value"] == "@ada"
     assert accept(memory, "twitter") and memory.facts["twitter"] == "@ada" and "twitter" not in memory.learned_pending

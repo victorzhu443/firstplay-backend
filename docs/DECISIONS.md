@@ -2004,8 +2004,40 @@ replay rate (how many identical later questions the loop answers) with
 sample sizes. Live: the count of questions the applicant had to answer
 twice, which should fall toward zero as the profile learns.
 
-*Built in parallel on 2026-10-01: backend PR #24 (`autofill/16-learning`)
-and extension PR #12 (0.4.40); results recorded below when measured.*
+**Built in parallel, then corrected by the research.** Two forks worked
+against the contract above at the same time (backend PR #24,
+`autofill/16-learning`; extension PR #12, 0.4.40–0.4.42) while a third
+agent wrote `docs/research/learning-agents.md` — 53 sources on agent
+memory, correction learning, the incumbent products, ATS terms, Chrome Web
+Store policy and self-identification law. Three findings changed the build
+before it was tested: (1) Chromium Autofill's per-field votes and the
+absence of any published stable-vs-company-specific rule → a fact is
+proposed only after the same answer at two different organisations
+(`MIN_SUPPORT_COMPANIES = 2`); exact-question replay still needs one. (2)
+Mixed-initiative evidence that pre-applied suggestions reduce agency, and
+a June 2026 budget-matched study showing memory gains must be measured as
+fewer repeated questions rather than benchmark lift → propose-then-accept
+stays, and the metric is questions-asked-twice. (3) Chrome Web Store
+Limited Use treats learning as a post-install change in data handling →
+an opt-in switch in the popup, off by default, with the disclosure in
+plain words. Also noted: Ashby's robots.txt disallows `/api/`, so posting
+reads stay to the applicant's own open posting; self-identification is
+never generalised or judged.
+
+**Measured offline** (`python -m app.autofill.learn_eval`, deterministic
+simulation of an applicant answering every open SCREENING text/select
+question in corpus order):
+
+| corpus | forms | simulated answers | later occurrences of the same label | replayed | rate |
+|---|---|---|---|---|---|
+| Greenhouse | 578 | 1,045 | 1,666 | 1,571 | 94.3% |
+| Ashby | 413 | 360 | 234 | 226 | 96.6% |
+
+The remainder is the same label on a select whose option set differs. With
+the model on 60 Ashby forms: 55 simulated answers produced 3 proposals
+(citizenship, work authorisation, sponsorship), none applied. Backend: 620
+tests; extension: 23 node cases for the capture rules. The live test on a
+real form follows the reload to 0.4.42 and is recorded in the README log.
 
 ---
 

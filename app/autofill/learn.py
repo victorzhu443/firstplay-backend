@@ -140,6 +140,11 @@ def _section_of(memory: Memory, key: str) -> str:
     return "learned"
 
 
+#: Distinct organisations an answer must have been given at before it is
+#: proposed as a profile fact. Exact-question replay needs only one.
+MIN_SUPPORT_COMPANIES = 2
+
+
 def learn(memory: Memory, observations: List[Observation], binder=None) -> LearnResult:
     """Fold the applicant's edits into the profile; propose what generalises.
 
@@ -232,6 +237,14 @@ def learn(memory: Memory, observations: List[Observation], binder=None) -> Learn
                 "labels": labels[:10], "companies": companies[:20],
                 "updated": obs.at or datetime.utcnow().isoformat(timespec="seconds"),
             }
+            # Promote only once the same answer has been given on two different
+            # organisations' forms (Chromium Autofill's vote model; the
+            # research note in docs/research/learning-agents.md): one form
+            # can be company-specific however stable it reads. Until then the
+            # answer is still replayed verbatim on an exact repeat.
+            if len(companies) < MIN_SUPPORT_COMPANIES:
+                ignored.append({"label": obs.label, "why": "remembered; proposed as a fact once seen at a second company"})
+                continue
             why = ("would replace the stored {!r}".format(current) if current
                    else ("a new kind of fact ({:.0%} stable)".format(p_stable) if section == "learned"
                          else "fills the empty {} ({:.0%} stable)".format(key, p_stable)))
