@@ -1946,6 +1946,67 @@ column is 75; the N/A column 35.
 Crusoe, Fab, Exegy, Saronic re-run clean: yes/no buttons read pressed,
 Saronic's university lands in 0.4 s.
 
+## 50. The learning loop: an agent that improves from what the applicant does
+
+Victor, 2026-10-01: "build an agent that as we use it improves and
+understands what I do to answer questions and starts being able to answer
+my own questions … build these in parallel, then test and iterate; the goal
+is to do this based off of research about agents."
+
+**What the literature says that applies here, and what it does not.**
+- *Memory kinds.* CoALA (Sumers et al., 2023) separates an agent's
+  episodic memory (what happened), semantic memory (facts about the world
+  and the self) and procedural memory (how to act). The profile is semantic
+  memory; the plan engine, themes and aliases are procedural; what was
+  missing was the episodic layer — nothing recorded what the applicant
+  actually typed when the engine left a field to them.
+- *Learning from verbal feedback.* Reflexion (Shinn et al., 2023) improves
+  an agent without weight updates by storing natural-language reflections
+  on past failures and conditioning later attempts on them. Here the
+  "reflection" is concrete and cheap: the applicant's own answer to the
+  question the engine could not answer.
+- *A growing library.* Voyager (Wang et al., 2023) accumulates verified
+  skills and retrieves them later. The analogue is a growing set of
+  learned facts, each verified by the person it describes (they typed it,
+  and they accept the generalisation).
+- *Reflection into higher-level facts.* Generative Agents (Park et al.,
+  2023) periodically synthesise observations into higher-level
+  statements. The generalisation step below — "this answer is a stable
+  fact about you, not about this company" — is that synthesis, bounded to
+  a yes/no and a key choice so Jev can make it.
+- *What does not transfer.* These systems let a model write to memory
+  freely. A job application is submitted under a real person's name, so
+  nothing a model composes is ever written; the model only decides whether
+  an answer the applicant gave is reusable and under which key.
+
+**The design (three memories, one contract).**
+1. *Episodic, automatic.* The extension watches the fields the plan knew
+   about; when the applicant's value differs from the plan's, or the plan
+   had none, the (question, answer) pair is sent to the local backend
+   with the profile and comes back saved under `answers[fingerprint]`.
+   The next form that asks the same question replays it verbatim — the
+   path `Memory.recall_answer` already had, now fed.
+2. *Semantic, proposed.* For each such pair the backend asks Jev two
+   bounded questions with the non-protected profile as state: is this a
+   stable fact or preference that would be the same on any employer's
+   form (Noul), and which existing profile key does it belong to, or is it
+   new (Choice). Only at 0.90 / 0.85 does a *proposal* come back — set
+   this key to this value. Proposals are never applied by the model; the
+   applicant accepts or ignores each in the popup. Protected and consent
+   questions are never proposed as facts.
+3. *Procedural, reused.* Accepted facts live in `profile.learned` and
+   enter the second pass's catalogue and the gate's state, so the engine
+   answers that question itself from then on.
+
+**How it is measured.** Offline: `python -m app.autofill.learn_eval`
+replays a simulated applicant across the frozen corpora and reports the
+replay rate (how many identical later questions the loop answers) with
+sample sizes. Live: the count of questions the applicant had to answer
+twice, which should fall toward zero as the profile learns.
+
+*Built in parallel on 2026-10-01: backend PR #24 (`autofill/16-learning`)
+and extension PR #12 (0.4.40); results recorded below when measured.*
+
 ---
 
 ## Current state
