@@ -282,3 +282,49 @@ def test_based_in_a_named_country_is_computed_from_the_stored_country():
     assert _based_in_country_answer(_field("b2", "Are you currently based in Canada?", FieldKind.BOOLEAN), us).value == "No"
     assert _based_in_country_answer(_field("b3", "Are you based in the San Francisco Bay Area?", FieldKind.BOOLEAN), us) is None
     assert _based_in_country_answer(field, Memory()) is None
+
+
+# --- the second pass (§49): free-text questions answered from the profile, or declared uncovered
+
+class _SecondPassBinder(DeterministicBinder):
+    def __init__(self, decisions, verifications):
+        self.decisions, self.verifications, self.seen = decisions, verifications, []
+    def second_pass(self, state, requests):
+        self.seen.append(("second_pass", [f.label for _r, f, _c in requests], sorted(state["profile"])))
+        return {rid: self.decisions.get(f.label, (None, 0.1, 0.0)) for rid, f, _c in requests}
+    def verify_values(self, state, items):
+        self.seen.append(("verify", [(l, v) for _r, l, v in items]))
+        return {rid: self.verifications.get(label, 0.0) for rid, label, _v in items}
+
+
+def test_second_pass_fills_a_text_question_from_the_named_profile_key_after_verification():
+    memory = Memory(facts={"phone": "3015550100", "linkedin": "https://linkedin.com/in/ada"},
+                    preferences={"earliest_start": "June 2027"}, protected={"gender": "Decline"},
+                    consents={"privacy_notice": "Agree"})
+    binder = _SecondPassBinder({"When could you begin?": ("earliest_start", 0.97, 0.93)}, {"When could you begin?": 0.95})
+    plan = resolve_form(_form(_field("q", "When could you begin?")), memory, binder=binder)
+    entry = plan.entries[0]
+    assert entry.value == "June 2027" and not entry.needs_review and entry.source == FillSource.MODEL_DECISION
+    assert entry.theme == "profile.earliest_start" and "second pass" in entry.reason
+    # protected and consent sections never reach the model's catalog
+    assert "gender" not in binder.seen[0][2] and "privacy_notice" not in binder.seen[0][2]
+
+
+def test_second_pass_declares_an_uncovered_question_and_never_writes_it():
+    binder = _SecondPassBinder({"Please list your PhD advisor(s) below:": (None, 0.03, 0.0)}, {})
+    plan = resolve_form(_form(_field("q", "Please list your PhD advisor(s) below:")), Memory(facts={"phone": "1"}), binder=binder)
+    assert plan.entries[0].needs_review and plan.entries[0].value is None
+    assert plan.entries[0].reason.startswith("not in your profile")
+
+
+def test_second_pass_keeps_review_when_verification_fails_and_skips_essays_and_follow_ups():
+    memory = Memory(education={"graduation_date": "May 2028"}, facts={"phone": "1"})
+    binder = _SecondPassBinder({"Please provide your university email address.": ("graduation_date", 0.95, 0.9)},
+                               {"Please provide your university email address.": 0.2})
+    form = _form(_field("a", "Please provide your university email address."),
+                 _field("b", "Why do you want to join us?"),            # essay: NARRATIVE, never offered
+                 _field("c", "If other, please specify"))                # follow-up: never offered
+    plan = resolve_form(form, memory, binder=binder)
+    assert plan.entries[0].needs_review and plan.entries[0].value is None and "did not verify" in plan.entries[0].reason
+    offered = binder.seen[0][1]
+    assert offered == ["Please provide your university email address."]

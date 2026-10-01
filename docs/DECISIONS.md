@@ -1857,6 +1857,95 @@ does not drive yet); protected multi-select taxonomies ("East Asian" vs a
 stored "Asian": a finer stored answer, not a model); the bespoke yes/no
 remainder through the gate with the new background facts.
 
+## 49. Everything except the essays — round 2, the live hundreds, and the second pass
+
+**The live hundreds (2026-10-01).** Victor: "those were only four runs, let's
+do 100 runs across Greenhouse and 100 across Ashby" — on extension 0.4.39
+with his round-1 facts answered (start date, address, salary, consents,
+fallbacks, two protected answers). Draws: 100 unused Ashby organisations
+from the frozen corpus and 100 live, unused Greenhouse postings (68
+boards), both in `survey/draws/draw_r48_2_*.json`.
+
+| Ashby, 100 organisations | |
+|---|---|
+| fields filled | 719 |
+| left for the applicant | 250 |
+| "known but could not be entered" | 1 — Rivian/VW's Location geocoder (5.9 s, no match) |
+| fills that did not land | 2 text fields reported filled yet still wanted (Atominvest "notice period", TELUS "Phone") — to inspect |
+| forms with nothing left | 22 |
+| fill, median | 110 ms; 83 of 100 under one second |
+| hidden tab | yes throughout; four organisations needed a second visit after a page navigated mid-poll |
+
+The Greenhouse hundred is drawn and batched but Greenhouse tabs fill only
+while the window is on screen (§45); 8 of 100 ran before the window was
+hidden (all 0 could-not-enter) and the rest wait for it. Recorded as they
+land in `survey/survey_results.jsonl`, round R48-2.
+
+**The unanswered list, as asked.** "Compile the questions we couldn't
+answer, decide yes or no whether we have the information, and answer it as
+well." Every R48 posting (112 Ashby, 112 Greenhouse) re-planned through the
+backend with the real profile; every entry still for review clustered by
+label. `docs/unanswered-R48.md` is the table: 443 clusters with a decision
+each — YES (profile holds it; a wiring gap), NO (not in the profile),
+PARTLY, MAYBE (model read under threshold), ESSAY, N/A (follow-ups,
+attestations outside the standing consents).
+
+| still unanswered of 3,741 entries | Ashby | Greenhouse | total |
+|---|---|---|---|
+| after round 1 | 291 | 372 | 663 |
+| after round 2 (deterministic) | 271 | 338 | 609 |
+| after the second pass | 261 | 336 | 597 |
+
+**Round 2, deterministic — the YES rows.** Salary expectations were
+unanswered with `desired_salary` stored because nothing routed the label to
+it: a `DESIRED_SALARY` theme with a local pattern (×23 across the draw).
+"Please acknowledge that you have read and agree to our Privacy Policy" ×6
+and "I consent to have my personal data disclosed" ×2 were SCREENING; both
+are the privacy consent now. "Please share a link to your LinkedIn profile
+if you have one" ×5, "Provide any relevant profile URLs" ×5 and "Google
+Scholar" ×2 join the sentence-shaped core patterns. A `File` input labelled
+"Cover Letter" (Ashby, ×10) follows the skip list. "Are you currently based
+in the United States?" (×2, checkbox) is computed from the stored country.
+An `INTERNSHIP_END` local pattern.
+
+**The second pass — the agent Victor asked for.** After every other gate,
+over SCREENING free-text fields still for review (never essays, protected,
+consent, documents, follow-ups), the Jev binder is asked two bounded
+questions per field with the profile's non-protected keys as state: a Noul
+"does the profile contain the specific information this asks for", and a
+Choice over the profile's own keys naming the one whose stored value answers
+it. A second call verifies the chosen value against the question. Three
+gates (0.90 covered, 0.85 key, 0.90 verified) and the value written is the
+stored one, never model text. A question below the coverage bar keeps its
+review state with the reason "not in your profile (n% that it is covered)"
+— the yes/no, on the form. Audit of every answer it wrote across the 224
+postings, read by hand:
+
+| filled | key | examples |
+|---|---|---|
+| 6 | github | "What's your Github profile URL?", "GitHub or technical portfolio URL" |
+| 4 | linkedin | "What's your LinkedIn link?", "LinkedIn Profile, if available" |
+| 1 each | earliest_start, preferred_last_name, pronouns, website_other | "When are you available for internship?", "What is your preferred last name?", "If you prefer to self-describe your pronouns…", "Other website (Portfolio, GitHub, etc.)" |
+
+14 of 14 correct. It declined 44 as not in the profile, left 33 as
+"touches it but no single value answers" (eight of those "Please provide
+your university email address", correctly — the profile does not say which
+email is the university one; "Where did you complete your undergraduate
+degree?" — correctly, he has not), and one failed verification ("Years of
+work experience?" → "0"). Cost: two Jev calls per form that has such a
+field.
+
+**What the NO column says to ask next** (counts across the 224):
+IMC's high-school graduation year, test-score type and SAT/ACT (12 each,
+one employer), PhD advisor (5), preferred work location / office choice
+(12), non-compete disclosure (3), prior application to the same company
+(13), languages / ML libraries proficiency multi-selects (8). The ESSAY
+column is 75; the N/A column 35.
+
+**Also found live and fixed in 0.4.39 (R48-1), re-verified in R48-2.**
+Crusoe, Fab, Exegy, Saronic re-run clean: yes/no buttons read pressed,
+Saronic's university lands in 0.4 s.
+
 ---
 
 ## Current state

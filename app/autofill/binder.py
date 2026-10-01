@@ -1020,6 +1020,108 @@ def _model_may_answer(field: FormField) -> bool:
     return field.allows_model_judgement()
 
 
+#: The second pass (§49): a free-text question is filled from the profile only
+#: when the model is this sure the profile covers it, this sure which key
+#: answers it, and this sure the value is a direct answer. Three gates, because
+#: a wrong free-text answer is written under the applicant's name.
+SECOND_PASS_COVERED = 0.90
+SECOND_PASS_KEY = 0.85
+SECOND_PASS_VERIFY = 0.90
+SECOND_PASS = True
+
+#: Profile keys the second pass may write. Files never; protected and consent
+#: sections never; nothing a model composed. Values come from memory.lookup so
+#: a phone number is formatted the way the first pass formats it.
+_SECOND_PASS_SECTIONS = ("facts", "education", "preferences", "legal_status")
+_SECOND_PASS_EXCLUDE = {"resume_file", "cover_letter", "transcript_file", "personal_preferences"}
+
+
+def _profile_catalog(memory: Memory) -> Dict[str, str]:
+    catalog: Dict[str, str] = {}
+    for section in _SECOND_PASS_SECTIONS:
+        for key, value in (getattr(memory, section, None) or {}).items():
+            if key in _SECOND_PASS_EXCLUDE or not value or memory.is_blank(str(value)):
+                continue
+            shown = memory.lookup(key) if key == "phone" else str(value)
+            if shown:
+                catalog[key] = str(shown)[:120]
+    for key in ("full_name", "country_of_residence", "state_of_residence", "city_of_residence"):
+        value = memory.lookup(key)
+        if value:
+            catalog[key] = str(value)[:120]
+    return catalog
+
+
+def _second_pass_eligible(entry: FillPlanEntry, field: FormField) -> bool:
+    if not entry.needs_review or entry.skipped or entry.satisfied_by or entry.attach:
+        return False
+    if field.kind != FieldKind.TEXT or field.options:
+        return False
+    if field.field_class != FieldClass.SCREENING or not field.allows_model_judgement():
+        return False
+    reason = entry.reason or ""
+    if "needs your detail" in reason or "form requires it" in reason:
+        return False
+    if is_follow_up(field.label or ""):
+        return False
+    return True
+
+
+def _second_pass(entries: List[FillPlanEntry], form: FormSchema, memory: Memory, binder) -> None:
+    """Answer the free-text remainder from the profile, or say plainly it is not there.
+
+    Runs after every other gate over SCREENING text fields still marked for
+    review. The model decides whether the profile covers the question and
+    which stored value answers it; a second call verifies the value against
+    the question; only then is it written, as MODEL_DECISION with the key
+    named in the reason. A question the profile does not cover keeps its
+    review state and gets the reason "not in your profile", which is the
+    yes/no the applicant asked for.
+    """
+    if not SECOND_PASS or binder is None or not hasattr(binder, "second_pass"):
+        return
+    fields = {f.key: f for f in form.fields}
+    candidates = [(index, entry) for index, entry in enumerate(entries)
+                  if fields.get(entry.field_key) is not None and _second_pass_eligible(entry, fields[entry.field_key])]
+    if not candidates:
+        return
+    catalog = _profile_catalog(memory)
+    if not catalog:
+        return
+    earlier = [
+        {"question": (e.label or "")[:120], "answer": e.values or e.value}
+        for e in entries
+        if (e.value or e.values) and not e.needs_review and not e.skipped and not e.satisfied_by
+    ]
+    state = _answer_state(form, memory, earlier)
+    state["profile"] = catalog
+    requests = [("sp_{}".format(index), fields[entry.field_key], catalog) for index, entry in candidates]
+    decided = binder.second_pass(state, requests)
+
+    to_verify = []
+    for index, entry in candidates:
+        key, p_cov, p_key = decided.get("sp_{}".format(index), (None, 0.0, 0.0))
+        if key and p_cov >= SECOND_PASS_COVERED and p_key >= SECOND_PASS_KEY:
+            to_verify.append((index, entry, key, p_cov, p_key))
+        else:
+            entry.reason = "not in your profile ({:.0%} that it is covered)".format(p_cov) if p_cov < 0.5 else                 "your profile may cover this ({:.0%}), but no single stored fact answers it".format(p_cov)
+    if not to_verify:
+        return
+    verified = binder.verify_values(state, [("sp_{}".format(i), fields[e.field_key].label, catalog[k]) for i, e, k, _c, _k in to_verify])
+    for index, entry, key, p_cov, p_key in to_verify:
+        p_ok = verified.get("sp_{}".format(index), 0.0)
+        if p_ok < SECOND_PASS_VERIFY:
+            entry.reason = "second pass: {} looked like the answer but did not verify ({:.0%})".format(key, p_ok)
+            continue
+        entry.value = catalog[key]
+        entry.values = []
+        entry.source = FillSource.MODEL_DECISION
+        entry.confidence = min(p_cov, p_key, p_ok)
+        entry.needs_review = False
+        entry.theme = "profile.{}".format(key)
+        entry.reason = "second pass: your {} answers this ({:.0%} covered, {:.0%} verified)".format(key, p_cov, p_ok)
+
+
 def _answer_state(form: FormSchema, memory: Memory, earlier: List[Dict[str, object]]) -> Dict[str, object]:
     return {
         "applicant": _applicant_state(memory),
@@ -1343,6 +1445,7 @@ def resolve_form(
     _mark_satisfied_alternates(entries, form)
     _resolve_conditionals(entries, form)
     _answer_from_profile(entries, form, memory, binder, speculative)
+    _second_pass(entries, form, memory, binder)
 
     return FillPlan(
         posting_id=form.posting_id,
