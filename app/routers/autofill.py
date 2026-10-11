@@ -151,14 +151,18 @@ def build_plan(request: AutofillRequest):
             # No key, or a malformed one. Deterministic resolution still answers
             # the large majority of fields, so this degrades rather than fails.
             logger.warning("Jev unavailable, falling back to deterministic: %s", e)
+            _note_model_error(e)
 
     try:
         plan = resolve_form(form, memory, company=request.company, binder=binder)
+        if binder is not None and getattr(binder, "calls", 0):
+            _note_model_ok()
     except JevError as e:
         # The decision service was reachable but failed. Rather than returning
         # nothing, retry without it: a deterministic plan is worth far more than
         # an error page.
         logger.warning("Jev failed mid-plan, retrying deterministically: %s", e)
+        _note_model_error(e)
         plan = resolve_form(form, memory, company=request.company,
                             binder=DeterministicBinder())
         jev = None
@@ -231,9 +235,27 @@ def learn_from_form(request: LearnRequest):
     )
 
 
+#: What the model path last did, so /health tells the truth about it.
+#: `model_available` only says a key is configured; on 2026-10-11 the key had
+#: expired, every plan fell back to deterministic, and nothing said so until
+#: an audit run came back with two model decisions across five hundred forms.
+_MODEL_STATUS: Dict[str, Any] = {"last_error": None, "last_error_at": None, "last_ok_at": None}
+
+
+def _note_model_error(error: Exception) -> None:
+    import datetime
+    _MODEL_STATUS["last_error"] = "{}: {}".format(type(error).__name__, str(error)[:200])
+    _MODEL_STATUS["last_error_at"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _note_model_ok() -> None:
+    import datetime
+    _MODEL_STATUS["last_ok_at"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
 @router.get("/health")
 def autofill_health():
-    """Whether the model path is available, without exercising it."""
+    """Whether the model path is available, and what it last did."""
     from app.autofill.themes import QuestionTheme
 
     configured = True
@@ -242,10 +264,19 @@ def autofill_health():
     except JevConfigurationError:
         configured = False
 
+    # Degraded = configured but the last thing it did was fail, with no
+    # success since: the state an expired key leaves you in.
+    degraded = bool(configured and _MODEL_STATUS["last_error_at"] and
+                    (not _MODEL_STATUS["last_ok_at"] or _MODEL_STATUS["last_ok_at"] < _MODEL_STATUS["last_error_at"]))
+
     return {
         "status": "ok",
         "engine": ENGINE,
         "model_available": configured,
+        "model_degraded": degraded,
+        "model_last_error": _MODEL_STATUS["last_error"],
+        "model_last_error_at": _MODEL_STATUS["last_error_at"],
+        "model_last_ok_at": _MODEL_STATUS["last_ok_at"],
         "themes": len(list(QuestionTheme)),
         "theme_cache": _THEME_CACHE.size,
         "option_cache": _OPTION_CACHE.size,
