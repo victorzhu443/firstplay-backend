@@ -2039,6 +2039,54 @@ the model on 60 Ashby forms: 55 simulated answers produced 3 proposals
 tests; extension: 23 node cases for the capture rules. The live test on a
 real form follows the reload to 0.4.42 and is recorded in the README log.
 
+## 51. Install and run; the first real submission; a draft that overwrote a fill
+
+**Hosting (2026-10-01 → 10-09).** Victor: "how can I host FirstPlay so
+other people can use it quickly … just download the extension and run it."
+The backend was already deployed on Render for the main FirstPlay app and
+already served `/api/autofill/*`, so the extension now resolves its backend
+at run time: the popup's choice if set, a local backend when one answers on
+:8000 (development, or anyone who wants requests kept on their machine),
+otherwise the hosted one. Each install mints a random token sent as
+`X-FirstPlay-Install`; the backend keys its rate limit on it, so installs
+behind one address do not share a limit. Extension origins pass CORS. The
+backend stays stateless for the extension. Release v0.4.44 carries the
+zip; README section 1 is now "Install (two minutes, nothing else to run)".
+Two things stay with Victor: merging the landing PRs (#25 backend, #13
+extension) so Render redeploys the current engine, and setting
+`OPENROUTER_API_KEY` in the Render dashboard — until then the hosted
+engine is the pre-§38 one and deterministic only (a test plan with a
+minimal profile filled 4 of 22 fields).
+
+**Submissions (2026-10-09).** "Try to submit to trivial applications."
+Three forms from Victor's own spring list were filled and read back field
+by field — Forus (5 fields, nothing left), Melius (3 fields), Apex (9
+filled, one export-control attestation left to him) — and the exact values
+were put to him. He had already submitted Forus himself, chose to submit
+Melius himself, and declined Apex. The tool submitted nothing, which keeps
+the rule as it has been from the first entry: it fills, the applicant
+submits.
+
+**A fill overwritten by a saved draft.** Reading Forus back showed the
+season radio on "Winter (Jan–May 2027)" while the plan said "Summer (May–
+Aug 2027)" ("your preferred term", confidence 1.0). A clean re-fill put
+Summer in place at 0.8 s and it held through 10 s; the Winter had been
+Ashby's saved draft from the October 1 visit, restored after the fill.
+Had the read-back not happened, the wrong season would have gone out.
+0.4.45: on Ashby, two seconds after the fill every filled entry is read
+back (the capture script's reader), anything that no longer holds the
+plan's value is applied once more, and the outcome record carries `drift`.
+The read-back before any submission stays a rule.
+
+**Essays.** The spring list has 46 parseable forms with 70 long-text
+fields; after removing the paste-your-résumé and cover-letter alternatives,
+about 30 are real essays (Bree, Notion ×3, Ambrook, Hadrian, Dedalus,
+SpaceX, Persona AI, Cybernetic Labs, Cohere, Fab2, Apex, Abundant), listed
+in `~/Developer/firstplay/spring_essays.json`. Victor has an established
+essay workflow he will provide; nothing is drafted until it arrives, and
+the design from the original plan (select evidence → draft → verify
+grounding, word count checked in code) waits on it.
+
 ---
 
 ## Current state
