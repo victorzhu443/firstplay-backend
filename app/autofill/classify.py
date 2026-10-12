@@ -394,6 +394,16 @@ PROTECTED_FIELD_SUFFIXES = {
 #: Label patterns for the memory-only questions, mapped to their profile key.
 #: Matched on the label because these arrive as custom questions with per-posting
 #: names, so there is no stable key to look up.
+#: An accommodation request, in every wording the corpora and the audit of
+#: 2026-10-12 produced. One regex, shared by `MEMORY_ONLY_LABEL_KEYS` and
+#: `classify`, so the key and the class can never disagree about what an
+#: accommodation question is. "Housing accommodation in Seattle" is not one.
+_ACCOMMODATION = re.compile(
+    r"\b(reasonable accommodations?|accommodations? (for|during|request|due to|needed|required)"
+    r"|(require|need|request)(s|d|ing)? (any |an |some )?accommodations?"
+    r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
+    r"|assistance (during|with|in|for) the (interview|recruit|hiring|application))\b", re.I)
+
 MEMORY_ONLY_LABEL_KEYS = (
     # Order matters: "Can you perform these essential functions of the job with
     # reasonable accommodation?" mentions both. It asks about ability, and with
@@ -403,9 +413,7 @@ MEMORY_ONLY_LABEL_KEYS = (
     # Maven Securities 8043552: "If you require any support or adjustments
     # during the recruitment process…" is the UK wording. Unmatched, it was
     # SCREENING and the model gate answered it "No" from nothing (§40).
-    (re.compile(r"\b(reasonable accommodations?|accommodations? (for|during|request)|"
-                r"support or adjustments|reasonable adjustments|adjustments (during|to) the)\b", re.I),
-     "accommodation_needs"),
+    (_ACCOMMODATION, "accommodation_needs"),
     (re.compile(r"\bclose relative\b", re.I), "close_relative_official"),
     (re.compile(r"\bgovernment official\b", re.I), "government_official"),
     (re.compile(r"\b(personal/familial|familial) relationship", re.I),
@@ -456,13 +464,27 @@ PROTECTED_LABEL_PATTERNS = (
     (re.compile(r"\btransgender\b", re.I), "transgender"),
     (re.compile(r"\bgender\b", re.I), "gender"),
     (re.compile(r"\b(racial|ethnic|race|ethnicity)\b", re.I), "race_ethnicity"),
-    (re.compile(r"\bdisabilit", re.I), "disability_status"),
+    # "disability" names the EEOC question only when the label is not asking
+    # about accommodation. The outside audit of 2026-10-12 (H3) found "If you
+    # require accommodations due to a disability, please describe them" and
+    # "Do you have a disability that requires accommodation during the
+    # interview?" both replaying the stored EEOC disability sentence; the
+    # accommodation wording is the question, and it has its own memory-only
+    # key (`accommodation_needs`).
+    (re.compile(r"^(?!.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))"
+                r"(?=.*\bdisabilit)", re.I | re.S), "disability_status"),
     (re.compile(r"\bveteran\b", re.I), "veteran_status"),
 )
 
 
-def protected_key_for(key: str, label: str = "") -> Optional[str]:
-    """Canonical memory key for a protected-characteristic field, if it is one."""
+def vendor_protected_key_for(key: str, label: str = "") -> Optional[str]:
+    """Memory key for a field the *vendor* marks as a protected characteristic.
+
+    Greenhouse's stable names and compliance block, Ashby's `_systemfield_eeoc`
+    suffix, and Greenhouse's numbered demographic block (where only the label
+    says which question it is). Exact, so it is consulted before anything
+    matched on wording alone.
+    """
     if key in PROTECTED_FIELD_NAMES:
         return PROTECTED_FIELD_NAMES[key]
 
@@ -475,13 +497,20 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
             if pattern.search(label or ""):
                 return memory_key
 
-    # A custom question outside the demographic block that asks the same
-    # thing is the same question. Canonical (Greenhouse, audit of 2026-10-12):
-    # "Which gender do you identify as?" and "Please indicate your race or
-    # ethnicity" as ordinary custom questions were SCREENING, and the gate
-    # inferred both from the profile. Pronouns are not a protected
-    # characteristic and keep their own alias; "race" as in a race car does
-    # not occur on an application form.
+    return None
+
+
+def custom_protected_key_for(label: str) -> Optional[str]:
+    """Memory key for a protected characteristic asked as a custom question.
+
+    A custom question outside the demographic block that asks the same thing
+    is the same question. Canonical (Greenhouse, audit of 2026-10-12): "Which
+    gender do you identify as?" and "Please indicate your race or ethnicity"
+    as ordinary custom questions were SCREENING, and the gate inferred both
+    from the profile. Pronouns are not a protected characteristic and keep
+    their own alias; "race" as in a race car does not occur on an application
+    form.
+    """
     text = label or ""
     if text and not re.search(r"\bpronoun", text, re.I):
         for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
@@ -489,6 +518,11 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
                 return memory_key
 
     return None
+
+
+def protected_key_for(key: str, label: str = "") -> Optional[str]:
+    """Canonical memory key for a protected-characteristic field, if it is one."""
+    return vendor_protected_key_for(key, label) or custom_protected_key_for(label)
 
 
 #: Questions a model must never answer, but the applicant answers **once** and
@@ -503,9 +537,8 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
 _MEMORY_ONLY = (
     # ADA / accommodation. Free text or yes/no, and the applicant's own
     # statement either way — most people store "None" and never see it again.
-    re.compile(r"\b(reasonable accommodations?|accommodations? (for|during|request)"
-               r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
-               r"|essential functions)\b", re.I),
+    _ACCOMMODATION,
+    re.compile(r"\bessential functions\b", re.I),
     # Conflict-of-interest and political-exposure screens (~30 instances across
     # the fintech boards). Stable facts about relatives and holdings.
     re.compile(r"\bgovernment official\b", re.I),
@@ -747,13 +780,23 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
     if key in DOCUMENT_FIELD_NAMES:
         return DOCUMENT_FIELD_NAMES[key]
 
-    protected = protected_key_for(key, label)
+    # The vendor's own marker is exact and wins outright. On a custom key the
+    # wording decides, and the memory-only questions are read *before* the
+    # protected-label patterns: an accommodation request mentions disability
+    # ("If you require accommodations due to a disability…"), and the audit
+    # of 2026-10-12 (H3) found the stored EEOC disability answer replayed into
+    # that free-text box because the protected pattern was consulted first.
+    protected = vendor_protected_key_for(key, label)
     if protected:
         return protected
 
     memory_only = memory_only_key_for(label)
     if memory_only:
         return memory_only
+
+    protected = custom_protected_key_for(label)
+    if protected:
+        return protected
 
     # Only an upload is a document. "Resume/CV" as a textarea is the paste
     # alternative, handled as a sibling of the upload, never given a path.
