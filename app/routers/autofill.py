@@ -30,6 +30,7 @@ data is not. But the backend sees the profile in transit; it does not keep it.
 """
 import logging
 import re
+import threading
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
@@ -196,7 +197,9 @@ def build_plan(request: AutofillRequest, http_request: Request):
         # The decision service was reachable but failed. Rather than returning
         # nothing, retry without it: a deterministic plan is worth far more than
         # an error page.
-        logger.warning("Jev failed mid-plan, retrying deterministically: %s", e)
+        # The summary, not the upstream body: /health was sanitised (M5) and
+        # the log line carried the same text (review of 2026-10-12).
+        logger.warning("Jev failed mid-plan, retrying deterministically: %s", _summarise_error(e))
         _note_model_error(e, caller)
         plan = resolve_form(form, memory, company=request.company,
                             binder=DeterministicBinder())
@@ -315,7 +318,16 @@ def _stamp() -> str:
     return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 
+#: Handlers run in FastAPI's threadpool. Without this, one thread's
+#: `get` + `move_to_end` on a caller record could straddle another thread's
+#: eviction of that same (oldest) record and raise KeyError — a 500 for the
+#: applicant (review of 2026-10-12, finding 6). Reads in `_model_degraded`
+#: are single dict lookups and stay unlocked.
+_STATUS_LOCK = threading.Lock()
+
+
 def _caller_record(caller: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The caller's record, created and made most recent. Call under `_STATUS_LOCK`."""
     if not caller:
         return None
     record = _CALLER_STATUS.get(caller)
@@ -328,22 +340,24 @@ def _caller_record(caller: Optional[str]) -> Optional[Dict[str, Any]]:
 
 
 def _note_model_error(error: Exception, caller: Optional[str] = None) -> None:
-    _MODEL_SEQ["n"] += 1
-    _MODEL_STATUS["last_error"] = _summarise_error(error)
-    _MODEL_STATUS["last_error_at"] = _stamp()
-    _MODEL_STATUS["error_seq"] = _MODEL_SEQ["n"]
-    record = _caller_record(caller)
-    if record is not None:
-        record["error_seq"] = _MODEL_SEQ["n"]
+    with _STATUS_LOCK:
+        _MODEL_SEQ["n"] += 1
+        _MODEL_STATUS["last_error"] = _summarise_error(error)
+        _MODEL_STATUS["last_error_at"] = _stamp()
+        _MODEL_STATUS["error_seq"] = _MODEL_SEQ["n"]
+        record = _caller_record(caller)
+        if record is not None:
+            record["error_seq"] = _MODEL_SEQ["n"]
 
 
 def _note_model_ok(caller: Optional[str] = None) -> None:
-    _MODEL_SEQ["n"] += 1
-    _MODEL_STATUS["last_ok_at"] = _stamp()
-    _MODEL_STATUS["ok_seq"] = _MODEL_SEQ["n"]
-    record = _caller_record(caller)
-    if record is not None:
-        record["ok_seq"] = _MODEL_SEQ["n"]
+    with _STATUS_LOCK:
+        _MODEL_SEQ["n"] += 1
+        _MODEL_STATUS["last_ok_at"] = _stamp()
+        _MODEL_STATUS["ok_seq"] = _MODEL_SEQ["n"]
+        record = _caller_record(caller)
+        if record is not None:
+            record["ok_seq"] = _MODEL_SEQ["n"]
 
 
 def _degraded_in(record: Dict[str, Any]) -> bool:
