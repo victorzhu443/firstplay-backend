@@ -138,12 +138,16 @@ NEAR_MISSES = {
             "Email Address",
             "Enter your .EDU email address. Assessments will only be sent to your school email.",
             "Please provide the institutional email address of the professor",
+            "Street Address (Optional Second Line)",                               # x5: line 2, not line 1
+            "Do you currently have a permanent or school address in the DC metro area?",  # x5: yes/no
         ],
         [
             "Address 1",
             "Home Address",
             "Street address",
             "Mailing address",
+            "Please provide your current mailing address. This information is used solely for recruitment.",  # x7
+            "Primary Mailing Address",                                             # x5
         ],
     ),
 }

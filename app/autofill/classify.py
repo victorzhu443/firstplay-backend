@@ -122,6 +122,16 @@ CORE_LABEL_ALIASES = {
     "address": "street_address",
     "address line 1": "street_address",
     "street address": "street_address",
+    # "Address 1" was 12 required fields in the R48 gap list and reached the
+    # theme router, whose key nothing set (audit 2026-10-12, M9); the rest
+    # are the wordings the corpora use for the same line.
+    "address 1": "street_address",
+    "street address 1": "street_address",
+    "street address line 1": "street_address",
+    "home address": "street_address",
+    "mailing address": "street_address",
+    "current address": "street_address",
+    "residential address": "street_address",
     "zip": "postal_code",
     "zip code": "postal_code",
     "zip postal code": "postal_code",
@@ -230,6 +240,9 @@ CORE_LABEL_ALIASES = {
     "minor s": "secondary_major",
     "address line 2": "street_address_2",
     "address 2": "street_address_2",
+    "street address optional second line": "street_address_2",   # x5, would otherwise take line 1
+    "street address 2": "street_address_2",
+    "street address line 2": "street_address_2",
     "apt suite": "street_address_2",
     "apartment suite": "street_address_2",
 }

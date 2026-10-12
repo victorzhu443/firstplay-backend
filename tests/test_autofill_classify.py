@@ -267,3 +267,54 @@ def test_the_race_question_listing_hispanic_as_an_option_stays_the_race_question
     assert protected_key_for("question_1", "Race/Ethnicity (Hispanic or Latino, White, Asian, ...)") == "race_ethnicity"
     assert protected_key_for("race", "Race") == "race_ethnicity"
     assert protected_key_for("question_1", "Please indicate your race or ethnicity") == "race_ethnicity"
+
+
+# --- M9: an address line reads the stored street address ---------------------
+
+def test_address_lines_resolve_from_the_stored_street_address():
+    """Audit M9: "Address 1" (12 required fields in the R48 gap list) and
+    "Address" reached theme WORK_ADDRESS, whose key `work_address` exists in
+    no profile; the stored street_address was never consulted."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FillSource, FormSchema
+    from app.autofill.themes import QuestionTheme, THEME_MEMORY_KEYS
+
+    assert THEME_MEMORY_KEYS[QuestionTheme.WORK_ADDRESS] == "street_address"
+    memory = Memory(facts={"street_address": "1 Main St", "email": "ada@example.com"})
+    fields = [_field(label, FieldKind.TEXT, options=(), key="q{}".format(i))
+              for i, label in enumerate(["Address 1", "Address", "Street address", "Home Address",
+                                         "Address 2", "What address would you work from?"])]
+    for f in fields[:4]:
+        assert f.field_class == FieldClass.CORE and memory_key_for(f.key, f.label, FieldKind.TEXT) == "street_address", f.label
+    assert memory_key_for("q4", "Address 2", FieldKind.TEXT) == "street_address_2"
+    assert memory_key_for("q4", "Street Address (Optional Second Line)", FieldKind.TEXT) == "street_address_2"
+
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields)
+    plan = resolve_form(form, memory, binder=DeterministicBinder())
+    by = {e.label: e for e in plan.entries}
+    for label in ("Address 1", "Address", "Street address", "Home Address", "What address would you work from?"):
+        assert by[label].value == "1 Main St" and not by[label].needs_review, label
+        assert by[label].source == FillSource.MEMORY
+    # The second line stays its own optional fact: blank, not the first line again.
+    assert by["Address 2"].skipped and by["Address 2"].value is None
+
+
+def test_an_unset_street_address_is_asked_for_under_its_own_key():
+    from app.autofill.binder import resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    field = _field("Address 1", FieldKind.TEXT, options=())
+    field.required = True
+    entry = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[field]), Memory(), binder=None).entries[0]
+    assert entry.needs_review and entry.needs_fact and entry.needs_fact["key"] == "street_address"
+
+
+def test_a_university_email_address_is_not_a_street_address():
+    from app.autofill.binder import DeterministicBinder
+    from app.autofill.themes import QuestionTheme
+
+    label = "Please provide your university email address"
+    assert DeterministicBinder().classify_themes([label])[label][0] != QuestionTheme.WORK_ADDRESS
+    assert memory_key_for("question_1", label, FieldKind.TEXT) != "street_address"

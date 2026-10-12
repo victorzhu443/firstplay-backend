@@ -248,9 +248,16 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
                r"(?=.*\b(?:before|previously|previous)\b)", re.I)),
     (QuestionTheme.CURRENT_STATE, re.compile(r"\b(state or province|which state)\b", re.I)),
     # "Please provide your university email address" is not a street address
-    # (audit 2026-10-12, M9).
+    # (audit 2026-10-12, M9). Nor is a second line ("Street Address (Optional
+    # Second Line)", x5), nor a yes/no about having an address somewhere ("Do
+    # you currently have a permanent or school address in the DC metro
+    # area?", x5): with street_address stored, both would have been filled
+    # with line 1.
     (QuestionTheme.WORK_ADDRESS,
-     re.compile(r"^(?!.*\b(e-?mail|ip|web|website|url|wallet)\s*address\b)(?=.*\baddress\b)", re.I | re.S)),
+     re.compile(r"^(?!.*\b(e-?mail|ip|web|website|url|wallet)\s*address\b)"
+               r"(?!.*\b(second line|line 2|address 2)\b)"
+               r"(?!\s*(do|are|have|will|would|can|could|is) you\b)"
+               r"(?=.*\baddress\b)", re.I | re.S)),
     # A general tolerance answers a general question. "Are you able to work
     # in-person in San Jose this summer?" names a place, and the stored
     # in_office_tolerance says nothing about San Jose; it was filled at 1.0
