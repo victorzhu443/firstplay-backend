@@ -222,7 +222,92 @@ def test_health_reports_a_model_that_failed_last(monkeypatch):
     router._MODEL_STATUS.update({"last_error": None, "last_error_at": None, "last_ok_at": None})
     router._note_model_error(JevServiceError("API key expired"))
     health = client.get("/api/autofill/health").json()
-    assert health["model_last_error"].endswith("API key expired")
+    # Sanitised: the type of failure, never the upstream text (audit M5).
+    assert health["model_last_error"] == "JevServiceError" and "expired" not in health["model_last_error"]
     assert health["model_degraded"] is (health["model_available"] is True)
     router._note_model_ok()
     assert client.get("/api/autofill/health").json()["model_degraded"] is False
+
+
+# --- M6 / L2: the response says whether a model was available at all --------
+
+def _reset_model_status():
+    from app.routers import autofill as router
+    router._MODEL_STATUS.clear()
+    router._MODEL_STATUS.update({"last_error": None, "last_error_at": None, "last_ok_at": None})
+    router._CALLER_STATUS.clear()
+
+
+def test_a_plan_built_without_a_model_key_says_so(monkeypatch):
+    """No key is not "degraded" and not "skipped": it is a different state,
+    and a caller that caches plans must not cache this one."""
+    from app.routers import autofill as router
+    _reset_model_status()
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    body = _plan(use_model=True).json()
+    assert body["model_available"] is False
+    assert body["model_degraded"] is False and body["model_skipped"] is False
+    assert body["jev_calls"] == 0 and body["summary"]["filled"] > 0
+    # A missing key is not recorded as a model failure.
+    assert router._MODEL_STATUS["last_error_at"] is None
+    assert client.get("/api/autofill/health").json()["model_available"] is False
+
+
+def test_model_available_reports_the_key_not_the_request(monkeypatch):
+    _reset_model_status()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-not-a-real-key")
+    body = _plan(use_model=False).json()
+    assert body["model_available"] is True and body["model_degraded"] is False
+
+
+@pytest.mark.parametrize("error,summary", [
+    ("JevServiceError", "HTTP 401 Unauthorized: {\"error\": {\"message\": \"User not found; key sk-or-v1-abcdef expired\"}}", ),
+    ("JevServiceError", "decisions call timed out after 8.0s"),
+    ("JevServiceError", "transport error: connection reset by peer"),
+    ("JevConfigurationError", "OPENROUTER_API_KEY is not set. Add it to your .env file."),
+    ("JevServiceError", "something else entirely " + "x" * 300),
+])
+def test_the_last_model_error_is_a_short_sanitised_summary(error, summary):
+    from app.routers import autofill as router
+    from app import exceptions
+    text = router._summarise_error(getattr(exceptions, error)(summary))
+    assert len(text) <= 80
+    assert "sk-or" not in text and "expired" not in text and ".env" not in text and "xxx" not in text
+    expected = {"HTTP 401": "401 from upstream", "timed out": "upstream timed out",
+                "transport": "upstream unreachable", "not set": "model not configured"}
+    for needle, value in expected.items():
+        if needle in summary:
+            assert text == value
+
+
+def test_model_degradation_is_per_caller_with_a_global_fallback(monkeypatch):
+    """One caller's failure no longer marks a caller who has succeeded since
+    as degraded; a caller with no record inherits the global signal, which
+    is what an expired key looks like to everyone."""
+    from app.routers import autofill as router
+    from app.exceptions import JevServiceError
+    _reset_model_status()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-not-a-real-key")
+
+    router._note_model_ok("install:bbb")
+    router._note_model_error(JevServiceError("HTTP 500"), "install:aaa")
+    assert router._model_degraded("install:aaa") is True
+    assert router._model_degraded("install:bbb") is False
+    assert router._model_degraded("install:new") is True      # global fallback
+    assert router._model_degraded() is True                   # /health, process-wide
+
+    def plan_for(token):
+        return client.post("/api/autofill/plan", headers={"X-FirstPlay-Install": token},
+                           json={"ats": "greenhouse", "form": _fixture("greenhouse_anthropic_ae.json"),
+                                 "profile": PROFILE, "use_model": False}).json()
+    assert plan_for("aaa")["model_degraded"] is True
+    assert plan_for("bbb")["model_degraded"] is False
+
+    router._note_model_ok("install:aaa")
+    assert router._model_degraded("install:aaa") is False and router._model_degraded() is False
+
+    # Bounded: the oldest caller record is dropped, never the process.
+    for i in range(router._CALLER_STATUS_MAX + 5):
+        router._note_model_ok("install:{}".format(i))
+    assert len(router._CALLER_STATUS) == router._CALLER_STATUS_MAX
+    _reset_model_status()

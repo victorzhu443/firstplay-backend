@@ -363,3 +363,43 @@ def test_local_patterns_classify_before_the_model_is_asked():
                                   "What is your favourite colour?"])
     assert out["Are you able to work full-time (40 hours) in-person at one of our offices?"] == (QuestionTheme.IN_OFFICE_TOLERANCE, 1.0)
     assert calls == [["What is your favourite colour?"]]
+
+
+# --- M5: the option cache holds no stored answer in a key and is bounded ----
+
+def test_option_cache_keys_are_hashes_that_carry_no_stored_answer():
+    from app.autofill.jev_binder import JevBinder, cache_signature
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField
+    field = FormField(key="q", label="Are you willing to relocate to Austin?", kind=FieldKind.SINGLE_SELECT,
+                      field_class=FieldClass.SCREENING, options=[FieldOption(label="Yes, gladly", value="1"),
+                                                                 FieldOption(label="No", value="0")])
+    signature = JevBinder._option_signature("Yes, I would relocate for Acme", field)
+    for leaked in ("Acme", "relocate", "Austin", "gladly", "Yes"):
+        assert leaked not in signature
+    assert len(signature) < 50 and signature.startswith("optmatch:")
+    # Deterministic, and sensitive to each part.
+    assert signature == JevBinder._option_signature("Yes, I would relocate for Acme", field)
+    assert signature != JevBinder._option_signature("No", field)
+    assert cache_signature("answer", "a", "b") != cache_signature("answer", "ab", "")
+
+
+def test_option_cache_hits_and_is_bounded_with_lru_eviction(tmp_path):
+    import json
+    from app.autofill.jev_binder import OptionCache, cache_signature
+    cache = OptionCache(max_entries=3)
+    keys = [cache_signature("optmatch", str(i)) for i in range(4)]
+    cache.put(keys[0], "A", 0.9)
+    cache.put(keys[1], "B", 0.9)
+    cache.put(keys[2], "C", 0.9)
+    assert cache.get(keys[0]) == ("A", 0.9)          # a hit, and now most recent
+    cache.put(keys[3], "D", 0.9)                     # evicts the least recent: keys[1]
+    assert cache.size == 3 and cache.evicted == 1
+    assert cache.get(keys[1]) is None and cache.get(keys[0]) == ("A", 0.9) and cache.get(keys[3]) == ("D", 0.9)
+    assert OptionCache().max_entries == 5000
+
+    # A persisted file whose keys are raw text (the old format, stored
+    # answers included) is dropped on load rather than carried forward.
+    path = tmp_path / "options.json"
+    path.write_text(json.dumps({"optmatch::Label::Jane Doe::Yes|No": ["Yes", 0.9], keys[0]: ["A", 0.8]}))
+    loaded = OptionCache(str(path))
+    assert loaded.size == 1 and loaded.get(keys[0]) == ("A", 0.8)

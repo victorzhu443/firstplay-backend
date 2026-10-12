@@ -1,32 +1,40 @@
 """
 Autofill endpoint: a form plus a profile becomes a FillPlan.
 
-**Deliberately stateless.** The profile arrives in the request and is never
-written anywhere — no database, no session, no log of its contents. That is a
-design decision rather than an omission, and it buys three things:
+**Stateless, not blind.** What actually crosses the wire, stated plainly
+(audit 2026-10-12, M5):
 
-  - **No breach surface.** This data includes protected characteristics, work
-    authorisation and a home postcode. The safest place to keep it is the only
-    machine that needs it.
-  - **No authentication to build.** There is nothing server-side belonging to a
-    user, so there is nothing to protect. Multi-user works by construction:
-    every extension holds its own profile.
-  - **Consistency.** The résumé-screening gate was rejected for sending work
-    history to a third party in exchange for 0.07 fields per application. It
-    would be odd to then store demographics on a server for convenience.
+  - **To this backend, on every `/plan` and `/learn` request:** the whole
+    profile as the extension holds it — facts, education, legal status,
+    preferences, `protected`, `consents`, `answers`, `learned`, employers —
+    together with the form payload. It is parsed into a `Memory` for that one
+    request, used to build the plan, and discarded when the response is
+    written. Nothing is stored: no database, no session, no file. Nothing is
+    logged from the body: the app logs exception text and a short description
+    of each model call, never profile contents. Two process-wide caches
+    outlive the request and hold no profile values: label -> theme, and
+    hashed question signatures -> chosen option label.
+  - **From this backend to OpenRouter, when a model call is made:** field
+    labels and option texts, the posting's company and title, earlier answers
+    on the same form, and the *non-protected* applicant state (legal status,
+    education, preferences, background facts, learned facts, current
+    location, employers). `protected` and `consents` are never sent;
+    `ALLOWED_FILL_SOURCES` bars model judgement from those fields entirely.
+    `use_model: false` makes no model call at all.
+  - **To Greenhouse's board API and Ashby's GraphQL:** posting identifiers.
 
-Adding sync later is additive. Un-storing data is not.
-
-The one thing that does leave the machine is what Jev needs: field labels and
-option text for theme classification, plus the stored answer for the ~4% of
-fields needing semantic option matching. Protected fields never reach that path
-— `ALLOWED_FILL_SOURCES` bars model judgement from them entirely.
+Statelessness is a design decision rather than an omission: there is no
+server-side record of a user to breach or to authenticate, every extension
+holds its own profile, and adding sync later is additive where un-storing
+data is not. But the backend sees the profile in transit; it does not keep it.
 """
 import logging
+import re
 import time
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.autofill.ashby import parse_ashby_dom
@@ -39,17 +47,22 @@ from app.autofill.learn import LearnResult, Observation, accept, learn
 from app.autofill.memory import Memory
 from app.autofill.schema import FormSchema
 from app.exceptions import JevConfigurationError, JevError
-from app.rate_limit import autofill_limit
+from app.jev_client import get_jev_client
+from app.rate_limit import autofill_limit, client_key
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/autofill", tags=["autofill"])
 
-#: Shared across requests on purpose. The cache holds label -> theme mappings,
-#: which are facts about *forms* rather than about any applicant, so there is
-#: nothing user-specific in it and every user's first application benefits from
-#: every previous one. Measured: 123 distinct phrasings across 42 postings, so
-#: the cache saturates quickly and marginal cost trends to zero.
+#: Shared across requests on purpose. The theme cache holds label -> theme
+#: mappings, which are facts about *forms* rather than about any applicant, so
+#: there is nothing user-specific in it and every user's first application
+#: benefits from every previous one. Measured: 123 distinct phrasings across
+#: 42 postings, so the cache saturates quickly and marginal cost trends to
+#: zero. The option cache is keyed on hashes (label, option set and stored
+#: answer go through SHA-256) and bounded at 5,000 entries, so a hosted
+#: process holds no applicant's stored answer in a key and cannot grow
+#: without limit.
 _THEME_CACHE = ThemeCache()
 _OPTION_CACHE = OptionCache()
 
@@ -65,7 +78,8 @@ class AutofillRequest(BaseModel):
     #: as read from the page.
     form: Dict[str, Any]
 
-    #: The applicant's profile. Sent per request, stored nowhere.
+    #: The applicant's whole profile, protected answers included. Held in
+    #: memory for this request only; stored nowhere, logged nowhere.
     profile: Dict[str, Any] = Field(default_factory=dict)
 
     #: Company being applied to, for the parameterised themes. Falls back to
@@ -95,6 +109,14 @@ class AutofillResponse(BaseModel):
     #: not the plan the engine would make. 2026-10-12: the extension kept
     #: serving plans made during the outage for a day after the key was fixed.
     model_degraded: bool = False
+    #: False when no OpenRouter key is configured, so the plan was built by
+    #: the deterministic binder for lack of a model rather than by choice.
+    #: Distinct from `model_skipped` (a call tripped mid-plan) and from
+    #: `model_degraded` (a key is present but failing): the hosted backend
+    #: ran keyless for a day with both of those false and the extension
+    #: cached its plans for six hours (audit 2026-10-12, M6). A caller that
+    #: caches plans must not cache one with this false.
+    model_available: bool = True
 
 
 def _parse_form(ats: str, payload: Dict[str, Any]) -> FormSchema:
@@ -120,7 +142,7 @@ def _parse_form(ats: str, payload: Dict[str, Any]) -> FormSchema:
 # async, one slow call would stall the event loop for every other request.
 @router.post("/plan", response_model=AutofillResponse,
              dependencies=[Depends(autofill_limit)])
-def build_plan(request: AutofillRequest):
+def build_plan(request: AutofillRequest, http_request: Request):
     """Resolve a form against a profile.
 
     Never submits anything, and never returns a value for a field the policy
@@ -130,11 +152,13 @@ def build_plan(request: AutofillRequest):
 
     Args:
         request: The form, the profile, and whether model calls are permitted
+        http_request: The HTTP request, for the caller's install token
 
     Returns:
         The plan, a summary, and what the model calls cost
     """
     started = time.perf_counter()
+    caller = client_key(http_request)
     form = _parse_form(request.ats, request.form)
 
     try:
@@ -150,34 +174,37 @@ def build_plan(request: AutofillRequest):
     binder = DeterministicBinder()
     jev: Optional[JevBinder] = None
 
-    if request.use_model:
-        try:
-            jev = JevBinder(cache=_THEME_CACHE, option_cache=_OPTION_CACHE,
-                            form_context={"company": form.company or "", 
-                                          "title": form.title or ""})
-            binder = jev
-        except JevConfigurationError as e:
-            # No key, or a malformed one. Deterministic resolution still answers
-            # the large majority of fields, so this degrades rather than fails.
-            logger.warning("Jev unavailable, falling back to deterministic: %s", e)
-            _note_model_error(e)
+    # Checked up front rather than discovered mid-plan: the binder builds its
+    # client lazily, so a missing key used to surface as a JevError halfway
+    # through resolution and be recorded as degradation. No key is a
+    # different state from a failing key, and the response says which.
+    available = _model_configured()
+
+    if request.use_model and available:
+        jev = JevBinder(cache=_THEME_CACHE, option_cache=_OPTION_CACHE,
+                        form_context={"company": form.company or "",
+                                      "title": form.title or ""})
+        binder = jev
+    elif request.use_model:
+        logger.warning("No model key configured; building a deterministic plan")
 
     try:
         plan = resolve_form(form, memory, company=request.company, binder=binder)
-        if binder is not None and getattr(binder, "calls", 0):
-            _note_model_ok()
+        if jev is not None and getattr(jev, "calls", 0):
+            _note_model_ok(caller)
     except JevError as e:
         # The decision service was reachable but failed. Rather than returning
         # nothing, retry without it: a deterministic plan is worth far more than
         # an error page.
         logger.warning("Jev failed mid-plan, retrying deterministically: %s", e)
-        _note_model_error(e)
+        _note_model_error(e, caller)
         plan = resolve_form(form, memory, company=request.company,
                             binder=DeterministicBinder())
         jev = None
 
     return AutofillResponse(
-        model_degraded=bool(_MODEL_STATUS["last_error_at"] and (not _MODEL_STATUS["last_ok_at"] or _MODEL_STATUS["last_ok_at"] < _MODEL_STATUS["last_error_at"])),
+        model_available=available,
+        model_degraded=bool(available and _model_degraded(caller)),
         plan=plan,
         summary=plan.summary(),
         jev_calls=jev.calls if jev else 0,
@@ -227,10 +254,10 @@ def learn_from_form(request: LearnRequest):
 
     binder: Optional[JevBinder] = None
     if request.use_model and request.observations:
-        try:
+        if _model_configured():
             binder = JevBinder(cache=_THEME_CACHE, option_cache=_OPTION_CACHE)
-        except JevConfigurationError as e:
-            logger.warning("Jev unavailable; learning episodes only: %s", e)
+        else:
+            logger.warning("No model key configured; learning episodes only")
 
     try:
         result: LearnResult = learn(memory, request.observations, binder=binder)
@@ -249,18 +276,102 @@ def learn_from_form(request: LearnRequest):
 #: `model_available` only says a key is configured; on 2026-10-11 the key had
 #: expired, every plan fell back to deterministic, and nothing said so until
 #: an audit run came back with two model decisions across five hundred forms.
+#:
+#: Process-wide, plus one record per caller (the install token that is also
+#: the rate-limit key). A plan reports the caller's own record when there is
+#: one, else the global one: one caller's transient failure no longer marks
+#: every other caller degraded (audit 2026-10-12, L2), while a new caller
+#: still inherits the signal an expired key leaves behind. Bounded.
 _MODEL_STATUS: Dict[str, Any] = {"last_error": None, "last_error_at": None, "last_ok_at": None}
+_CALLER_STATUS: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_CALLER_STATUS_MAX = 1000
+#: Monotonic sequence for ordering events: two within one second share an
+#: ISO timestamp and could not be ordered.
+_MODEL_SEQ = {"n": 0}
 
 
-def _note_model_error(error: Exception) -> None:
+def _summarise_error(error: Exception) -> str:
+    """A short, sanitised account of a model failure for /health.
+
+    Upstream error bodies are not republished: the previous field carried up
+    to 200 characters of whatever OpenRouter returned, to anyone who asked.
+    """
+    if isinstance(error, JevConfigurationError):
+        return "model not configured"
+    text = str(error)
+    status = re.search(r"\b([45]\d\d)\b", text)
+    if status:
+        return "{} from upstream".format(status.group(1))
+    lowered = text.lower()
+    if "timed out" in lowered or "timeout" in lowered:
+        return "upstream timed out"
+    if "transport" in lowered or "connect" in lowered or "unreachable" in lowered:
+        return "upstream unreachable"
+    return type(error).__name__[:80]
+
+
+def _stamp() -> str:
     import datetime
-    _MODEL_STATUS["last_error"] = "{}: {}".format(type(error).__name__, str(error)[:200])
-    _MODEL_STATUS["last_error_at"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 
-def _note_model_ok() -> None:
-    import datetime
-    _MODEL_STATUS["last_ok_at"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+def _caller_record(caller: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not caller:
+        return None
+    record = _CALLER_STATUS.get(caller)
+    if record is None:
+        record = _CALLER_STATUS[caller] = {"error_seq": 0, "ok_seq": 0}
+        while len(_CALLER_STATUS) > _CALLER_STATUS_MAX:
+            _CALLER_STATUS.popitem(last=False)
+    _CALLER_STATUS.move_to_end(caller)
+    return record
+
+
+def _note_model_error(error: Exception, caller: Optional[str] = None) -> None:
+    _MODEL_SEQ["n"] += 1
+    _MODEL_STATUS["last_error"] = _summarise_error(error)
+    _MODEL_STATUS["last_error_at"] = _stamp()
+    _MODEL_STATUS["error_seq"] = _MODEL_SEQ["n"]
+    record = _caller_record(caller)
+    if record is not None:
+        record["error_seq"] = _MODEL_SEQ["n"]
+
+
+def _note_model_ok(caller: Optional[str] = None) -> None:
+    _MODEL_SEQ["n"] += 1
+    _MODEL_STATUS["last_ok_at"] = _stamp()
+    _MODEL_STATUS["ok_seq"] = _MODEL_SEQ["n"]
+    record = _caller_record(caller)
+    if record is not None:
+        record["ok_seq"] = _MODEL_SEQ["n"]
+
+
+def _degraded_in(record: Dict[str, Any]) -> bool:
+    """The last thing the model did was fail, with no success since."""
+    error_seq, ok_seq = record.get("error_seq") or 0, record.get("ok_seq") or 0
+    if not error_seq:
+        # A status reset from outside (tests) clears the timestamps only.
+        return bool(record.get("last_error_at") and not record.get("last_ok_at"))
+    return error_seq > ok_seq
+
+
+def _model_degraded(caller: Optional[str] = None) -> bool:
+    record = _CALLER_STATUS.get(caller) if caller else None
+    if record is not None and (record.get("error_seq") or record.get("ok_seq")):
+        return _degraded_in(record)
+    if not _MODEL_STATUS.get("last_error_at"):
+        return False
+    return _degraded_in(_MODEL_STATUS)
+
+
+def _model_configured() -> bool:
+    """Whether an OpenRouter key is set and well-formed. Reads the environment
+    only; no request is made."""
+    try:
+        get_jev_client()
+    except JevConfigurationError:
+        return False
+    return True
 
 
 @router.get("/profile-schema")
@@ -278,16 +389,11 @@ def autofill_health():
     """Whether the model path is available, and what it last did."""
     from app.autofill.themes import QuestionTheme
 
-    configured = True
-    try:
-        JevBinder()._ensure_client()
-    except JevConfigurationError:
-        configured = False
+    configured = _model_configured()
 
     # Degraded = configured but the last thing it did was fail, with no
     # success since: the state an expired key leaves you in.
-    degraded = bool(configured and _MODEL_STATUS["last_error_at"] and
-                    (not _MODEL_STATUS["last_ok_at"] or _MODEL_STATUS["last_ok_at"] < _MODEL_STATUS["last_error_at"]))
+    degraded = bool(configured and _model_degraded())
 
     return {
         "status": "ok",
