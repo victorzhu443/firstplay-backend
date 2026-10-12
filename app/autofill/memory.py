@@ -369,6 +369,9 @@ class Memory(BaseModel):
         correction made in review is a labelled example."""
         self.answers[self.fingerprint(label)] = value
 
+    def forget_answer(self, label: str) -> None:
+        self.answers.pop(self.fingerprint(label), None)
+
     # --- resolution ---------------------------------------------------------
 
     #: Values people type to mean "I don't have one". Writing the literal word
@@ -529,9 +532,14 @@ class Memory(BaseModel):
             )
 
         # An answer previously given or corrected wins over everything: it is
-        # the applicant's own words about this exact question.
+        # the applicant's own words about this exact question. Except a
+        # *choice* on a core field, which the profile's facts answer (§54):
+        # a select reports its rendering, not the applicant's words ("+1" for
+        # "United States +1"), and a real change belongs in the fact itself.
         remembered = self.recall_answer(field.label)
-        if remembered:
+        core_choice = field.field_class == FieldClass.CORE and field.kind in (
+            FieldKind.SINGLE_SELECT, FieldKind.MULTI_SELECT, FieldKind.BOOLEAN)
+        if remembered and not core_choice:
             return self._as_option(field, remembered, "you answered this before")
 
         key = memory_key_for(field.key, field.label, field.kind)

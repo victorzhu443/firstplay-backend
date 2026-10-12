@@ -163,3 +163,40 @@ def test_the_learn_endpoint_round_trips_the_profile():
                                                        "observations": [], "accept": ["t_shirt_size"]})
     assert response.status_code == 200 and response.json()["accepted"] == ["t_shirt_size"]
     assert response.json()["profile"]["learned"]["t_shirt_size"] == "M"
+
+
+# §54 — a choice on a core field is answered from the profile, never from an episode.
+# IMC, 2026-10-12: the phone-country select displays "+1" for "United States
+# +1"; the capture learned "Country" -> "+1" and every later Greenhouse form
+# failed on Country.
+
+def test_a_core_choice_is_never_an_episode():
+    memory = Memory(facts={"country": "United States"})
+    result = learn(memory, [_obs("Country", "+1", field_key="country", kind="single_select",
+                                 plan_value="United States")])
+    assert result.learned == 0 and memory.answers == {}
+    assert result.ignored[0]["why"].startswith("answered from your profile")
+
+
+def test_a_stale_core_episode_is_dropped_and_not_replayed():
+    memory = Memory(facts={"country": "United States"})
+    memory.remember_answer("Country", "+1")
+    form = _form(_field("country", "Country", FieldKind.SINGLE_SELECT, klass=FieldClass.CORE))
+    plan = resolve_form(form, memory, binder=DeterministicBinder())
+    assert plan.entries[0].value == "United States"
+    learn(memory, [_obs("Country", "+1", field_key="country", kind="single_select", plan_value="United States")])
+    assert memory.recall_answer("Country") is None
+
+
+def test_a_typed_core_answer_still_replays():
+    memory = Memory(facts={"preferred_first_name": "Victor"})
+    result = learn(memory, [_obs("Preferred name", "Vic", field_key="preferred_name", kind="text", plan_value="Victor")])
+    assert result.learned == 1 and memory.recall_answer("Preferred name") == "Vic"
+
+
+def test_an_option_label_that_extends_the_plan_value_is_the_same_answer():
+    memory = Memory()
+    result = learn(memory, [_obs("Which office?", "New York (HQ)", kind="single_select", plan_value="New York")])
+    assert result.learned == 0 and result.ignored[0]["why"].startswith("same as the plan")
+    changed = learn(memory, [_obs("Which office?", "London", kind="single_select", plan_value="New York")])
+    assert changed.learned == 1
