@@ -2087,6 +2087,83 @@ essay workflow he will provide; nothing is drafted until it arrives, and
 the design from the original plan (select evidence → draft → verify
 grounding, word count checked in code) waits on it.
 
+## 52. The audit loop closes: 289 model decisions, five wrong, each one a rule; attachments by kind
+
+**The "RL" that is honest here.** Victor asked for reinforcement learning.
+Jev is a hosted model that cannot be trained from here, so the loop that
+can be run is: reward = a human verdict on every value the model produced
+on held-out forms (and, on the page, the form's own validation), policy =
+the acceptance thresholds and the deterministic rules around the model,
+and the update = a threshold sweep against the verdicts plus a rule for
+each wrong answer. `replan_audit.py` re-plans a draw through the backend
+and dumps every model-decided value with its confidence and options;
+`tune.py` sweeps the thresholds against the verdicts.
+
+**What broke the first run.** The OpenRouter key had expired (2026-10-11).
+`/health` said `model_available: true` because a key was configured; every
+plan fell back to deterministic; the audit came back with two model
+decisions across five hundred forms and unanswered counts that read like
+a regression. The backend's own rate limit (600/hour per client) then
+refused the audit's requests. Fixes: `/health` reports `model_degraded`,
+`model_last_error` and timestamps from what the model path last did; the
+audit tool waits out 429s and reports how many forms had no model call;
+plan responses carry `model_degraded`; the extension (0.4.47) never caches
+such a plan and has a "Forget cached plans" button — the cached fallback
+plans had kept serving for a day after the key was fixed, which is what
+Victor was seeing as "it knows the answer but can't pick it" (confirmed:
+"now it works").
+
+**The audit (2026-10-12, key renewed, 419 forms from every recorded draw).**
+289 model-decided values read one by one against the profile:
+
+| source | rows | correct | wrong | unsure |
+|---|---|---|---|---|
+| profile-answer gate | 246 | 240 | 5 | 1 |
+| second pass | 43 | 43 | 0 | 0 |
+
+Threshold sweep on the gate: precision 98.0% at the current 0.85; 98.3%
+at 0.90 for 6% fewer correct answers; 98.0% at 0.95 for 17% fewer. Four
+of the five wrong answers sat at confidence 0.97–1.00, so no threshold
+removes them: they are mechanism errors, and each became a rule.
+1. *Canonical:* "Which gender do you identify as?" and "Please indicate
+   your race or ethnicity" as custom questions outside the demographic
+   block were SCREENING, and the gate inferred both from the pronouns.
+   Policy breach, whatever the inference. A protected characteristic asked
+   by label is LEGAL wherever it sits; pronouns stay a core alias.
+2. *Rocket Lab:* "anticipated master's degree graduation date" answered
+   05/2028 for a bachelor's student. A value question about a degree level
+   the applicant is not in takes the form's not-applicable option or stays
+   with the applicant; a yes/no about it still goes to the
+   graduate-programme theme.
+3. *Jane Street:* "Secondary Major" answered with the primary one. A new
+   optional fact; blank unless recorded.
+4. *WorldQuant:* "student with WorldQuant University in the past 12
+   months" answered Yes at 0.89. Left to the threshold question: this one
+   the 0.90 bar would have caught; the data says the bar costs more than it
+   saves, so the threshold stays at 0.85 and the decision is recorded here
+   with the numbers.
+5. One inapplicable follow-up answered rather than left (unsure).
+
+**Attachments by kind (from the screenshot of 2026-10-12).** The résumé had
+been attached to "Please provide a recent transcript of your undergraduate
+studies" and to the graduate transcript slot. Every file field now carries
+`document` — resume, cover_letter, transcript, portfolio, other — decided
+from key and label; a stored document of that kind is attached, otherwise
+the field is outlined with the kind named and "required" when it is; a
+graduate transcript asked of a bachelor's student is skipped. Custom
+upload labels ("Resume/CV", "Cover Letter" on a UUID key) now resolve to
+the stored documents, upload fields only. The extension (0.4.48) stores a
+transcript beside the résumé and attaches by the plan's kind, never the
+résumé to anything else. Also from the screenshot: "choose the single
+location you're most interested in" — a new `office_preference` list in
+the applicant's order, matched first-offered-wins; a theme and a local
+pattern route it.
+
+**Measured.** 629 tests. The audit list and verdicts live in
+`~/.config/firstplay/audit/` (profile values; not committed). Live
+re-checks after the key fix: Decagon 10/10 with the university selected,
+Vital 10 filled / 2 essays, Sail 3/3 through the embedded Apply flow.
+
 ---
 
 ## Current state

@@ -46,6 +46,8 @@ NOTES: Dict[str, str] = {
     "internship_end": "month and year your internship would end, e.g. 'August 2027'",
     "desired_salary": "what you type when asked for salary expectations",
     "interview_language": "the language you'd pick for a coding interview",
+    "office_preference": "your offices in order, separated by |, e.g. 'New York, NY | San Francisco, CA | Remote'",
+    "secondary_major": "a second major or minor, if any; empty leaves such fields blank",
     "transgender": "exactly as you'd answer it, e.g. \"I don't wish to answer\"",
     "sexual_orientation": "exactly as you'd answer it, e.g. \"I don't wish to answer\"",
     "privacy_notice": "'Agree' to accept privacy notices/data-processing statements every time; empty to decide each time",

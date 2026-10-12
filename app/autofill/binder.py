@@ -87,6 +87,13 @@ class FillPlanEntry(BaseModel):
     #: and rather than as "needs review", since the tool knows exactly which
     #: file; only the last click is the applicant's.
     attach: Optional[str] = None
+    #: For a file field: which document the form is asking for — resume,
+    #: cover_letter, transcript, portfolio, or other — decided from the key and
+    #: the label, whether or not that document is stored. The extension
+    #: attaches the stored document of that kind or outlines the field with a
+    #: note naming it; it never attaches the résumé to a slot that asks for
+    #: something else (2026-10-12).
+    document: Optional[str] = None
 
     #: Set when another control on the same question already answers it —
     #: Greenhouse offers "Resume/CV" as a file upload *and* a textarea, and
@@ -226,6 +233,9 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
     # R48-2: "What is your desired salary?" x6, "What are your salary
     # expectations?" x5+3, "Desired Salary" x3, "annual base salary
     # expectations" — all went unanswered with desired_salary stored.
+    (QuestionTheme.OFFICE_PREFERENCE,
+     re.compile(r"\b(which|select|choose|pick|rank)\b.{0,50}\b(office|location|city|hub)s?\b.{0,60}\b(prefer|interested|most|rank|first choice)"
+                r"|\b(preferred|first.choice|top) (office|work location|location|city)\b|\boffice (preference|location preference)\b", re.I)),
     (QuestionTheme.DESIRED_SALARY,
      re.compile(r"\b(desired|expected|target|anticipated)\s+(annual\s+)?(base\s+)?(salary|compensation|pay|rate)\b"
                 r"|\b(salary|compensation|pay)\s+(expectation|requirement)s?\b|\bexpected base\b", re.I)),
@@ -525,6 +535,16 @@ def _resolve_stored(
     # "How did you hear about us?" where the menu has no careers-site option
     # (x46 required across 578 Greenhouse forms, x27 on Ashby): the applicant's
     # ordered second choices, each tried as an exact match against the menu.
+    # Offices in the applicant's order: the first one this form offers.
+    if field.options and theme == QuestionTheme.OFFICE_PREFERENCE:
+        for choice in (stored or "").split("|"):
+            option = match_option(choice.strip(), field) if choice.strip() else None
+            if option is not None:
+                break
+        if option is None:
+            return Resolution(field_key=field.key, value=stored, source=FillSource.MEMORY, needs_review=True,
+                              reason="none of your preferred offices is offered here")
+
     if option is None and field.options and theme == QuestionTheme.HEARD_ABOUT:
         for fallback in (memory.preferences.get("heard_about_fallback") or "").split("|"):
             option = match_option(fallback.strip(), field) if fallback.strip() else None
@@ -874,6 +894,45 @@ def _class_standing_answer(field: FormField, memory: Memory) -> Optional[Resolut
     value = option.label if option else ("Yes" if answer else "No")
     return Resolution(field_key=field.key, value=value, source=FillSource.MEMORY,
                       reason="computed: you are a {} by your stored dates".format(mine))
+
+
+_OTHER_LEVEL = re.compile(r"\b(master'?s?|phd|ph\.d|doctor(al|ate)|graduate (gpa|degree|studies|program|programme))\b", re.I)
+_GRAD_MARKERS = ("master", "m.s", "ms ", "phd", "ph.d", "doctor", "msc", "meng")
+
+
+def _other_degree_level_answer(field: FormField, memory: Memory) -> Optional[Resolution]:
+    """A question about a degree level the applicant is not in is "not applicable".
+
+    Rocket Lab (audit 2026-10-12): "Select your anticipated master's degree
+    graduation date" was answered 05/2028 for a bachelor's student — the gate
+    carried the bachelor's date across. When the form offers a not-applicable
+    option it is chosen; otherwise the field stays with the applicant rather
+    than taking a value from the other degree.
+    """
+    label = field.label or ""
+    if not _OTHER_LEVEL.search(label) or re.search(r"\b(bachelor|undergrad)", label, re.I):
+        return None
+    # Only a question that wants a *value* from that degree (a date, a GPA, a
+    # school, a field). "Are you enrolled in a Master's or PhD programme?" is a
+    # yes/no the graduate-programme theme answers, correctly, with No.
+    if not re.search(r"\b(date|gpa|grade|transcript|year|major|field of study|school|university|institution)\b", label, re.I):
+        return None
+    if field.kind == FieldKind.BOOLEAN or (field.options and all(_as_bool(o.label) is not None for o in field.options)):
+        return None
+    degree = (memory.education.get("degree") or "").lower()
+    if not degree or any(m in degree for m in _GRAD_MARKERS):
+        return None
+    if field.options:
+        na = next((o for o in field.options if _NOT_APPLICABLE.match(o.label.strip())
+                   or re.match(r"^(other\s*/\s*)?(not applicable|n/?a|none|do not recall)", o.label.strip(), re.I)), None)
+        if na is not None:
+            return Resolution(field_key=field.key, value=na.label, source=FillSource.MEMORY,
+                              reason="not applicable: you are pursuing a bachelor's")
+    if field.kind == FieldKind.TEXT and not field.required:
+        return Resolution(field_key=field.key, source=FillSource.MEMORY,
+                          skipped="asks about a graduate degree; you are pursuing a bachelor's")
+    return Resolution(field_key=field.key, source=FillSource.HUMAN, needs_review=True,
+                      reason="asks about a graduate degree; you are pursuing a bachelor's and the form offers no 'not applicable'")
 
 
 _BASED_IN = re.compile(r"\b(based|located|living|live|reside|residing|physically located)\s+(in|within)\b", re.I)
@@ -1289,14 +1348,44 @@ def _answer_from_profile(
         entry.reason = "decided from your profile and your earlier answers on this form"
 
 
+_DOCUMENT_KINDS = (
+    ("transcript", re.compile(r"\btranscript|academic record\b", re.I)),
+    ("cover_letter", re.compile(r"\bcover letter\b|\bcover_letter\b", re.I)),
+    ("portfolio", re.compile(r"\bportfolio|work sample|writing sample|design sample|code sample\b", re.I)),
+    ("resume", re.compile(r"\b(resume|résumé|cv|curriculum vitae)\b|_systemfield_resume", re.I)),
+)
+
+
+def document_kind(field: FormField) -> str:
+    """What a file field asks for, from its key and label."""
+    text = "{} {}".format(field.key or "", field.label or "")
+    for kind, pattern in _DOCUMENT_KINDS:
+        if pattern.search(text):
+            return kind
+    return "other"
+
+
 def _mark_attachments(entries: List[FillPlanEntry], form: FormSchema) -> None:
-    """A resolved file upload becomes an attachment instruction, not a fill."""
-    kinds = {f.key: f.kind for f in form.fields}
+    """Every file field gets the document kind it asks for; a resolved one
+    becomes an attachment instruction, an unresolved one a note naming the
+    kind — and a required one stays visibly required."""
+    fields = {f.key: f for f in form.fields}
 
     for entry in entries:
-        if kinds.get(entry.field_key) != FieldKind.FILE:
+        field = fields.get(entry.field_key)
+        if field is None or field.kind != FieldKind.FILE:
             continue
-        if entry.value is None or entry.needs_review or entry.skipped:
+        entry.document = document_kind(field)
+        if entry.skipped:
+            continue
+        if entry.value is None or entry.needs_review:
+            if entry.document == "other":
+                entry.reason = "asks for a file this profile does not hold ({}){}".format(
+                    (field.label or "")[:40], "; required" if field.required else "")
+            else:
+                entry.reason = "attach your {}{}".format(entry.document.replace("_", " "),
+                                                        " — required" if field.required else "")
+            entry.needs_review = True
             continue
         entry.attach = entry.value
         entry.reason = "attach this file yourself — a browser will not let a script do it"
@@ -1382,7 +1471,8 @@ def resolve_form(
     for field in form.fields:
         resolution = _within_options(memory.resolve(field), field)
         if resolution is None:
-            resolution = _class_standing_answer(field, memory) or _based_in_country_answer(field, memory)
+            resolution = (_class_standing_answer(field, memory) or _based_in_country_answer(field, memory)
+                          or _other_degree_level_answer(field, memory))
         if resolution is not None:
             resolved[field.key] = resolution
         else:

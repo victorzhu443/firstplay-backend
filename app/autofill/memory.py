@@ -536,6 +536,19 @@ class Memory(BaseModel):
 
         key = memory_key_for(field.key, field.label, field.kind)
 
+        # A transcript of *graduate* studies asked of an undergraduate is not
+        # applicable (screenshot 2026-10-12: the résumé had been attached to
+        # both the undergraduate and the graduate transcript slots).
+        if key == "transcript_file" and re.search(r"\b(graduate|master'?s?|phd|doctoral)\b", field.label or "", re.I) \
+                and not re.search(r"\bundergraduate\b", field.label or "", re.I):
+            degree = (self.education.get("degree") or "").lower()
+            if degree and not any(m in degree for m in ("master", "m.s", "ms ", "phd", "ph.d", "doctor", "msc", "meng")):
+                if field.required:
+                    return Resolution(field_key=field.key, source=FillSource.MEMORY, needs_review=True,
+                                      reason="asks for a graduate transcript; you are pursuing a bachelor's, but the form requires it")
+                return Resolution(field_key=field.key, source=FillSource.MEMORY,
+                                  skipped="a graduate transcript does not apply to a bachelor's student")
+
         if key and key in self.skip:
             if field.required:
                 return Resolution(
@@ -701,6 +714,7 @@ PROFILE_FIELDS = {
         ("street_address_2", "", 28),
         ("years_experience", "0", 6),
         ("google_scholar", "", 2),
+        ("secondary_major", "", 3),
     ],
     "education": [
         ("university", "Cornell University", 14),
@@ -734,6 +748,10 @@ PROFILE_FIELDS = {
         ("internship_end", "August 2027", 23),
         ("desired_salary", "Open to the posted range", 25),
         ("interview_language", "Python", 6),
+        # "Choose the single location you're most interested in" (x12 across
+        # the R48 draws, required): the applicant's offices in order; the
+        # first one the form offers is chosen, else the field stays with them.
+        ("office_preference", "New York, NY | San Francisco, CA | Remote", 12),
     ],
     "protected": [
         ("accommodation_needs", "None", 13),

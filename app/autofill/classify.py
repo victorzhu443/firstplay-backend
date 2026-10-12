@@ -213,6 +213,12 @@ CORE_LABEL_ALIASES = {
     "portfolio website": "website",
     "website url": "website",
     "personal website url": "website",
+    # Jane Street (audit 2026-10-12): "Secondary Major" was answered with the
+    # primary one. An optional secondary fact: blank unless recorded.
+    "secondary major": "secondary_major",
+    "second major": "secondary_major",
+    "minor": "secondary_major",
+    "minor s": "secondary_major",
     "address line 2": "street_address_2",
     "address 2": "street_address_2",
     "apt suite": "street_address_2",
@@ -224,7 +230,7 @@ CORE_LABEL_ALIASES = {
 #: something most applicants do not have; recording nothing is the answer.
 OPTIONAL_BLANK_KEYS = frozenset({
     "street_address_2", "twitter", "website_other", "alternate_email",
-    "preferred_last_name", "google_scholar",
+    "preferred_last_name", "google_scholar", "secondary_major",
 })
 
 #: Follow-up fields that only apply after a particular answer to the question
@@ -405,6 +411,10 @@ MEMORY_ONLY_LABEL_KEYS = (
 DOCUMENT_LABEL_PATTERNS = (
     (re.compile(r"\b(transcript|academic record|academic transcript)\b", re.I),
      "transcript_file"),
+    # Ashby custom upload fields carry a UUID key and a label such as
+    # "Resume/CV" or "Cover Letter"; only the label says which document.
+    (re.compile(r"\bcover letter\b", re.I), "cover_letter"),
+    (re.compile(r"\b(resume|r\u00e9sum\u00e9|cv|curriculum vitae)\b", re.I), "resume_file"),
 )
 
 
@@ -454,6 +464,19 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
     if (key or "").startswith(DEMOGRAPHIC_KEY_PREFIX):
         for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
             if pattern.search(label or ""):
+                return memory_key
+
+    # A custom question outside the demographic block that asks the same
+    # thing is the same question. Canonical (Greenhouse, audit of 2026-10-12):
+    # "Which gender do you identify as?" and "Please indicate your race or
+    # ethnicity" as ordinary custom questions were SCREENING, and the gate
+    # inferred both from the profile. Pronouns are not a protected
+    # characteristic and keep their own alias; "race" as in a race car does
+    # not occur on an application form.
+    text = label or ""
+    if text and not re.search(r"\bpronoun", text, re.I):
+        for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
+            if pattern.search(text):
                 return memory_key
 
     return None
@@ -642,6 +665,12 @@ def classify(
     if _AI_POLICY.search(normalized):
         return FieldClass.CONSENT
 
+    # A protected characteristic asked as a custom question (Canonical: "Which
+    # gender do you identify as?", "Please indicate your race or ethnicity")
+    # is LEGAL wherever it sits: the stored answer replays, no model touches it.
+    if protected_key_for(key, label) and normalized not in CORE_LABEL_ALIASES:
+        return FieldClass.LEGAL
+
     if any(pattern.search(normalized) for pattern in _DECISIONS_NOT_FACTS):
         return FieldClass.CONSENT
 
@@ -717,11 +746,11 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
     if memory_only:
         return memory_only
 
-    document = document_key_for(label)
+    # Only an upload is a document. "Resume/CV" as a textarea is the paste
+    # alternative, handled as a sibling of the upload, never given a path.
+    document = document_key_for(label) if kind in (None, FieldKind.FILE) else None
     if document:
         return document
-    if kind == FieldKind.FILE and re.search(r"\bcover letter\b", label or "", re.I):
-        return "cover_letter"
 
     if kind == FieldKind.BOOLEAN:
         return None

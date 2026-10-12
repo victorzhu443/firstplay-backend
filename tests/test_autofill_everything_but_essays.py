@@ -350,3 +350,67 @@ def test_ashby_number_fields_carry_the_numeric_flag():
     form = parse_ashby_posting(payload, org="acme")
     flags = {f.key: f.numeric for f in form.fields}
     assert flags == {"n1": True, "t1": False}
+
+
+# --- audit of 2026-10-12 (289 model decisions, 5 wrong): each wrong one becomes a rule
+
+def test_a_custom_gender_or_race_question_is_protected_wherever_it_appears():
+    for label in ("Which gender do you identify as?", "Please indicate your race or ethnicity:"):
+        field = _field("q", label, FieldKind.SINGLE_SELECT, ["Male", "Female", "Decline to self-identify"])
+        assert field.field_class == FieldClass.LEGAL and not field.allows_model_judgement(), label
+    assert classify("q", "What are your preferred pronouns?", FieldKind.SINGLE_SELECT, option_count=3) != FieldClass.LEGAL
+
+
+def test_a_masters_date_for_a_bachelors_student_is_not_applicable_or_left_alone():
+    from app.autofill.binder import _other_degree_level_answer
+    bs = Memory(education={"degree": "BS Computer Science", "graduation_date": "May 2028"})
+    with_na = _field("a", "Select your anticipated master's degree graduation date", FieldKind.SINGLE_SELECT, ["05/2027", "05/2028", "Not Applicable"])
+    assert _other_degree_level_answer(with_na, bs).value == "Not Applicable"
+    without = _field("b", "Select your anticipated master's degree graduation date", FieldKind.SINGLE_SELECT, ["05/2027", "05/2028"], required=True)
+    assert _other_degree_level_answer(without, bs).needs_review
+    assert _other_degree_level_answer(_field("c", "Select your anticipated bachelor's degree graduation date", FieldKind.SINGLE_SELECT, ["05/2028"]), bs) is None
+    ms = Memory(education={"degree": "MS Computer Science"})
+    assert _other_degree_level_answer(with_na, ms) is None
+
+
+def test_secondary_major_is_blank_unless_recorded():
+    plan = resolve_form(_form(_field("m", "Secondary Major")), Memory(education={"degree": "BS Computer Science"}), binder=None)
+    assert plan.entries[0].skipped and plan.entries[0].value is None
+
+
+def test_a_graduate_transcript_slot_is_skipped_for_an_undergraduate_and_the_undergraduate_one_attached():
+    memory = Memory(facts={"transcript_file": "~/Documents/transcript.pdf"}, education={"degree": "BS Computer Science"})
+    form = _form(_field("u", "Please provide a recent transcript of your undergraduate studies", FieldKind.FILE, required=True),
+                 _field("g", "Please provide a recent transcript of your graduate studies (if applicable)", FieldKind.FILE))
+    plan = resolve_form(form, memory, binder=None)
+    by = {e.field_key: e for e in plan.entries}
+    assert by["u"].attach or by["u"].value
+    assert by["g"].skipped and "bachelor" in by["g"].reason
+
+
+def test_office_preference_takes_the_first_preferred_office_the_form_offers():
+    from app.autofill.binder import _resolve_stored
+    from app.autofill.themes import QuestionTheme
+    field = _field("o", "Please choose the single location that you're the most interested in", FieldKind.SINGLE_SELECT,
+                   ["Mountain View, CA", "San Francisco, CA", "Bellevue, WA", "Vancouver, Canada"], required=True)
+    assert DeterministicBinder().classify_themes([field.label])[field.label][0] == QuestionTheme.OFFICE_PREFERENCE
+    memory = Memory(preferences={"office_preference": "New York, NY | San Francisco, CA | Remote"})
+    assert _resolve_stored(QuestionTheme.OFFICE_PREFERENCE, field, memory).value == "San Francisco, CA"
+    memory.preferences["office_preference"] = "New York, NY | Austin, TX"
+    assert _resolve_stored(QuestionTheme.OFFICE_PREFERENCE, field, memory).needs_review
+
+
+def test_every_file_field_names_the_document_it_asks_for_and_required_ones_stay_visible():
+    memory = Memory(facts={"resume_file": "~/r.pdf", "transcript_file": "~/t.pdf"}, education={"degree": "BS Computer Science"})
+    form = _form(_field("r", "Resume/CV", FieldKind.FILE, required=True),
+                 _field("t", "Please provide a recent transcript of your undergraduate studies", FieldKind.FILE, required=True),
+                 _field("p", "Portfolio - File upload", FieldKind.FILE),
+                 _field("w", "Writing sample", FieldKind.FILE, required=True),
+                 _field("x", "Upload a photo of your cat", FieldKind.FILE, required=True))
+    plan = resolve_form(form, memory, binder=None)
+    by = {e.field_key: e for e in plan.entries}
+    assert by["r"].document == "resume" and by["r"].attach
+    assert by["t"].document == "transcript" and by["t"].attach
+    assert by["p"].document == "portfolio" and by["p"].needs_review and "attach your portfolio" in by["p"].reason
+    assert by["w"].document == "portfolio" and "required" in by["w"].reason
+    assert by["x"].document == "other" and by["x"].needs_review and "required" in by["x"].reason
