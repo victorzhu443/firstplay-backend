@@ -34,9 +34,9 @@ import os
 import re
 from typing import ClassVar, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
-from app.autofill.classify import memory_key_for, normalize_label, OPTIONAL_BLANK_KEYS, consent_key_for
+from app.autofill.classify import memory_key_for, normalize_label, OPTIONAL_BLANK_KEYS, consent_key_for, is_follow_up
 from app.autofill.format import OPTION_MISMATCH
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField
 
@@ -75,6 +75,43 @@ def normalize_company(name: str) -> str:
         text = _COMPANY_SUFFIX.sub("", text).strip()
 
     return text
+
+
+#: Questions whose answer is about *this employer*, not about the applicant:
+#: who referred you here, which of their offices, which of their teams or
+#: roles. Such an episode is scoped to the company it was given at (audit
+#: 2026-10-12, H2: a referral name and an office choice replayed, as a
+#: confident fill, into other companies' forms). "Current role" and "most
+#: recent position" are facts about the applicant and are excluded.
+_COMPANY_SHAPED_LABEL = re.compile(
+    r"\breferr(ed|al)s?\b|\brefer(red)? you\b"
+    r"|\b(which|what|preferred|select|choose|indicate)\b.{0,40}\b(office|location|team|role|position|"
+    r"department|track|cohort|program|programme)s?\b"
+    r"|\b(office|team|role|position|department)\b.{0,30}\b(prefer|interest|apply)"
+    r"|\bapplying (to|for)\b",
+    re.I,
+)
+#: Measured over 991 corpus forms (2,548 distinct screening/legal labels): the
+#: pattern scopes 101 labels, 224 instances; "what pronouns would you like
+#: our team to use" was the one fact among them, hence the exclusion.
+_NOT_COMPANY_SHAPED = re.compile(r"\b(current|previous|most recent|last|former|prior|pronouns?)\b", re.I)
+
+
+def is_company_shaped(label: str, company: Optional[str] = None) -> bool:
+    """Whether a question's answer belongs to one employer rather than to the applicant.
+
+    True for referrals, office / team / role choices for this application,
+    and any label that names the company being applied to.
+    """
+    text = normalize_label(label)
+    if not text:
+        return False
+    if _COMPANY_SHAPED_LABEL.search(text) and not _NOT_COMPANY_SHAPED.search(text):
+        return True
+    name = normalize_company(company or "")
+    # Three characters or more: a two-letter company name would match inside
+    # ordinary words and scope every question to one employer.
+    return bool(len(name) >= 3 and re.search(r"\b" + re.escape(name) + r"\b", text))
 
 
 class Story(BaseModel):
@@ -313,6 +350,18 @@ class Memory(BaseModel):
     #: Support counts distinct companies whose forms produced the same answer.
     learned_pending: Dict[str, Dict[str, object]] = Field(default_factory=dict)
 
+    #: The company whose form is being resolved, set by the caller for the
+    #: duration of one plan (`for_company`). Not part of the profile: it
+    #: scopes company-shaped episodes (`is_company_shaped`) and nothing else,
+    #: and `resolve_form` reaches `resolve` through the binder with no
+    #: company of its own to pass.
+    _company: Optional[str] = PrivateAttr(default=None)
+
+    def for_company(self, company: Optional[str]) -> "Memory":
+        """Scope this plan's episode replay to `company`; returns self."""
+        self._company = (company or "").strip() or None
+        return self
+
     # --- derived facts ------------------------------------------------------
 
     def full_name(self) -> Optional[str]:
@@ -352,25 +401,50 @@ class Memory(BaseModel):
     # --- the answer log -----------------------------------------------------
 
     @staticmethod
-    def fingerprint(label: str) -> str:
+    def fingerprint(label: str, company: Optional[str] = None) -> str:
         """Stable id for a question, so the same question is never asked twice.
 
         Keyed on the normalised label rather than the ATS field name, because
         the field name is allocated per posting: Greenhouse's
         `question_8581808008` differs on every job for the same question.
+
+        A company-shaped question (`is_company_shaped`: a referral, an office
+        or team choice, a label naming the employer) is keyed on the label
+        *and* the normalised company, so "Who referred you?" at Acme never
+        answers the same question at Beta. Every other label keeps the
+        label-only fingerprint, so answers stored before this rule still
+        replay.
         """
-        return hashlib.sha256(normalize_label(label).encode()).hexdigest()[:16]
+        text = normalize_label(label)
+        if is_company_shaped(label, company):
+            text = "{}\n@{}".format(text, normalize_company(company or ""))
+        return hashlib.sha256(text.encode()).hexdigest()[:16]
 
-    def recall_answer(self, label: str) -> Optional[str]:
-        return self.answers.get(self.fingerprint(label))
+    def _scope(self, company: Optional[str]) -> Optional[str]:
+        return company if company is not None else self._company
 
-    def remember_answer(self, label: str, value: str) -> None:
+    def recall_answer(self, label: str, company: Optional[str] = None) -> Optional[str]:
+        """The stored answer to this exact question, or None.
+
+        A follow-up ("Please specify", "If yes, …", "Other") is about the
+        answer just before it on *that* form and is never replayed: the same
+        label follows a different question on the next form.
+        """
+        if is_follow_up(label):
+            return None
+        return self.answers.get(self.fingerprint(label, self._scope(company)))
+
+    def remember_answer(self, label: str, value: str, company: Optional[str] = None) -> bool:
         """Record an approved answer. Also the label-collection mechanism: a
-        correction made in review is a labelled example."""
-        self.answers[self.fingerprint(label)] = value
+        correction made in review is a labelled example. Returns False for a
+        follow-up, which is never remembered."""
+        if is_follow_up(label):
+            return False
+        self.answers[self.fingerprint(label, self._scope(company))] = value
+        return True
 
-    def forget_answer(self, label: str) -> None:
-        self.answers.pop(self.fingerprint(label), None)
+    def forget_answer(self, label: str, company: Optional[str] = None) -> None:
+        self.answers.pop(self.fingerprint(label, self._scope(company)), None)
 
     # --- resolution ---------------------------------------------------------
 
@@ -482,6 +556,14 @@ class Memory(BaseModel):
         if agree is None:
             agree = decision.lower() in ("agree", "accept", "acknowledge", "consent", "opt in", "i agree")
         reason = "standing consent: {} = {}".format(bucket, decision)
+
+        # A typed control is not a box to tick. "I certify that the facts set
+        # forth … Please type your full name as your signature" received the
+        # literal "Yes" from the standing certification (audit 2026-10-12,
+        # M1). The decision stands; the signature is the applicant's to type.
+        if field.kind in (FieldKind.TEXT, FieldKind.LONG_TEXT, FieldKind.FILE):
+            human.reason = "you agreed to {} once, but a signature is yours to type".format(bucket)
+            return human
 
         if field.kind == FieldKind.BOOLEAN or not field.options:
             return Resolution(field_key=field.key, value="Yes" if agree else "No",
@@ -808,6 +890,12 @@ PROFILE_FIELDS = {
         ("essential_functions", "Yes", 6),
         ("veteran_status", "I am not a protected veteran", 27),
         ("race_ethnicity", "Decline to self-identify", 27),
+        # Greenhouse's first EEO question, rendered before `race` on 7 of 9
+        # live boards (DECISIONS §34) and absent from the board API. Typed
+        # once, replayed exactly; never inferred from the stored race —
+        # Ashby's own race wording is "White (Not Hispanic or Latino)", and a
+        # substring rule read that as Yes (audit 2026-10-12, H1).
+        ("hispanic_latino", "Decline to self-identify", 7),
         ("gender", "Decline to self-identify", 27),
         ("disability_status", "I do not want to answer", 6),
         ("transgender", "I don't wish to answer", 41),

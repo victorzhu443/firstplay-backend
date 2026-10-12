@@ -51,7 +51,7 @@ def main(argv=None):
     proposals = collections.Counter()
     per_form_review_before = []
     for form in forms:
-        plan = resolve_form(form, memory, binder=DeterministicBinder())
+        plan = resolve_form(form, memory.for_company(form.company), binder=DeterministicBinder())
         by_key = {f.key: f for f in form.fields}
         observations = []
         for entry in plan.entries:
@@ -60,7 +60,7 @@ def main(argv=None):
                 continue
             if field.kind not in (FieldKind.TEXT, FieldKind.SINGLE_SELECT):
                 continue
-            fingerprint = Memory.fingerprint(field.label)
+            fingerprint = Memory.fingerprint(field.label, form.company)
             # Only a label the simulated applicant answered on an earlier form
             # counts as an opportunity; only a replay from `answers` counts.
             if fingerprint in simulated_labels:
@@ -77,7 +77,7 @@ def main(argv=None):
         if observations:
             result = learn(memory, observations, binder=binder)
             simulated += len(observations)
-            simulated_labels.update(Memory.fingerprint(o.label) for o in observations)
+            simulated_labels.update(Memory.fingerprint(o.label, o.company) for o in observations)
             for p in result.proposals:
                 proposals[p.key] += 1
         for f in form.fields:

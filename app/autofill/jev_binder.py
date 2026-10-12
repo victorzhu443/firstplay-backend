@@ -29,6 +29,7 @@ import re
 import json
 import logging
 import os
+from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
 from app.autofill.classify import normalize_label
@@ -223,6 +224,19 @@ _ANSWER_INSTRUCTIONS = (
 )
 
 
+#: A cache key is "<kind>:<sha256 prefix>": the label, option labels and the
+#: applicant's stored answer go through the hash and never sit in the key.
+#: The hosted process shares one cache across every caller for its lifetime
+#: (audit 2026-10-12, M5: raw stored answers in the keys, no eviction).
+_SIGNATURE_SHAPE = re.compile(r"^[a-z]+:[0-9a-f]{32}$")
+
+
+def cache_signature(kind: str, *parts: str) -> str:
+    """An opaque cache key for one question: a hash of its identifying parts."""
+    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8", "replace")).hexdigest()[:32]
+    return "{}:{}".format(kind, digest)
+
+
 class OptionCache:
     """signature -> (chosen option label, confidence).
 
@@ -230,19 +244,30 @@ class OptionCache:
     QuestionTheme, and an option label is not one. Forcing it through lost the
     label on every cache hit, so matches cached in one run came back as "no
     match" in the next — visible only as coverage quietly dropping 4 points.
+
+    Bounded: at most `max_entries`, the least recently used dropped first. A
+    hosted process must neither grow without limit nor hold applicants' stored
+    answers in its keys, so a key is a hash (`cache_signature`) and a
+    persisted file whose keys are not hashes is dropped rather than loaded.
     """
 
-    def __init__(self, path: Optional[str] = None):
+    DEFAULT_MAX_ENTRIES = 5000
+
+    def __init__(self, path: Optional[str] = None, max_entries: int = DEFAULT_MAX_ENTRIES):
         self.path = path
-        self._entries: Dict[str, Tuple[Optional[str], float]] = {}
+        self.max_entries = max(1, int(max_entries))
+        self._entries: "OrderedDict[str, Tuple[Optional[str], float]]" = OrderedDict()
         self.hits = 0
         self.misses = 0
+        self.evicted = 0
 
         if path and os.path.exists(path):
             try:
                 with open(path) as handle:
                     raw = json.load(handle)
-                self._entries = {k: (v[0], float(v[1])) for k, v in raw.items()}
+                for key, value in raw.items():
+                    if _SIGNATURE_SHAPE.match(key):
+                        self.put(key, value[0], float(value[1]))
             except Exception:
                 logger.warning("Could not read option cache at %s; starting empty", path)
 
@@ -252,10 +277,15 @@ class OptionCache:
             self.misses += 1
             return None
         self.hits += 1
+        self._entries.move_to_end(signature)
         return entry
 
     def put(self, signature: str, label: Optional[str], confidence: float) -> None:
         self._entries[signature] = (label, confidence)
+        self._entries.move_to_end(signature)
+        while len(self._entries) > self.max_entries:
+            self._entries.popitem(last=False)
+            self.evicted += 1
 
     def save(self) -> None:
         if not self.path:
@@ -457,9 +487,9 @@ class JevBinder:
             if len(field.options) > 254:
                 out[request_id] = (None, 0.0)
                 continue
-            signature = "answer::{}::{}::{}::{}".format(
-                field.kind.value, field.label[:80],
-                "|".join(o.label for o in field.options)[:200], state_hash,
+            signature = cache_signature(
+                "answer", field.kind.value, field.label,
+                "|".join(o.label for o in field.options), state_hash,
             )
             cached = self._options.get(signature)
             if cached is not None:
@@ -603,7 +633,7 @@ class JevBinder:
         out: Dict[str, Tuple[Optional[str], float, float]] = {}
         pending = []
         for request_id, field, catalog in requests:
-            signature = "second::{}::{}".format(field.label[:100], state_hash)
+            signature = cache_signature("second", field.label, state_hash)
             cached = self._options.get(signature)
             if cached is not None:
                 key, packed = cached
@@ -730,10 +760,11 @@ class JevBinder:
 
     @staticmethod
     def _option_signature(value: str, field) -> str:
-        """Identity of one option-matching question."""
+        """Identity of one option-matching question: a hash of the label, the
+        stored answer and the option set, so the stored answer is in no key."""
         options = "|".join(o.label for o in field.options)
 
-        return "optmatch::{}::{}::{}".format(field.label[:60], value[:40], options[:200])
+        return cache_signature("optmatch", field.label, value, options)
 
     def _match_batch(
         self, batch: List[Tuple[str, str, FormField]]

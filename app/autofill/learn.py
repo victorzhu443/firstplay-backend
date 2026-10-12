@@ -40,7 +40,7 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.autofill.classify import classify
+from app.autofill.classify import classify, is_follow_up
 from app.autofill.memory import Memory, normalize_label
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField
 
@@ -189,6 +189,14 @@ def learn(memory: Memory, observations: List[Observation], binder=None) -> Learn
         if re.search(r"\bhear(d)? about\b|\bhow did you (find|learn about)\b", obs.label or "", re.I):
             ignored.append({"label": obs.label, "why": "answered per application, not remembered"})
             continue
+        # "Please specify" / "If yes, …" / "Other" is about the answer just
+        # before it on this form; the same label follows a different question
+        # next time. Never an episode (audit 2026-10-12, H2), and one stored
+        # before this rule is dropped when the question is next seen.
+        if is_follow_up(obs.label):
+            memory.forget_answer(obs.label, obs.company)
+            ignored.append({"label": obs.label, "why": "a follow-up to the question before it; not remembered"})
+            continue
         value = _as_text(obs.user_value)
         if not value:
             ignored.append({"label": obs.label, "why": "left empty"})
@@ -222,15 +230,17 @@ def learn(memory: Memory, observations: List[Observation], binder=None) -> Learn
         # support as any other. Typed core answers (a preferred name) are the
         # applicant's own words and still replay.
         if field_class == FieldClass.CORE and kind in _CHOICE_KINDS:
-            if memory.recall_answer(obs.label) is not None:
-                memory.forget_answer(obs.label)
+            if memory.recall_answer(obs.label, obs.company) is not None:
+                memory.forget_answer(obs.label, obs.company)
             ignored.append({"label": obs.label, "why": "answered from your profile; a different choice is proposed as a change to that fact"})
             candidates.append(("obs_{}".format(index), obs, value, field_class))
             continue
 
-        # Episodic: the exact question gets the exact answer next time.
-        if memory.recall_answer(obs.label) != value:
-            memory.remember_answer(obs.label, value)
+        # Episodic: the exact question gets the exact answer next time. A
+        # company-shaped question (a referral, an office choice) is keyed on
+        # the company too, so it replays only on that employer's forms.
+        if memory.recall_answer(obs.label, obs.company) != value:
+            memory.remember_answer(obs.label, value, obs.company)
             saved += 1
 
         if field_class == FieldClass.LEGAL:

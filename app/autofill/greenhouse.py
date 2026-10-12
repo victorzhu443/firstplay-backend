@@ -20,7 +20,7 @@ reconcile on field name, which is stable in both.
 from typing import Any, Dict, List, Optional
 
 from app.autofill.classify import classify
-from app.autofill.schema import FieldKind, FieldOption, FormField, FormSchema
+from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField, FormSchema
 from app.autofill.themes import country_in_text
 
 #: Observed across 40 live postings; no other type appeared. `multi_value_
@@ -206,6 +206,32 @@ def _country_field() -> List[FormField]:
                       field_class=classify(key, label, kind), required=True, options=[])]
 
 
+def _hispanic_field(fields: List[FormField]) -> List[FormField]:
+    """Greenhouse's first EEO question, which the board API never lists.
+
+    The API's compliance block carries one field, `race`; the page renders
+    the two-question block — `hispanic_ethnicity` ("Yes" / "No" / "Decline
+    To Self Identify") first, with `race` mounted only after it is answered.
+    Measured on 7 of 9 live boards (DECISIONS §34). Synthesised, like
+    `_country_field`, whenever the form carries a `race` compliance field.
+
+    Answered only by exact replay of the applicant's own
+    `protected.hispanic_latino`; never derived from the stored race. The
+    extension used to derive it by substring, and Ashby's own race wording
+    "White (Not Hispanic or Latino)" came out as Yes (audit 2026-10-12, H1).
+    With nothing stored the entry is a `needs_fact` question, not a guess.
+    """
+    if not any(f.key == "race" and f.field_class == FieldClass.LEGAL for f in fields):
+        return []
+
+    key, label, kind = "hispanic_ethnicity", "Are you Hispanic or Latino?", FieldKind.SINGLE_SELECT
+    options = [FieldOption(label=o, value=o) for o in ("Yes", "No", "Decline To Self Identify")]
+    return [FormField(key=key, label=label, kind=kind,
+                      field_class=classify(key, label, kind, option_count=len(options),
+                                           from_compliance_block=True),
+                      required=False, options=options)]
+
+
 def _location_fields(payload: Dict[str, Any]) -> List[FormField]:
     """The candidate-location block: `location` plus hidden longitude/latitude.
 
@@ -253,6 +279,12 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
     for block in payload.get("compliance") or []:
         for question in block.get("questions") or []:
             fields.extend(_fields_from_question(question, from_compliance_block=True))
+
+    # Rendered before `race` on the page, so placed before it in the plan.
+    hispanic = _hispanic_field(fields)
+    if hispanic:
+        race_at = next(i for i, f in enumerate(fields) if f.key == "race")
+        fields[race_at:race_at] = hispanic
 
     fields.extend(_education_fields(payload))
     fields.extend(_demographic_fields(payload))
