@@ -193,6 +193,51 @@ def test_a_label_that_mentions_a_consent_subject_without_asking_stays_screening(
     assert classify("question_1", label, kind, option_count=options) == FieldClass.SCREENING
 
 
+def test_a_compound_question_with_a_consent_rider_keeps_its_deterministic_answer():
+    """Review of 2026-10-12, finding 2: `is_consent_asked` read a consent verb
+    and a bucket noun anywhere in the label, so these were CONSENT and filled
+    "Yes" from the standing consent — over the stored "No" the theme gives,
+    and in the fourth case as a false work-authorisation claim."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    memory = Memory(consents={"background_check": "Yes", "privacy_notice": "Agree", "terms_and_conditions": "Agree"},
+                    preferences={"in_office_tolerance": "No", "open_to_relocation": "No"},
+                    legal_status={"work_authorization": "No"})
+    labels = {
+        "This position requires a background check. Are you willing to work onsite 5 days a week in Austin?": None,
+        "Are you willing to relocate? (Offers are contingent on a background check.)": "No",
+        "Do you understand this role requires in-office attendance 5 days/week and acceptance of our code of conduct?": "No",
+        "I understand my data will be processed per the privacy notice. Are you authorized to work in the US?": "No",
+        "Are you willing to sign a confidentiality agreement and a non-compete?": None,
+    }
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(labels)]
+    for field in fields:
+        assert field.field_class == FieldClass.SCREENING, field.label
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    for entry, (label, expected) in zip(plan.entries, labels.items()):
+        assert entry.value == expected, label
+        assert entry.needs_review is (expected is None), label
+        assert "standing consent" not in (entry.reason or ""), label
+
+
+def test_a_consent_asked_in_one_sentence_beside_a_notice_is_still_a_consent():
+    """The sentence rule must not undo M1: the ask and its subject sit in one
+    sentence, and the label asks nothing else."""
+    from app.autofill.memory import Memory
+    sms = ("If you provided a phone number, do you consent to receiving follow-up communication "
+           "via text message (or SMS) about your application? Message and data rates may apply.")   # x7
+    for label in (sms,
+                  "Will you consent to a background check? (All offers of employment are contingent on passing a background check.)",
+                  "Privacy Policy Acknowledgment"):
+        field = _field(label)
+        assert field.field_class == FieldClass.CONSENT, label
+    decided = Memory(consents={"sms_messages": "No"}).resolve(_field(sms))
+    assert decided.value == "No" and not decided.needs_review
+
+
 def test_an_sms_opt_in_asked_as_a_phone_number_box_is_a_consent_and_so_never_a_fact():
     """"If you wish to receive information via text/SMS, please indicate the
     cell number below." (x2): the applicant opts in by typing the number. As a

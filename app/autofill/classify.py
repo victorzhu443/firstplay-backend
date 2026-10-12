@@ -386,15 +386,44 @@ _CONSENT_ASKED = re.compile(
     r"|accept|understand|confirm|certify|attest|happy to|wish to receive|would you like)\b", re.I)
 
 
+#: Sentence boundaries, for reading a consent ask one sentence at a time.
+_SENTENCES = re.compile(r"(?<=[.?!;:])\s+|\n+")
+
+
+def _asks_a_theme(label: str) -> bool:
+    """Whether a local theme pattern reads this label as a screening question."""
+    # Lazy: binder imports this module at load.
+    from app.autofill.binder import _THEME_PATTERNS
+    return any(pattern.search(label) for _theme, pattern in _THEME_PATTERNS)
+
+
 def is_consent_asked(label: str, option_count: int = 0) -> bool:
     """Whether a label asks for one of the standing consents the profile holds.
 
-    True when the label names a grant bucket and either asks (a consent verb)
-    or is a one-option control, which is a checkbox with legal text.
+    True when the label names a grant bucket and either is a one-option
+    control, which is a checkbox with legal text, or asks for the consent:
+    a consent verb and the bucket's subject in the *same sentence*, on a
+    label that asks nothing else.
+
+    A compound label is asking something else with a consent rider attached:
+    "Are you willing to relocate? (Offers are contingent on a background
+    check.)" and "I understand my data will be processed per the privacy
+    notice. Are you authorized to work in the US?" each filled "Yes" from the
+    standing consent, overriding the stored "No" the theme would have given
+    (review of 2026-10-12, finding 2). So a second question, a label a local
+    theme pattern recognises, or a non-compete is never a consent ask.
     """
-    if consent_key_for(label) not in _GRANT_BUCKETS:
+    text = label or ""
+    if consent_key_for(text) not in _GRANT_BUCKETS:
         return False
-    return option_count == 1 or bool(_CONSENT_ASKED.search(normalize_label(label)))
+    if option_count == 1:
+        return True
+    if text.count("?") > 1 or re.search(r"\bnon[-\s]?compete", text, re.I) or _asks_a_theme(text):
+        return False
+    for sentence in _SENTENCES.split(text):
+        if consent_key_for(sentence) in _GRANT_BUCKETS and _CONSENT_ASKED.search(normalize_label(sentence)):
+            return True
+    return False
 
 
 def consent_key_for(label: str) -> Optional[str]:
