@@ -2272,6 +2272,162 @@ under the filler's own matching rule before it counts as a correction.
 
 ---
 
+## 55. The outside audit, round one: eleven action items, three streams, one day
+
+A fresh session read both repos as an outside reviewer with no code
+changes allowed (`AUDIT_REPORT.md` in the parent directory, 2026-10-12):
+632 tests re-run, coverage over both frozen corpora with and without the
+model, the threshold sweep, the replay simulation, the survey JSONL
+recomputed, 58 labels through `resolve_form` with the real profile, 16
+sensitive labels through the live gate, the hosted health route. Victor:
+"take the audit summary and lets go through every single action items."
+Every claim was re-verified against the code before anything changed;
+where the audit was wrong the code was left alone and the correction is
+recorded below. Three streams ran in parallel on separate worktrees
+(classifier and patterns; memory, replay and the hosted process; the
+extension) and were merged here. Tests 639 → **802** (+163).
+
+**H1 — Hispanic/Latino was derived, now it is stored.** The extension
+answered Greenhouse's `hispanic_ethnicity` select by a substring test on
+the stored race: Ashby's own wording "White (Not Hispanic or Latino)" read
+as Yes, a stored "I don't wish to answer" as No. A protected characteristic
+produced by string logic is not replay. Now `protected.hispanic_latino` is
+its own registry entry (typed once, replayed exactly, never inferred);
+Greenhouse plans carry a synthetic `hispanic_ethnicity` entry before `race`
+(0 of 1,269 board-API postings expose it — it is page-only, like Country),
+resolved only by exact replay, review with a `needs_fact` ask when unset;
+the label pattern covers the 19 custom "Do you identify as Hispanic/Latino?"
+labels (12 corpus fields gain the key). Extension 0.4.51 writes that entry
+or leaves the question for the applicant with `race` unmounted.
+
+**H2 — episodes crossed questions and companies.** A replay was keyed on
+the label alone, so "Please specify" answered every "Please specify", and a
+referral name at one company replayed at the next. Now a follow-up label
+(`is_follow_up`) is never remembered or replayed; a company-shaped label
+(referral, office/team/track choice, "applying to", or any label naming
+the employer) is fingerprinted on label plus normalised company; everything
+else keeps the label-only key, so stored episodes still hit. Measured over
+991 corpus forms: 101 label shapes / 224 instances scoped by pattern, 180 /
+627 by naming the employer, 107 / 391 are follow-ups.
+
+**H3 — the §52 protected-label rule had regressed accommodation
+questions.** Any label containing "disabilit" replayed the EEOC answer,
+including into a free-text accommodation request. `memory_key_for` now
+runs vendor-marked protected → memory-only wording → custom-label
+protected, and the custom disability pattern excludes accommodation words;
+6 real corpus fields moved back to `accommodation_needs`. A first widening
+also caught "If you need an accommodation, we'll partner with you… Are you
+able to commit to Anchor Days?" (x7) and was narrowed before commit — the
+snapshot diff of (class, key, theme) over all 3,669 label shapes caught it.
+
+**H4 — six theme patterns read a keyword in the wrong sense.** Relocation
+*assistance* was filled from willingness to relocate; "May we contact you
+via text message?" from employer-contact permission; interview availability
+from term flexibility; a bare "Start Date" from earliest start; STEM-OPT
+eligibility from work authorisation; and a notice-period menu matched "3+
+months" from the *year* of the earliest-start date. Negative lookaheads on
+each; `match_numeric_bucket` refuses a month-year value unless an option
+names a year; the city-specific in-office question ("in-office 5 days a
+week in Sunnyvale?", ~80 fields in 24 shapes) goes to the model gate
+instead of a 1.0 fill. New `tests/test_autofill_near_miss.py` holds, for
+every local pattern, labels that contain the keyword in another sense, with
+a guard that every pattern has such a list — the test the binder suite
+lacked. Audit correction: the x411 "Start date month/year" rows are the
+CORE education block and never reached the theme.
+
+**M1 — consents.** The docstrings said attestations stay human; the code
+replayed standing decisions per bucket (§51–§52) — the code was right and
+the docstrings are now reconciled. Two real gaps closed: a consent asked as
+a question ("Do you consent to a background check?") classified SCREENING
+and was gate-eligible — a label naming a grant bucket with a consent verb,
+or a one-option control, is CONSENT before the fall-through (33 fields in
+13 shapes; the ask-gate is necessary, because bare bucket regexes also
+caught "Please confirm when you will complete your university studies" x13);
+and a standing consent was typed as the literal "Yes" into a signature text
+box — a TEXT / LONG_TEXT / FILE consent is now human ("you agreed once, but a
+signature is yours to type"). `test_per_application_attestations_stay_manual`
+had asserted the wrong behaviour and was corrected.
+
+**M2 — sensitive topics the classifier did not know.** Date of birth, age,
+religion, marital status, nationality, bare citizenship, criminal history,
+LGBTQ+, first-generation, military spouse were SCREENING: model-eligible,
+second-pass-eligible, learnable. The live probe found the model declining
+all of them; luck, not design. `SENSITIVE_TOPIC_PATTERNS` → LEGAL with no
+memory key: review-only, never judged, never proposed (21 corpus fields in
+8 shapes). Kept deliberately: "18 years of age or older" (computed),
+work authorisation and sponsorship, the sanctions disclosure, "criminal
+background check" (a consent), and "Citizenship status", which on US forms
+is work-authorisation-shaped. "Are you a veteran or the spouse of a
+veteran?" no longer replays half an answer.
+
+**M5 / M6 / L2 — the hosted process.** Option-cache keys embedded stored
+answer text and the cache never evicted: keys are now opaque hashes and
+the cache is an LRU bounded at 5,000 (legacy files with raw keys are
+dropped on load). Plans carry `model_available` (no key configured),
+distinct from `model_degraded` (key failing) and `model_skipped` (breaker
+tripped mid-plan — the field's meaning since it shipped, kept); the
+extension caches nothing when it is false, and nothing when health is
+unreachable (L4). `/health`'s `model_last_error` is an 80-character
+category, not upstream text. Degradation is tracked per caller (install
+token, else IP; LRU 1,000) with the global record as fallback. Audit
+correction: the keyless case never reached the handler's
+`except JevConfigurationError` (the client is built lazily); it surfaced
+inside `resolve_form` and whether `model_degraded` came back true depended
+on which gate hit the model first — configuration is now checked up front.
+The router docstring now says what is true: the whole profile, protected
+answers and consents included, is POSTed on every plan and learn request,
+held for that request, not stored or logged; the non-protected applicant
+state goes on to OpenRouter.
+
+**M9 — addresses.** `WORK_ADDRESS` read `work_address`, a key nothing sets;
+it now reads `street_address`, "Address 1" and the mailing/home variants
+alias to it, the second line to `street_address_2`, and "email address" no
+longer matches (15 fields become CORE; "Please provide your current mailing
+address" x7 now fills). Audit correction: "Address" and "Street address"
+were already CORE aliases.
+
+**M4 / M3 / L7 — the extension (0.4.51).** Every instant write is read back
+after one frame (text by normalised value, phones by digits, native selects
+by value and option text, radios and checkboxes by `checked`; a "Yes" that
+does not stay checked fails; a group checkbox already holding the answer is
+no longer un-ticked — a bug found while reading); a label two controls
+share locates nothing, with the reason in the miss log; the run record
+gains `fields` (key, label, source, confidence, state, result — no values),
+`blocked` and `submit_clicked`, so model-decided fills and replays can be
+told apart in survey rows and a dry run that blocked nothing is
+distinguishable from one that was bypassed. Review, skipped and sibling
+entries cross into the page's world without values; the résumé only when
+the page has a file input. `docs/PRIVACY.md` and the popup wording now
+match the code.
+
+**M7 — the records.** §49, README entry 41 and `agent-evaluation.md` said
+8 of the Greenhouse hundred ran; the survey holds 1 (Alten) — seven rows
+were never appended and do not count. §52 now states the 72 errors and 61
+model-less forms behind its 419, and that the 99% precision target is not
+met at 98.0%. "Current state" is rewritten from today's re-runs and no
+longer claims 100%. Greenhouse survey rows carry `version` from now on.
+
+**Measured, deterministic coverage before → after this entry** (real
+profile, `coverage.py`, 2026-10-12): Greenhouse 77.8% → 76.2%, Ashby 74.9%
+→ 74.3%. The denominator grew by the synthetic Hispanic/Latino field (284
+Greenhouse forms with a race block, all unset today) and ~80 city-specific
+in-office fields plus 21 sensitive-topic fields left the 1.0 path on
+purpose. Precision was bought with coverage, which is the trade this
+project makes; the with-model figure is recorded in the README entry once
+the run finishes.
+
+**Not done, by decision or scope.** Item 7's OpenRouter key on Render is
+Victor's to set in the dashboard (the deploy itself has caught up). M3's
+mechanism — replacing the dry-run Submit click with validity-API probing —
+is unchanged; only `blocked` is recorded. The three live checks the audit
+asks for (does the dry run ever post on an employer-hosted embed; do text
+writes survive React on Greenhouse; does Ashby's autosave carry protected
+answers) are the next session's first task, on 0.4.51 with the window on
+screen; one data point already exists — on IMC all six outlined text
+controls held their values after React settled.
+
+---
+
 ## Current state
 
 Rewritten 2026-10-12 after the outside audit; the previous table here was
@@ -2286,7 +2442,7 @@ target met".
 | **Live, Greenhouse** | 117 live boards, 1,866 filled, 21 "known but could not be entered", all 21 before 0.4.19 by round order (`survey/`); the hundred of R48-2 has 1 of 100 recorded |
 | **Live, Ashby** | A1: 100 organisations, 702 filled, 246 review; R48-2: 100 organisations, 719 / 250 / 1 could-not-enter, median fill 110 ms |
 | **Learning loop** | offline replay 93.2% (1,679 of 1,802 later occurrences, 991 forms, re-run 2026-10-12); counts fills, not correct fills; no live metric yet; one self-poisoning found and closed (§54) |
-| **Tests** | 639, offline, no credentials, ~13 s |
+| **Tests** | 802, offline, no credentials, ~14 s |
 
 ## Open, with numbers attached
 
