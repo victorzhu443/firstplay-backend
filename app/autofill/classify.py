@@ -512,6 +512,52 @@ PROTECTED_LABEL_PATTERNS = (
 )
 
 
+#: Protected or sensitive topics no vendor marks and no profile key answers.
+#: Routed to LEGAL with **no memory key**, so the field is review-only: no
+#: model judges it, the second pass never sees it, and the learning loop
+#: proposes no fact from it (LEGAL returns before the candidate list).
+#:
+#: The outside audit of 2026-10-12 (M2) traced fourteen such labels: all were
+#: SCREENING, all reached the model gate or the second pass, and the model
+#: declined every one — the model behaving, not the design. The asymmetry in
+#: the module docstring decides this: misreading one of these costs a glance;
+#: the reverse puts a judgement on a protected characteristic.
+#:
+#: Matched on the normalised label. What is deliberately *not* here:
+#:   - age eligibility ("Are you 18 years of age or older?") — a computed
+#:     theme with its own key, so "your age" is matched and "years of age" is
+#:     not;
+#:   - work authorisation, sponsorship, "citizen or permanent resident" and
+#:     the sanctions citizenship-residence disclosure, which are answered
+#:     deterministically from legal_status; only citizenship / nationality
+#:     asked bare, as a demographic, is listed;
+#:   - "criminal background check", which is a consent (CONSENT_BUCKETS);
+#:   - Hispanic/Latino, which is a protected characteristic with its own
+#:     replayable key (PROTECTED_LABEL_PATTERNS).
+SENSITIVE_TOPIC_PATTERNS = (
+    re.compile(r"\bdate of birth\b|\bbirth ?da(te|y)\b|\bdob\b|\byear of birth\b|\bhow old are you\b"
+               r"|\byour age\b|^age$|\bage (range|group|bracket)\b", re.I),
+    re.compile(r"\breligio(n|us|sity)\b", re.I),
+    re.compile(r"\bmarital\b|\bmarriage\b|\bmarried\b", re.I),
+    re.compile(r"\bnationality\b|\bnational origin\b|\bcountry of (origin|birth|nationality)\b"
+               r"|\bplace of birth\b|\bbirthplace\b"
+               r"|^(what is your |your |please (state|indicate|enter|select) your )?citizenship( s)?$"
+               r"|^country of citizenship$", re.I),
+    re.compile(r"\bconvict(ed|ion)s?\b|\bfelon(y|ies)\b|\bmisdemeanou?rs?\b|\barrest(ed|s)?\b"
+               r"|\bcriminal (history|record|offen[cs]es?|charges?)\b"
+               r"|\bcriminal background(?! (check|screening|investigation))", re.I),
+    re.compile(r"\blgbt", re.I),
+    re.compile(r"\bfirst[-\s]gen(eration)?\b", re.I),
+    re.compile(r"\bmilitary spouse\b|\bspouse of (a |an )?(veteran|service member|active[- ]duty|military)", re.I),
+)
+
+
+def is_sensitive_topic(label: str) -> bool:
+    """Whether a label asks about a protected or sensitive topic no key answers."""
+    normalized = normalize_label(label)
+    return bool(normalized) and any(p.search(normalized) for p in SENSITIVE_TOPIC_PATTERNS)
+
+
 def vendor_protected_key_for(key: str, label: str = "") -> Optional[str]:
     """Memory key for a field the *vendor* marks as a protected characteristic.
 
@@ -754,7 +800,9 @@ def classify(
     # A protected characteristic asked as a custom question (Canonical: "Which
     # gender do you identify as?", "Please indicate your race or ethnicity")
     # is LEGAL wherever it sits: the stored answer replays, no model touches it.
-    if protected_key_for(key, label) and normalized not in CORE_LABEL_ALIASES:
+    # A sensitive topic with no key is LEGAL too, and review-only.
+    if normalized not in CORE_LABEL_ALIASES and (
+            protected_key_for(key, label) or is_sensitive_topic(label)):
         return FieldClass.LEGAL
 
     if any(pattern.search(normalized) for pattern in _DECISIONS_NOT_FACTS):
@@ -851,6 +899,11 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
     memory_only = memory_only_key_for(label)
     if memory_only:
         return memory_only
+
+    # No key, on purpose: "Are you a veteran or the spouse of a veteran?"
+    # would otherwise replay veteran_status for half the question.
+    if is_sensitive_topic(label):
+        return None
 
     protected = custom_protected_key_for(label)
     if protected:

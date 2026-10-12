@@ -157,3 +157,75 @@ def test_a_one_option_checkbox_naming_a_bucket_is_a_consent():
     for label in ("Privacy Policy", "Snowflake will process your personal information in accordance with the Candidate Privacy Notice."):
         assert classify("question_1", label, FieldKind.MULTI_SELECT, option_count=1) == FieldClass.CONSENT
     assert classify("question_1", "Privacy Policy Acknowledgment", FieldKind.SINGLE_SELECT, option_count=2) == FieldClass.CONSENT
+
+
+# --- M2: sensitive topics no vendor marks are LEGAL, keyless, review-only ----
+
+SENSITIVE = [
+    "What is your date of birth?", "Date of Birth", "DOB", "What is your age?", "Age",
+    "Religion", "What is your religious affiliation?",
+    "Marital Status", "Are you married?",
+    "Nationality", "What is your national origin?", "Citizenship", "What is your citizenship?",
+    "Country of citizenship", "Place of birth",
+    "Have you ever been convicted of a felony?", "Have you ever been arrested?", "Criminal history",
+    "Do you identify as LGBTQ+?",
+    "Are you a first-generation college student?",
+    "Are you a military spouse?", "Are you a veteran or the spouse of a veteran?",   # audit §2 row 5
+]
+
+
+@pytest.mark.parametrize("label", SENSITIVE)
+def test_a_sensitive_topic_is_legal_with_no_key_and_nothing_fills_it(label):
+    """Audit M2: fourteen such labels were SCREENING and reached the model gate
+    or the second pass; the model declined each, which is the model behaving,
+    not the design. LEGAL with no key: no model, no translation, no fact."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    field = _field(label, options=("Yes", "No", "Prefer not to say"))
+    assert field.field_class == FieldClass.LEGAL
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) is None
+    assert memory_key_for("question_1", label, FieldKind.TEXT) is None
+    assert not field.allows_model_judgement()
+    assert not field.allows_option_translation()
+
+    full = Memory(facts={"first_name": "Ada", "country_of_residence": "United States"},
+                  legal_status={"citizenship": "US citizen", "age_18_plus": "Yes", "work_authorization": "Yes"},
+                  protected={"veteran_status": "No", "race_ethnicity": "Asian"},
+                  preferences={"earliest_start": "June 2027"})
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", company="Acme", fields=[field])
+    entry = resolve_form(form, full, binder=DeterministicBinder()).entries[0]
+    assert entry.needs_review and entry.value is None and not entry.values
+    assert entry.needs_fact is None
+
+
+@pytest.mark.parametrize("label,expected_class", [
+    # Age eligibility is a computed theme with its own key.
+    ("Are you 18 years of age or older?", FieldClass.SCREENING),
+    ("Are you at least 18 years of age?", FieldClass.SCREENING),
+    # Authorisation, sponsorship and residence status resolve deterministically.
+    ("Are you legally authorized to work in the United States?", FieldClass.SCREENING),
+    ("Will you now or in the future require sponsorship for employment visa status?", FieldClass.SCREENING),
+    ("Are you a U.S. citizen or permanent resident?", FieldClass.SCREENING),
+    # A criminal background *check* is a consent, not a history question.
+    ("Do you consent to a criminal background check?", FieldClass.CONSENT),
+    # Core aliases keep their class.
+    ("Country", FieldClass.CORE),
+])
+def test_the_deterministic_neighbours_of_a_sensitive_topic_keep_their_class(label, expected_class):
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2) == expected_class
+
+
+def test_age_eligibility_still_fills_from_the_stored_answer():
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+    from app.autofill.themes import QuestionTheme
+
+    label = "Are you 18 years of age or older?"
+    assert DeterministicBinder().classify_themes([label])[label][0] == QuestionTheme.AGE_ELIGIBILITY
+    field = _field(label)
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[field])
+    entry = resolve_form(form, Memory(legal_status={"age_18_plus": "Yes"}), binder=DeterministicBinder()).entries[0]
+    assert entry.value == "Yes" and not entry.needs_review
