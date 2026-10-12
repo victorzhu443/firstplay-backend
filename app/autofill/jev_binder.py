@@ -268,6 +268,15 @@ class OptionCache:
         return len(self._entries)
 
 
+def _local_theme(label: str):
+    """The deterministic binder's high-precision pattern for a label, if any."""
+    from app.autofill.binder import _THEME_PATTERNS  # local: binder is the caller's module
+    for theme, pattern in _THEME_PATTERNS:
+        if pattern.search(label or ""):
+            return theme
+    return None
+
+
 class JevBinder:
     """Classifies labels into themes with one batched Jev call per form."""
 
@@ -338,7 +347,19 @@ class JevBinder:
             cached = self._cache.get(label)
             if cached is not None:
                 out[label] = cached
-            elif label not in pending:
+                continue
+            # Identify before deciding: a label the high-precision local
+            # patterns recognise is that theme, at 1.0, without a model call.
+            # Databricks (2026-10-12): "Are you able to work full-time (40
+            # hours) in-person at one of our offices?" came back from the model
+            # as internship_availability at low confidence and stayed for the
+            # applicant, while the local in-person pattern names it exactly.
+            local = _local_theme(label)
+            if local is not None:
+                out[label] = (local, 1.0)
+                self._cache.put(label, local, 1.0)
+                continue
+            if label not in pending:
                 pending.append(label)
 
         for batch_start in range(0, len(pending), MAX_QUESTIONS_PER_CALL):

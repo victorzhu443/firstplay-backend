@@ -349,3 +349,15 @@ def test_a_lists_none_option_is_chosen_by_elimination_when_every_level_is_ruled_
     two = _multi("Active Security Clearance(s)", "Top Secret", "Never held a clearance", "None of the above")
     labels, _ = JevBinder(client=NoulAwareClient({"Top Secret": 0.02})).answer_from_profile({"applicant": {}}, [("c", two)])["c"]
     assert labels is None
+
+
+def test_local_patterns_classify_before_the_model_is_asked():
+    from app.autofill.jev_binder import JevBinder, ThemeCache, OptionCache
+    from app.autofill.themes import QuestionTheme
+    binder = JevBinder(cache=ThemeCache(), option_cache=OptionCache())
+    calls = []
+    binder._classify_batch = lambda batch: (calls.append(list(batch)) or {l: (QuestionTheme.UNKNOWN, 0.3) for l in batch})
+    out = binder.classify_themes(["Are you able to work full-time (40 hours) in-person at one of our offices?",
+                                  "What is your favourite colour?"])
+    assert out["Are you able to work full-time (40 hours) in-person at one of our offices?"] == (QuestionTheme.IN_OFFICE_TOLERANCE, 1.0)
+    assert calls == [["What is your favourite colour?"]]
