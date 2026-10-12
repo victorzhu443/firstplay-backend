@@ -63,6 +63,31 @@ def test_the_eeoc_disability_question_as_a_custom_label_still_replays(label):
     assert not field.allows_model_judgement()
 
 
+@pytest.mark.parametrize("label", [
+    # Review of 2026-10-12, finding 1: between the protected pattern's
+    # accommodation exclusion and `_ACCOMMODATION`'s narrower wording, these
+    # were SCREENING with no key, and the model gate could answer them.
+    "Do you have a disability or require an accommodation?",
+    "Do you have a disability? If you need an accommodation to complete this application, please email us.",
+    "Disability status (if you need an accommodation, let us know)",
+])
+def test_a_disability_question_with_accommodation_wording_is_legal_and_keyless(label):
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    field = _field(label, options=("Yes", "No", "I don't wish to answer"))
+    assert field.field_class == FieldClass.LEGAL
+    assert not field.allows_model_judgement()
+    # Neither the EEOC answer nor the accommodation note answers it.
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) is None
+    memory = Memory(protected={"disability_status": "I don't wish to answer"},
+                    legal_status={"accommodation_needs": "None"})
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[field])
+    entry = resolve_form(form, memory, binder=DeterministicBinder()).entries[0]
+    assert entry.needs_review and entry.value is None and entry.needs_fact is None
+
+
 def test_the_vendor_marker_outranks_accommodation_wording():
     """Greenhouse's compliance block names the EEOC disability question by key
     and its official text mentions accommodation. The vendor's marker is
@@ -72,6 +97,34 @@ def test_the_vendor_marker_outranks_accommodation_wording():
     assert memory_key_for("disability_status", label) == "disability_status"
     assert memory_key_for("abc__systemfield_eeoc_disability_status", label) == "disability_status"
     assert memory_key_for("question_1", "Will you need housing accommodation in Seattle?") is None
+
+    # Greenhouse's numbered demographic block is vendor-marked too, and only
+    # the label says which question it is. Review of 2026-10-12, finding 4:
+    # the custom table's accommodation exclusion let this fall through to
+    # the memory-only key, and the stored accommodation note ("No") was
+    # selected as the EEOC answer over a stored decline.
+    from app.autofill.memory import Memory
+    eeoc = "Do you have a disability? (If you need a reasonable accommodation for the application process, contact us)"
+    options = ("Yes, I have a disability", "No, I don't have a disability", "I don't wish to answer")
+    memory = Memory(protected={"disability_status": "I don't wish to answer"},
+                    legal_status={"accommodation_needs": "No"})
+    vendor = _field(eeoc, options=options, key="demographic_answers.123")
+    assert vendor.field_class == FieldClass.LEGAL
+    assert memory_key_for(vendor.key, eeoc, FieldKind.SINGLE_SELECT) == "disability_status"
+    replayed = memory.resolve(vendor)
+    assert replayed.value == "I don't wish to answer" and not replayed.needs_review
+
+    # The same wording on a custom key and a choice control is neither the
+    # accommodation box nor safely the EEOC question: no key, review-only.
+    custom = _field(eeoc, options=options)
+    assert custom.field_class == FieldClass.LEGAL
+    assert memory_key_for(custom.key, eeoc, FieldKind.SINGLE_SELECT) is None
+    asked = memory.resolve(custom)
+    assert asked.needs_review and asked.value is None
+    # A free-text accommodation box that mentions a disability keeps its key.
+    assert memory_key_for("question_1", eeoc, FieldKind.TEXT) == "accommodation_needs"
+    assert memory_key_for("question_1", "If you require any support or adjustments during the recruitment process, "
+                          "including those related to a disability, please indicate here", FieldKind.SINGLE_SELECT) == "accommodation_needs"
 
 
 # --- M1: a standing consent asked as a question is a consent -----------------
@@ -140,6 +193,51 @@ def test_a_label_that_mentions_a_consent_subject_without_asking_stays_screening(
     assert classify("question_1", label, kind, option_count=options) == FieldClass.SCREENING
 
 
+def test_a_compound_question_with_a_consent_rider_keeps_its_deterministic_answer():
+    """Review of 2026-10-12, finding 2: `is_consent_asked` read a consent verb
+    and a bucket noun anywhere in the label, so these were CONSENT and filled
+    "Yes" from the standing consent — over the stored "No" the theme gives,
+    and in the fourth case as a false work-authorisation claim."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    memory = Memory(consents={"background_check": "Yes", "privacy_notice": "Agree", "terms_and_conditions": "Agree"},
+                    preferences={"in_office_tolerance": "No", "open_to_relocation": "No"},
+                    legal_status={"work_authorization": "No"})
+    labels = {
+        "This position requires a background check. Are you willing to work onsite 5 days a week in Austin?": None,
+        "Are you willing to relocate? (Offers are contingent on a background check.)": "No",
+        "Do you understand this role requires in-office attendance 5 days/week and acceptance of our code of conduct?": "No",
+        "I understand my data will be processed per the privacy notice. Are you authorized to work in the US?": "No",
+        "Are you willing to sign a confidentiality agreement and a non-compete?": None,
+    }
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(labels)]
+    for field in fields:
+        assert field.field_class == FieldClass.SCREENING, field.label
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    for entry, (label, expected) in zip(plan.entries, labels.items()):
+        assert entry.value == expected, label
+        assert entry.needs_review is (expected is None), label
+        assert "standing consent" not in (entry.reason or ""), label
+
+
+def test_a_consent_asked_in_one_sentence_beside_a_notice_is_still_a_consent():
+    """The sentence rule must not undo M1: the ask and its subject sit in one
+    sentence, and the label asks nothing else."""
+    from app.autofill.memory import Memory
+    sms = ("If you provided a phone number, do you consent to receiving follow-up communication "
+           "via text message (or SMS) about your application? Message and data rates may apply.")   # x7
+    for label in (sms,
+                  "Will you consent to a background check? (All offers of employment are contingent on passing a background check.)",
+                  "Privacy Policy Acknowledgment"):
+        field = _field(label)
+        assert field.field_class == FieldClass.CONSENT, label
+    decided = Memory(consents={"sms_messages": "No"}).resolve(_field(sms))
+    assert decided.value == "No" and not decided.needs_review
+
+
 def test_an_sms_opt_in_asked_as_a_phone_number_box_is_a_consent_and_so_never_a_fact():
     """"If you wish to receive information via text/SMS, please indicate the
     cell number below." (x2): the applicant opts in by typing the number. As a
@@ -149,6 +247,24 @@ def test_an_sms_opt_in_asked_as_a_phone_number_box_is_a_consent_and_so_never_a_f
     label = "If you wish to receive information via text/SMS, please indicate the cell number below."
     assert classify("question_1", label, FieldKind.TEXT) == FieldClass.CONSENT
     assert consent_key_for(label) == "sms_messages"
+
+    # Review of 2026-10-12, finding 7: with the consent unset the plan asked
+    # the applicant to set consents.sms_messages, and once set the field was
+    # still theirs to type — a prompt for a fact that can never fill it.
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+    field = _field(label, FieldKind.TEXT, options=())
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[field])
+    unset = resolve_form(form, Memory(), binder=DeterministicBinder()).entries[0]
+    assert unset.needs_review and unset.needs_fact is None
+    decided = resolve_form(form, Memory(consents={"sms_messages": "Agree"}), binder=DeterministicBinder()).entries[0]
+    assert decided.needs_review and decided.value is None and decided.needs_fact is None
+    # A consent on a tick box still asks for the decision it would replay.
+    box = _field("Do you consent to a background check?")
+    asked = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[box]),
+                         Memory(), binder=DeterministicBinder()).entries[0]
+    assert asked.needs_fact and asked.needs_fact["key"] == "background_check"
 
 
 def test_a_one_option_checkbox_naming_a_bucket_is_a_consent():

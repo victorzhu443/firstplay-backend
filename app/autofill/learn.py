@@ -40,7 +40,7 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.autofill.classify import classify, is_follow_up
+from app.autofill.classify import classify, is_episode_follow_up
 from app.autofill.memory import Memory, normalize_label
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField
 
@@ -193,7 +193,7 @@ def learn(memory: Memory, observations: List[Observation], binder=None) -> Learn
         # before it on this form; the same label follows a different question
         # next time. Never an episode (audit 2026-10-12, H2), and one stored
         # before this rule is dropped when the question is next seen.
-        if is_follow_up(obs.label):
+        if is_episode_follow_up(obs.label):
             memory.forget_answer(obs.label, obs.company)
             ignored.append({"label": obs.label, "why": "a follow-up to the question before it; not remembered"})
             continue

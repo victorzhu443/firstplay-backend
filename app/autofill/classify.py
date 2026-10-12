@@ -321,6 +321,28 @@ def is_follow_up(label: str) -> bool:
     return bool(FOLLOW_UP_LABEL.search(normalize_label(label)))
 
 
+#: The follow-ups that are never an *episode*. `FOLLOW_UP_LABEL` is the
+#: conditional-skip net and is deliberately wide ("If applicable, …",
+#: "Please provide additional …", "Additional information", "Comments"); as
+#: the memory gate it refused and deleted 144 distinct corpus labels, 477
+#: instances, among them "If applicable, which US state do you reside in?"
+#: (x12), "If applicable, what is your middle initial?" (x12) and
+#: "Additional Information" (x20) — stable answers (review of 2026-10-12,
+#: finding 5). An episode is refused only when the label names its referent,
+#: the answer just before it, or is a bare "Please specify" / "Other".
+EPISODE_FOLLOW_UP = re.compile(
+    r"^(if (yes|no|so|other|not|none|referred|you (selected|chose|answered|were referred|indicated|said))\b"
+    r"|please (specify|explain|elaborate)( below| here| further)?$"
+    r"|other( please specify)?$)",
+    re.I,
+)
+
+
+def is_episode_follow_up(label: str) -> bool:
+    """Whether a label is a follow-up whose answer must never be remembered."""
+    return bool(EPISODE_FOLLOW_UP.search(normalize_label(label)))
+
+
 #: Free-text questions that are essays even though the ATS gives them a
 #: single-line control: Ashby's String type carries "What excites you about
 #: the opportunity to join Talos?" and "What is one project you're really
@@ -386,15 +408,44 @@ _CONSENT_ASKED = re.compile(
     r"|accept|understand|confirm|certify|attest|happy to|wish to receive|would you like)\b", re.I)
 
 
+#: Sentence boundaries, for reading a consent ask one sentence at a time.
+_SENTENCES = re.compile(r"(?<=[.?!;:])\s+|\n+")
+
+
+def _asks_a_theme(label: str) -> bool:
+    """Whether a local theme pattern reads this label as a screening question."""
+    # Lazy: binder imports this module at load.
+    from app.autofill.binder import _THEME_PATTERNS
+    return any(pattern.search(label) for _theme, pattern in _THEME_PATTERNS)
+
+
 def is_consent_asked(label: str, option_count: int = 0) -> bool:
     """Whether a label asks for one of the standing consents the profile holds.
 
-    True when the label names a grant bucket and either asks (a consent verb)
-    or is a one-option control, which is a checkbox with legal text.
+    True when the label names a grant bucket and either is a one-option
+    control, which is a checkbox with legal text, or asks for the consent:
+    a consent verb and the bucket's subject in the *same sentence*, on a
+    label that asks nothing else.
+
+    A compound label is asking something else with a consent rider attached:
+    "Are you willing to relocate? (Offers are contingent on a background
+    check.)" and "I understand my data will be processed per the privacy
+    notice. Are you authorized to work in the US?" each filled "Yes" from the
+    standing consent, overriding the stored "No" the theme would have given
+    (review of 2026-10-12, finding 2). So a second question, a label a local
+    theme pattern recognises, or a non-compete is never a consent ask.
     """
-    if consent_key_for(label) not in _GRANT_BUCKETS:
+    text = label or ""
+    if consent_key_for(text) not in _GRANT_BUCKETS:
         return False
-    return option_count == 1 or bool(_CONSENT_ASKED.search(normalize_label(label)))
+    if option_count == 1:
+        return True
+    if text.count("?") > 1 or re.search(r"\bnon[-\s]?compete", text, re.I) or _asks_a_theme(text):
+        return False
+    for sentence in _SENTENCES.split(text):
+        if consent_key_for(sentence) in _GRANT_BUCKETS and _CONSENT_ASKED.search(normalize_label(sentence)):
+            return True
+    return False
 
 
 def consent_key_for(label: str) -> Optional[str]:
@@ -574,6 +625,15 @@ SENSITIVE_TOPIC_PATTERNS = (
     re.compile(r"\blgbt", re.I),
     re.compile(r"\bfirst[-\s]gen(eration)?\b", re.I),
     re.compile(r"\bmilitary spouse\b|\bspouse of (a |an )?(veteran|service member|active[- ]duty|military)", re.I),
+    # A disability question with accommodation wording that is *not* an
+    # accommodation request ("Do you have a disability or require an
+    # accommodation?"). The protected pattern excludes it, so it must not
+    # replay `disability_status`; `_ACCOMMODATION` does not match it, so it
+    # has no memory-only key either. Between the two it fell to SCREENING and
+    # the model gate (review of 2026-10-12, finding 1). Keyless LEGAL instead.
+    # Checked after `memory_only_key_for` in `memory_key_for`, so a genuine
+    # accommodation request still reaches `accommodation_needs`.
+    re.compile(r"(?=.*\bdisabilit)(?=.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))", re.I | re.S),
 )
 
 
@@ -599,11 +659,30 @@ def vendor_protected_key_for(key: str, label: str = "") -> Optional[str]:
             return memory_key
 
     if (key or "").startswith(DEMOGRAPHIC_KEY_PREFIX):
-        for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
+        for pattern, memory_key in _VENDOR_LABEL_PATTERNS:
             if pattern.search(label or ""):
                 return memory_key
 
     return None
+
+
+#: The label patterns for a field the vendor has *already* marked as EEOC
+#: (Greenhouse's numbered demographic block). Same table as the custom one,
+#: except that "disability" is the bare word: the vendor's own disability
+#: question may mention "reasonable accommodation" without being an
+#: accommodation request, and the custom table's exclusion let such a field
+#: fall through to the memory-only key and replay `accommodation_needs` as
+#: the EEOC answer (review of 2026-10-12, finding 4).
+_VENDOR_LABEL_PATTERNS = tuple(
+    (re.compile(r"\bdisabilit", re.I), memory_key) if memory_key == "disability_status" else (pattern, memory_key)
+    for pattern, memory_key in PROTECTED_LABEL_PATTERNS
+)
+
+#: The EEOC disability question's own phrasing, as distinct from an
+#: accommodation request that happens to mention a disability.
+_EEOC_DISABILITY_ASK = re.compile(
+    r"\b(do you have a disabilit|disability status|identify as (having|a person with) a disabilit)", re.I)
+_CHOICE_KINDS = (FieldKind.SINGLE_SELECT, FieldKind.MULTI_SELECT, FieldKind.BOOLEAN)
 
 
 def custom_protected_key_for(label: str) -> Optional[str]:
@@ -922,6 +1001,14 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
         return protected
 
     memory_only = memory_only_key_for(label)
+    # A *choice* control phrased as the EEOC disability question ("Do you
+    # have a disability? (If you need a reasonable accommodation …)") is not
+    # the free-text accommodation box, and the accommodation note must not
+    # be selected as the EEOC answer (review of 2026-10-12, finding 4). Nor
+    # is it safely the EEOC question. No key: review-only.
+    if (memory_only == "accommodation_needs" and kind in _CHOICE_KINDS
+            and _EEOC_DISABILITY_ASK.search(label or "")):
+        return None
     if memory_only:
         return memory_only
 

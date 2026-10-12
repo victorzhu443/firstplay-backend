@@ -36,7 +36,7 @@ from typing import ClassVar, Dict, List, Optional
 
 from pydantic import BaseModel, Field, PrivateAttr
 
-from app.autofill.classify import memory_key_for, normalize_label, OPTIONAL_BLANK_KEYS, consent_key_for, is_follow_up
+from app.autofill.classify import memory_key_for, normalize_label, OPTIONAL_BLANK_KEYS, consent_key_for, is_episode_follow_up
 from app.autofill.format import OPTION_MISMATCH
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField
 
@@ -414,6 +414,12 @@ class Memory(BaseModel):
         answers the same question at Beta. Every other label keeps the
         label-only fingerprint, so answers stored before this rule still
         replay.
+
+        Known and accepted (review of 2026-10-12, finding 8): a
+        company-shaped answer recorded with no company — an older client
+        that does not send one — is keyed under an empty company and
+        replays only in a plan that also has none. It is counted as saved
+        and is otherwise inert; nothing wrong is ever written from it.
         """
         text = normalize_label(label)
         if is_company_shaped(label, company):
@@ -428,9 +434,12 @@ class Memory(BaseModel):
 
         A follow-up ("Please specify", "If yes, …", "Other") is about the
         answer just before it on *that* form and is never replayed: the same
-        label follows a different question on the next form.
+        label follows a different question on the next form. The gate is
+        `is_episode_follow_up`, narrower than the conditional-skip net: "If
+        applicable, which US state do you reside in?" and "Additional
+        Information" are stable answers (review of 2026-10-12, finding 5).
         """
-        if is_follow_up(label):
+        if is_episode_follow_up(label):
             return None
         return self.answers.get(self.fingerprint(label, self._scope(company)))
 
@@ -438,7 +447,7 @@ class Memory(BaseModel):
         """Record an approved answer. Also the label-collection mechanism: a
         correction made in review is a labelled example. Returns False for a
         follow-up, which is never remembered."""
-        if is_follow_up(label):
+        if is_episode_follow_up(label):
             return False
         self.answers[self.fingerprint(label, self._scope(company))] = value
         return True

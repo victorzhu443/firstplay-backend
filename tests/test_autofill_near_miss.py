@@ -140,17 +140,61 @@ NEAR_MISSES = {
             "Please provide the institutional email address of the professor",
             "Street Address (Optional Second Line)",                               # x5: line 2, not line 1
             "Do you currently have a permanent or school address in the DC metro area?",  # x5: yes/no
+            # Review of 2026-10-12, finding 3: somebody else's address, or a
+            # URL. With street_address stored each filled with the home street.
+            "Employer Address",
+            "University Address",
+            "School Address",
+            "Address of your most recent employer",
+            "GitHub address",
+            "LinkedIn address",
+            "Portfolio address",
+            "Previous Address",
+            "Billing address",
+            "Reference 1 Address",
+            "Please provide the address of the office you would like to work from",
         ],
         [
             "Address 1",
+            "Address Line 1",
+            "Address",
             "Home Address",
             "Street address",
             "Mailing address",
+            "Permanent Address",
+            "Legal address:",
+            "Current Mailing Address",
             "Please provide your current mailing address. This information is used solely for recruitment.",  # x7
             "Primary Mailing Address",                                             # x5
+            "1.6 Please provide us with your current STREET ADDRESS (location where you permanently reside and will work in this role).",  # x4
+            "What address would you work from?",
         ],
     ),
 }
+
+
+def test_another_partys_address_is_never_filled_with_the_home_street():
+    """Finding 3 end to end: on main these went to review because the theme's
+    key was unset; after M9 pointed it at street_address they filled at 1.0."""
+    from app.autofill.binder import resolve_form
+    from app.autofill.classify import classify
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    misses, hits = NEAR_MISSES[QuestionTheme.WORK_ADDRESS]
+    fields = [FormField(key="q{}".format(i), label=label, kind=FieldKind.TEXT,
+                        field_class=classify("q{}".format(i), label, FieldKind.TEXT))
+              for i, label in enumerate(misses + hits)]
+    memory = Memory(facts={"street_address": "1 Main St", "email": "ada@example.com", "github": "https://github.com/ada"})
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    by_label = {e.label: e for e in plan.entries}
+    for label in misses:
+        assert by_label[label].value != "1 Main St", label
+    for label in hits:
+        if "second line" in label.lower():
+            continue
+        assert by_label[label].value == "1 Main St" and not by_label[label].needs_review, label
 
 
 @pytest.mark.parametrize("theme,label", [

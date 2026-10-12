@@ -311,3 +311,46 @@ def test_model_degradation_is_per_caller_with_a_global_fallback(monkeypatch):
         router._note_model_ok("install:{}".format(i))
     assert len(router._CALLER_STATUS) == router._CALLER_STATUS_MAX
     _reset_model_status()
+
+
+def test_caller_records_survive_concurrent_eviction(monkeypatch):
+    """Review of 2026-10-12, finding 6: `get` + `move_to_end` on a caller
+    record, unlocked, could straddle another thread's eviction of that same
+    record and raise KeyError (reproduced by interleaving the two steps by
+    hand). Handlers run in a threadpool; a small bound and many callers make
+    the eviction constant, and any KeyError surfaces from `pool.map`."""
+    from concurrent.futures import ThreadPoolExecutor
+    from app.routers import autofill as router
+    from app.exceptions import JevServiceError
+    _reset_model_status()
+    monkeypatch.setattr(router, "_CALLER_STATUS_MAX", 4)
+
+    def hit(i):
+        router._note_model_ok("install:{}".format(i % 50))
+        router._note_model_error(JevServiceError("HTTP 500"), "install:{}".format((i * 7) % 50))
+        router._model_degraded("install:{}".format((i * 3) % 50))
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(hit, range(3000)))
+    assert len(router._CALLER_STATUS) <= 4
+    _reset_model_status()
+
+
+def test_the_mid_plan_failure_log_carries_the_summary_not_the_upstream_body(monkeypatch, caplog):
+    import logging
+    from app.routers import autofill as router
+    from app.exceptions import JevServiceError
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-not-a-real-key")
+
+    def explode(self, *args, **kwargs):
+        raise JevServiceError("HTTP 401 Unauthorized: key sk-or-v1-abcdef expired")
+    monkeypatch.setattr(router.JevBinder, "classify_themes", explode)
+    # The speculative gates run in a pool beside classify_themes; hermetic.
+    monkeypatch.setattr(router.JevBinder, "answer_from_profile", lambda self, *a, **k: {})
+    monkeypatch.setattr(router.JevBinder, "match_options", lambda self, *a, **k: {})
+    with caplog.at_level(logging.WARNING, logger=router.logger.name):
+        body = _plan(use_model=True).json()
+    assert body["summary"]["filled"] > 0
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "401 from upstream" in text and "sk-or" not in text and "expired" not in text
+    _reset_model_status()
