@@ -380,6 +380,10 @@ PROTECTED_FIELD_NAMES = {
     "race": "race_ethnicity",
     "gender": "gender",
     "disability_status": "disability_status",
+    # Greenhouse renders its EEO block as two questions: `hispanic_ethnicity`
+    # (Yes / No / Decline To Self Identify) and then `race`. Its own stored
+    # answer, never derived from the race answer (audit 2026-10-12, H1).
+    "hispanic_ethnicity": "hispanic_latino",
 }
 
 #: Ashby's suffix form, matched against the end of the field name.

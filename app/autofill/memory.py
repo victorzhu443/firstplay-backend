@@ -808,6 +808,12 @@ PROFILE_FIELDS = {
         ("essential_functions", "Yes", 6),
         ("veteran_status", "I am not a protected veteran", 27),
         ("race_ethnicity", "Decline to self-identify", 27),
+        # Greenhouse's first EEO question, rendered before `race` on 7 of 9
+        # live boards (DECISIONS §34) and absent from the board API. Typed
+        # once, replayed exactly; never inferred from the stored race —
+        # Ashby's own race wording is "White (Not Hispanic or Latino)", and a
+        # substring rule read that as Yes (audit 2026-10-12, H1).
+        ("hispanic_latino", "Decline to self-identify", 7),
         ("gender", "Decline to self-identify", 27),
         ("disability_status", "I do not want to answer", 6),
         ("transgender", "I don't wish to answer", 41),
