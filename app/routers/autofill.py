@@ -143,6 +143,9 @@ def build_plan(request: AutofillRequest):
         raise HTTPException(
             status_code=422, detail="Profile could not be read: {}".format(e)
         )
+    # Company-shaped episodes (a referral, an office choice) replay only on
+    # this company's forms; `resolve_form` has no way to hand it to Memory.
+    memory.for_company(request.company or form.company)
 
     binder = DeterministicBinder()
     jev: Optional[JevBinder] = None
