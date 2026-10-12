@@ -2430,6 +2430,86 @@ controls held their values after React settled.
 
 ---
 
+## 56. The code review of round one: five regressions the audit fixes introduced, found by probing off the corpus
+
+Victor: "now lets also do the code review." Two reviewers read the two
+round-one diffs against main, forbidden to change anything, required to
+reproduce every suspected defect with a probe before reporting it. The
+backend reviewer also diffed (class, memory key, theme) for all 4,891
+distinct corpus fields between main and the branch, and ran each probe
+against a `git archive` of main for a real A/B. Both PRs had been merged
+before the review finished, so the fixes land as follow-up PRs.
+
+**What the review found that the round had introduced.** Every one was
+off-corpus — the corpus snapshot diff was clean — which is the same place
+H4's wrong rows lived, and the reason near-miss tests exist.
+
+1. *A disability question that mentions accommodation became SCREENING and
+   model-judgeable.* The H3 exclusion dropped "accommodat" labels from
+   `disability_status`, but the accommodation key only caught request
+   phrasings; "Do you have a disability or require an accommodation?" fell
+   through to the gate. Now a paired sensitive-topic pattern (disability
+   wording *and* accommodation wording) makes such labels LEGAL with no
+   key; genuine accommodation requests still reach `accommodation_needs`,
+   bare EEOC labels still key `disability_status`.
+2. *A consent rider turned a screening question into a consent and
+   answered it from the standing decision.* "I understand my data will be
+   processed per the privacy notice. Are you authorized to work in the
+   US?" came back "Yes" from the privacy consent — a false work-
+   authorisation claim. The consent verb and the bucket subject must now
+   sit in one sentence, the label may ask nothing else (no second question
+   mark, no non-compete), and any local theme pattern that also matches
+   wins. All 33 corpus consent moves from §55 hold.
+3. *The street address filled any "<noun> address".* Mapping `WORK_ADDRESS`
+   to `street_address` turned the review-only "Employer Address",
+   "University Address", "LinkedIn address", "Reference 1 Address" into
+   confident fills of the home street. The theme is now a positive gate
+   (street / mailing / home / residential / current / legal / permanent /
+   physical / postal address, "address line 1", a bare "Address") with
+   eleven near-misses in the test file.
+4. *The vendor-marked demographic disability question with an accommodation
+   note replayed the accommodation fact as the EEOC answer*, contradicting a
+   stored decline. The demographic block uses the bare disability pattern
+   (the vendor already marked it); a custom-key choice control phrased as
+   the EEOC question with accommodation wording is keyless review.
+5. *The H2 follow-up gate was the conditional-skip regex*, so "If
+   applicable, which US state do you reside in?", "Additional Information"
+   and "Please provide additional context" were never remembered and an
+   existing episode was deleted on sight — 477 corpus instances. A
+   narrower `is_episode_follow_up` requires a referent ("if yes", "if you
+   selected", bare "Other", bare "Please specify"); 342 instances still
+   refused, 135 restored, the broad regex kept for conditionals.
+
+Also: the per-caller status dictionary could raise under concurrent
+eviction (now under a lock, with a 16-thread test); the mid-plan failure
+log carried the raw upstream error the health route had just stopped
+publishing; a consent on a text control asked the applicant for a fact
+that could never fill it. One pre-existing gap recorded, not fixed: the
+SMS bucket regex has no plural "text messages", so "Do you consent to
+receive text messages?" is CONSENT with no bucket and stays human.
+
+**Extension side.** Reasons that quote the refused value crossed into the
+page world and into the run record unscrubbed (Python's single quotes
+were not blanked, and `failures[].why` was not scrubbed at all); numeric
+writes a page decorates on input ("$85,000") read as failures; a Hispanic
+entry on a board that mounts race without the question counted as a miss;
+skipped entries still paid for a label scan. All fixed in 0.4.51's
+follow-up PR with tests on the real `fill.js` loaded in a VM.
+
+**Measured.** Backend tests 802 → 829; deterministic coverage unchanged by
+the fix set (76.2% / 74.3% before and after), so the fixes removed wrong
+fills without costing corpus coverage. Reviewer corrections to its own
+findings are in the commit messages (finding 4's probe had used a
+non-vendor key; the true vendor path had the same hole by inspection).
+
+**What this says about process.** A corpus snapshot diff catches
+regressions on labels we have seen; it is blind to the ones we have not,
+and both this review and the audit found their defects there. Every
+pattern change from now on carries near-miss labels, and a review of a
+rule change probes outside the corpus by construction.
+
+---
+
 ## Current state
 
 Rewritten 2026-10-12 after the outside audit; the previous table here was
@@ -2444,7 +2524,7 @@ target met".
 | **Live, Greenhouse** | 117 live boards, 1,866 filled, 21 "known but could not be entered", all 21 before 0.4.19 by round order (`survey/`); the hundred of R48-2 has 1 of 100 recorded |
 | **Live, Ashby** | A1: 100 organisations, 702 filled, 246 review; R48-2: 100 organisations, 719 / 250 / 1 could-not-enter, median fill 110 ms |
 | **Learning loop** | offline replay 93.2% (1,679 of 1,802 later occurrences, 991 forms, re-run 2026-10-12); counts fills, not correct fills; no live metric yet; one self-poisoning found and closed (§54) |
-| **Tests** | 802, offline, no credentials, ~14 s |
+| **Tests** | 829, offline, no credentials, ~13 s |
 
 ## Open, with numbers attached
 
