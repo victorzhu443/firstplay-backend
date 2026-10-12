@@ -411,6 +411,13 @@ PROTECTED_FIELD_NAMES = {
     "race": "race_ethnicity",
     "gender": "gender",
     "disability_status": "disability_status",
+    # Greenhouse's EEO block asks Hispanic/Latino as its own yes/no beside
+    # race. Its own stored answer, replayed exactly: the outside audit of
+    # 2026-10-12 (H1) found the extension *deriving* it from the stored race
+    # by substring, which answered Yes for Ashby's "White (Not Hispanic or
+    # Latino)" wording and No for a stored decline. Derivation is a judgement
+    # about a protected characteristic; this key is what replaces it.
+    "hispanic_ethnicity": "hispanic_latino",
 }
 
 #: Ashby's suffix form, matched against the end of the field name.
@@ -495,6 +502,11 @@ def memory_only_key_for(label: str) -> Optional[str]:
 DEMOGRAPHIC_KEY_PREFIX = "demographic_answers."
 
 PROTECTED_LABEL_PATTERNS = (
+    # First, and only when the label does not also name race: "Are you
+    # Hispanic or Latino?" is its own question; "Race/Ethnicity (Hispanic or
+    # Latino, White, ...)" is the race question listing its options.
+    (re.compile(r"^(?!.*\b(race|racial)\b)(?=.*\b(hispanic|latino|latina|latinx|latine)\b)", re.I | re.S),
+     "hispanic_latino"),
     (re.compile(r"\bsexual orientation\b", re.I), "sexual_orientation"),
     (re.compile(r"\btransgender\b", re.I), "transgender"),
     (re.compile(r"\bgender\b", re.I), "gender"),

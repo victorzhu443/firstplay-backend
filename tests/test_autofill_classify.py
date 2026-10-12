@@ -229,3 +229,41 @@ def test_age_eligibility_still_fills_from_the_stored_answer():
     form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[field])
     entry = resolve_form(form, Memory(legal_status={"age_18_plus": "Yes"}), binder=DeterministicBinder()).entries[0]
     assert entry.value == "Yes" and not entry.needs_review
+
+
+# --- H1: Hispanic/Latino is its own protected answer, replayed exactly -------
+
+@pytest.mark.parametrize("key,label", [
+    ("hispanic_ethnicity", "Hispanic/Latino"),                 # Greenhouse's page key for the EEO yes/no
+    ("question_1", "Are you Hispanic or Latino?"),
+    ("question_1", "Hispanic/Latino"),
+    ("question_1", "Hispanic or Latino?"),
+    ("question_1", "Do you identify as Hispanic, Latino or Latinx?"),
+])
+def test_hispanic_latino_resolves_to_its_own_protected_key(key, label):
+    """Audit H1: the extension derived this answer from the stored race by
+    substring — Yes for Ashby's "White (Not Hispanic or Latino)", No for a
+    stored decline. A protected characteristic produced by string logic is a
+    judgement, not replay. It is its own stored answer now."""
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FillSource
+
+    assert protected_key_for(key, label) == "hispanic_latino"
+    assert memory_key_for(key, label, FieldKind.SINGLE_SELECT) == "hispanic_latino"
+    field = _field(label, options=("Yes", "No", "Decline To Self Identify"), key=key)
+    assert field.field_class == FieldClass.LEGAL
+    assert not field.allows_model_judgement()
+    assert not field.allows_option_translation()
+
+    # Replay only. A stored race, whatever its wording, never answers it.
+    race_only = Memory(protected={"race_ethnicity": "White (Not Hispanic or Latino)"})
+    assert race_only.resolve(field).needs_review
+    decline = Memory(protected={"hispanic_latino": "Decline To Self Identify"}).resolve(field)
+    assert decline.value == "Decline To Self Identify" and decline.source == FillSource.MEMORY
+    assert Memory(protected={"hispanic_latino": "No"}).resolve(field).value == "No"
+
+
+def test_the_race_question_listing_hispanic_as_an_option_stays_the_race_question():
+    assert protected_key_for("question_1", "Race/Ethnicity (Hispanic or Latino, White, Asian, ...)") == "race_ethnicity"
+    assert protected_key_for("race", "Race") == "race_ethnicity"
+    assert protected_key_for("question_1", "Please indicate your race or ethnicity") == "race_ethnicity"
