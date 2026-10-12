@@ -46,9 +46,11 @@ class FakeClient:
 
 def _binder(themes=None, **kw):
     themes = themes if themes is not None else {
-        "sponsorship": QuestionTheme.VISA_SPONSORSHIP,
-        "hear about": QuestionTheme.HEARD_ABOUT,
-        "relocat": QuestionTheme.WILLING_TO_RELOCATE,
+        # Labels no local pattern recognises, so the model path is exercised
+        # (since §52 a pattern-recognised label never reaches the model).
+        "mascot": QuestionTheme.VISA_SPONSORSHIP,
+        "newsletter": QuestionTheme.HEARD_ABOUT,
+        "conference": QuestionTheme.WILLING_TO_RELOCATE,
     }
     client = FakeClient(themes)
     return JevBinder(client=client, **kw), client
@@ -62,9 +64,9 @@ def test_many_labels_cost_one_call():
     binder, client = _binder()
 
     binder.classify_themes([
-        "Do you require visa sponsorship?",
-        "How did you hear about this job?",
-        "Are you open to relocation for this role?",
+        "Which mascot do you prefer?",
+        "Which newsletter do you read?",
+        "Would you attend a conference on our behalf?",
     ])
 
     assert len(client.calls) == 1
@@ -76,10 +78,10 @@ def test_many_labels_cost_one_call():
 def test_duplicate_labels_are_asked_once():
     binder, client = _binder()
 
-    result = binder.classify_themes(["Do you require visa sponsorship?"] * 4)
+    result = binder.classify_themes(["Which mascot do you prefer?"] * 4)
 
     assert len(client.calls[0]["questions"]) == 1
-    assert result["Do you require visa sponsorship?"][0] == QuestionTheme.VISA_SPONSORSHIP
+    assert result["Which mascot do you prefer?"][0] == QuestionTheme.VISA_SPONSORSHIP
 
 
 def test_a_blank_label_is_never_sent():
@@ -108,7 +110,7 @@ def test_state_carries_the_form_not_the_whole_form_content():
     and each question already carries its own label."""
     binder, client = _binder(form_context={"company": "Figma"})
 
-    binder.classify_themes(["Do you require visa sponsorship?"])
+    binder.classify_themes(["Which mascot do you prefer?"])
 
     assert client.calls[0]["state"] == {"form": {"company": "Figma"}}
 
@@ -119,7 +121,7 @@ def test_a_cached_label_costs_nothing():
     """147 recurrences for the most common label. Without the cache that is 147
     calls; with it, one."""
     binder, client = _binder()
-    label = "Do you require visa sponsorship?"
+    label = "Which mascot do you prefer?"
 
     binder.classify_themes([label])
     assert len(client.calls) == 1
@@ -133,22 +135,22 @@ def test_a_fully_cached_form_needs_no_client_at_all():
     """So a warm cache works without credentials, and the client is built lazily
     rather than at construction."""
     cache = ThemeCache()
-    cache.put("Do you require visa sponsorship?", QuestionTheme.VISA_SPONSORSHIP, 0.95)
+    cache.put("Which mascot do you prefer?", QuestionTheme.VISA_SPONSORSHIP, 0.95)
 
     binder = JevBinder(client=None, cache=cache)
-    result = binder.classify_themes(["Do you require visa sponsorship?"])
+    result = binder.classify_themes(["Which mascot do you prefer?"])
 
-    assert result["Do you require visa sponsorship?"][0] == QuestionTheme.VISA_SPONSORSHIP
+    assert result["Which mascot do you prefer?"][0] == QuestionTheme.VISA_SPONSORSHIP
     assert binder.calls == 0
 
 
 def test_the_cache_keys_on_the_normalised_label():
     """"LinkedIn Profile:" and "LinkedIn Profile" are the same question."""
     cache = ThemeCache()
-    cache.put("How did you hear about this job?", QuestionTheme.HEARD_ABOUT, 0.9)
+    cache.put("Which newsletter do you read?", QuestionTheme.HEARD_ABOUT, 0.9)
 
-    assert cache.get("how did you hear about this job") is not None
-    assert cache.get("How did you hear about this job?:") is not None
+    assert cache.get("which newsletter do you read") is not None
+    assert cache.get("Which newsletter do you read?:") is not None
 
 
 def test_confidence_is_stored_rather_than_collapsed_to_certain():
@@ -157,24 +159,24 @@ def test_confidence_is_stored_rather_than_collapsed_to_certain():
     binder, _client = _binder()
     binder._client._confidence = 0.55
 
-    theme, confidence = binder.classify_themes(["Do you require visa sponsorship?"])[
-        "Do you require visa sponsorship?"
+    theme, confidence = binder.classify_themes(["Which mascot do you prefer?"])[
+        "Which mascot do you prefer?"
     ]
 
     assert confidence == pytest.approx(0.55)
-    assert binder.cache.get("Do you require visa sponsorship?")[1] == pytest.approx(0.55)
+    assert binder.cache.get("Which mascot do you prefer?")[1] == pytest.approx(0.55)
 
 
 def test_the_cache_round_trips_through_disk(tmp_path):
     path = str(tmp_path / "themes.json")
     cache = ThemeCache(path)
-    cache.put("Do you require visa sponsorship?", QuestionTheme.VISA_SPONSORSHIP, 0.91)
+    cache.put("Which mascot do you prefer?", QuestionTheme.VISA_SPONSORSHIP, 0.91)
     cache.save()
 
     reloaded = ThemeCache(path)
 
     assert reloaded.size == 1
-    theme, confidence = reloaded.get("Do you require visa sponsorship?")
+    theme, confidence = reloaded.get("Which mascot do you prefer?")
     assert theme == QuestionTheme.VISA_SPONSORSHIP
     assert confidence == pytest.approx(0.91)
 
@@ -227,8 +229,8 @@ def test_an_off_menu_theme_becomes_unknown():
 def test_cost_and_calls_are_accounted_for_measurement():
     binder, _client = _binder()
 
-    binder.classify_themes(["Do you require visa sponsorship?",
-                            "How did you hear about this job?"])
+    binder.classify_themes(["Which mascot do you prefer?",
+                            "Which newsletter do you read?"])
 
     assert binder.calls == 1
     assert binder.cost_usd == pytest.approx(0.00002)
