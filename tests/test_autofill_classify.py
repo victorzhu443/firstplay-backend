@@ -72,3 +72,88 @@ def test_the_vendor_marker_outranks_accommodation_wording():
     assert memory_key_for("disability_status", label) == "disability_status"
     assert memory_key_for("abc__systemfield_eeoc_disability_status", label) == "disability_status"
     assert memory_key_for("question_1", "Will you need housing accommodation in Seattle?") is None
+
+
+# --- M1: a standing consent asked as a question is a consent -----------------
+
+@pytest.mark.parametrize("label,bucket", [
+    ("Do you consent to a background check?", "background_check"),                 # audit probe m5
+    ("Are you willing to undergo a background check?", "background_check"),         # audit probe m6
+    ("Are you willing to submit to a background screening if offered the position?", "background_check"),
+    ("Would you like to join our talent community for future opportunities?", "marketing_communications"),
+])
+def test_a_consent_bucket_asked_as_a_question_is_consent_not_screening(label, bucket):
+    """Audit M1: these named a bucket in CONSENT_BUCKETS yet classified
+    SCREENING, so the model gate could be asked about them. The applicant's
+    standing decision for the bucket answers them; nothing else does."""
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FillSource
+
+    assert consent_key_for(label) == bucket
+    field = _field(label)
+    assert field.field_class == FieldClass.CONSENT
+    assert not field.allows_model_judgement()
+    assert not field.allows_option_translation()
+    # Human until the decision is recorded; then the decision, from memory.
+    untouched = Memory().resolve(field)
+    assert untouched.needs_review and untouched.source == FillSource.HUMAN
+    decided = Memory(consents={bucket: "No"}).resolve(field)
+    assert decided.value == "No" and decided.source == FillSource.MEMORY and not decided.needs_review
+
+
+@pytest.mark.parametrize("label", ["Agreement to Arbitrate", "AI Policy for Application",
+                                   "I agree to binding arbitration of any dispute"])
+def test_an_agreement_naming_no_bucket_is_human_whatever_the_profile_says(label):
+    """The docstrings now say what the code does: a consent is replayed per
+    bucket from the applicant's standing decisions; an attestation matching no
+    bucket has no prior decision to replay and the act is the click."""
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FillSource
+
+    field = _field(label, options=("I Agree",))
+    assert field.field_class == FieldClass.CONSENT
+    assert consent_key_for(label) is None
+    assert not field.is_autofillable()
+    every_yes = Memory(consents={"background_check": "Yes", "terms_and_conditions": "Yes",
+                                 "truthful_certification": "Yes", "privacy_notice": "Yes"})
+    assert every_yes.resolve(field).source == FillSource.HUMAN
+
+
+def test_a_yes_no_screening_question_without_a_bucket_still_falls_through():
+    for label in ("Are you willing to work weekends?", "Do you have a valid driver's license?"):
+        assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2) == FieldClass.SCREENING
+
+
+@pytest.mark.parametrize("label,kind,options", [
+    # The bucket regexes alone (written for fields already CONSENT) matched all
+    # of these in the corpora; none asks for a consent.
+    ("Please confirm when you will complete your university studies.", FieldKind.SINGLE_SELECT, 5),   # x13
+    ("Do you have any agreement with your current employer (such as a non-compete or confidentiality agreement)?",
+     FieldKind.SINGLE_SELECT, 3),                                                                     # x5
+    ("Please indicate your level of experience coding in Python for data processing, scripting or automation.",
+     FieldKind.SINGLE_SELECT, 5),
+    # Mentions the check as a condition of the offer and asks something else.
+    ("Any offer of employment with Rocket Lab is contingent on a successful criminal background check. "
+     "Are you able to meet this requirement?", FieldKind.SINGLE_SELECT, 2),
+])
+def test_a_label_that_mentions_a_consent_subject_without_asking_stays_screening(label, kind, options):
+    assert classify("question_1", label, kind, option_count=options) == FieldClass.SCREENING
+
+
+def test_an_sms_opt_in_asked_as_a_phone_number_box_is_a_consent_and_so_never_a_fact():
+    """"If you wish to receive information via text/SMS, please indicate the
+    cell number below." (x2): the applicant opts in by typing the number. As a
+    CONSENT on a text control the standing decision must not be typed into it
+    (memory.py's rule, audit M1); as SCREENING it would reach the second pass.
+    CONSENT is the class that keeps a model out either way."""
+    label = "If you wish to receive information via text/SMS, please indicate the cell number below."
+    assert classify("question_1", label, FieldKind.TEXT) == FieldClass.CONSENT
+    assert consent_key_for(label) == "sms_messages"
+
+
+def test_a_one_option_checkbox_naming_a_bucket_is_a_consent():
+    """"Privacy Policy" as a one-option multi-select (x6) is a checkbox with
+    legal text; the single-option rule covers single-selects only."""
+    for label in ("Privacy Policy", "Snowflake will process your personal information in accordance with the Candidate Privacy Notice."):
+        assert classify("question_1", label, FieldKind.MULTI_SELECT, option_count=1) == FieldClass.CONSENT
+    assert classify("question_1", "Privacy Policy Acknowledgment", FieldKind.SINGLE_SELECT, option_count=2) == FieldClass.CONSENT

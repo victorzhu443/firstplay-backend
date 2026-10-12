@@ -106,12 +106,22 @@ class FillSource(str, Enum):
 #: applicant's own, and "I don't wish to answer" is itself a perfectly good
 #: stored answer. They are replayed, never inferred.
 #:
-#: CONSENT is the one class that stays HUMAN-only, and the reason is a real
-#: distinction rather than caution: veteran status **reports a fact that
-#: already exists**, so replaying it changes nothing. An arbitration agreement
-#: **creates an obligation at the moment of the click** — there is no prior
-#: fact to replay, the act is the click. A tool may type what you told it. It
-#: should not enter into an agreement for you.
+#: CONSENT is MEMORY-or-HUMAN, and the MEMORY is a different thing from a
+#: fact: a **standing decision** the applicant recorded once in
+#: `Memory.consents`, per bucket (`classify.CONSENT_BUCKETS`: SMS opt-in,
+#: marketing, interview recording, background check, privacy notice,
+#: truthfulness certification, terms). On the 2026-09-30 corpora 284 consent
+#: fields went to review on every application for a decision the applicant
+#: makes the same way every time (DECISIONS §48, §51–§52). A bucket with no
+#: recorded decision is human. An agreement that names no bucket — arbitration,
+#: the AI-policy attestation — is human whatever the profile says, and the
+#: reason is a real distinction rather than caution: veteran status **reports
+#: a fact that already exists**, so replaying it changes nothing; an
+#: arbitration agreement **creates an obligation at the moment of the click**,
+#: with no prior decision to replay. A tool may type what you told it, and may
+#: tick the box you told it to tick every time; it should not enter into a new
+#: agreement for you. No model source in either case: a consent is the
+#: applicant's decision, never a judgement about them.
 ALLOWED_FILL_SOURCES = {
     FieldClass.CORE: frozenset({FillSource.MEMORY}),
     FieldClass.DOCUMENT: frozenset({FillSource.MEMORY}),

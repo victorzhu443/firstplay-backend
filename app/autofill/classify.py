@@ -353,6 +353,37 @@ CONSENT_BUCKETS = (
 )
 
 
+#: The buckets a yes/no question can *grant*. The certification bucket is left
+#: out deliberately: its wording ("confirm … complete") also fits "Please
+#: confirm when you will complete your university studies" (x13 in the
+#: Greenhouse corpus), and certifications arrive as attestations, which
+#: `_ATTESTATION` already routes.
+_GRANT_BUCKETS = frozenset({
+    "sms_messages", "marketing_communications", "interview_recording",
+    "background_check", "privacy_notice", "terms_and_conditions",
+})
+
+#: The words that make a label an *ask* for consent rather than a mention of
+#: the subject. Measured over the two corpora (2026-10-12): without this gate
+#: the bucket regexes alone turned a non-compete disclosure ("any agreement
+#: with your current employer … confidentiality agreement", x5) and "experience
+#: coding in Python for data processing" into consents.
+_CONSENT_ASKED = re.compile(
+    r"\b(consent|agree|acknowledg\w*|willing|authoriz\w*|authoris\w*|permission|opt[- ]?in"
+    r"|accept|understand|confirm|certify|attest|happy to|wish to receive|would you like)\b", re.I)
+
+
+def is_consent_asked(label: str, option_count: int = 0) -> bool:
+    """Whether a label asks for one of the standing consents the profile holds.
+
+    True when the label names a grant bucket and either asks (a consent verb)
+    or is a one-option control, which is a checkbox with legal text.
+    """
+    if consent_key_for(label) not in _GRANT_BUCKETS:
+        return False
+    return option_count == 1 or bool(_CONSENT_ASKED.search(normalize_label(label)))
+
+
 def consent_key_for(label: str) -> Optional[str]:
     """Which standing consent, if any, a consent-class field asks for."""
     text = label or ""
@@ -557,12 +588,19 @@ _MEMORY_ONLY = (
     re.compile(r"\bselect all that apply\b.{0,40}\b(disclos|relationship|conflict)", re.I),
 )
 
-#: Genuine per-application attestations. These stay human, because the act of
-#: certifying is *made* at submission time rather than reporting a fact that
-#: already exists — the same distinction that keeps arbitration agreements
-#: manual. "I certify that the facts set forth in this Application are true"
-#: (x13) arrives as a plain text field, so the single-option-select rule never
-#: sees it.
+#: Per-application attestations, routed to CONSENT. "I certify that the facts
+#: set forth in this Application are true" (x13) arrives as a plain text
+#: field, so the single-option-select rule never sees it.
+#:
+#: What CONSENT means in practice (DECISIONS §48, §51–§52): the applicant's
+#: *standing decision* for the bucket the label names (`consent_key_for`,
+#: here `truthful_certification`) is replayed from `Memory.consents`; with no
+#: recorded decision the field is theirs; no model ever produces the value.
+#: An attestation that names no bucket — an arbitration agreement, the AI
+#: policy — stays human whatever the profile says: there is no prior decision
+#: to replay, the act is the click. An earlier version of this comment said
+#: every attestation stays human; the outside audit of 2026-10-12 (M1) read
+#: that against the code and the code was right.
 _ATTESTATION = (
     re.compile(r"\bi (certify|attest|declare)\b", re.I),
     re.compile(r"\bcertif(y|ication) that the (facts|information)\b", re.I),
@@ -570,16 +608,11 @@ _ATTESTATION = (
 )
 
 
-#: Employer attestations about the applicant's own use of AI in the application.
-#: Anthropic's "AI Policy for Application" appears on 27 of 148 postings.
-#:
-#: Routed to CONSENT — human-only — deliberately. This is the one field where an
-#: autofill tool would be attesting to its own involvement, and it is an
-#: attestation the applicant makes rather than a fact about them that already
-#: exists. Costs one click per application.
 #: Consent-shaped questions that are decisions rather than facts, found in the
 #: intern corpus and initially unclassified. Each grants something — a recording,
-#: a marketing channel, acceptance of terms — so none is a fact to replay.
+#: a marketing channel, acceptance of terms — so none is a *fact* about the
+#: applicant; each is a standing decision in `Memory.consents`, replayed per
+#: bucket and human while unrecorded.
 _DECISIONS_NOT_FACTS = (
     # "To ensure we can focus fully on our conversation, we use Brighthire to
     # record interviews" (x4). Consent to being recorded.
@@ -600,6 +633,13 @@ _DECISIONS_NOT_FACTS = (
     re.compile(r"\bconsent to\b.{0,40}\b(personal data|my data|data (being )?(processed|disclosed|shared))\b", re.I),
 )
 
+#: Employer attestations about the applicant's own use of AI in the application.
+#: Anthropic's "AI Policy for Application" appears on 27 of 148 postings.
+#:
+#: Routed to CONSENT and matched to no consent bucket, so it is human-only.
+#: This is the one field where an autofill tool would be attesting to its own
+#: involvement, and it is an attestation the applicant makes rather than a
+#: fact about them that already exists. Costs one click per application.
 _AI_POLICY = re.compile(
     r"\bai\b.{0,24}\b(polic|guidance|guideline|disclosure)"
     # Intern-corpus phrasings: "I understand that Coinbase may use AI tools to
@@ -761,6 +801,20 @@ def classify(
     # authorization status" with options is not caught: options exclude it.
     if kind == FieldKind.TEXT and option_count == 0 and NARRATIVE_LABEL.search(normalized):
         return FieldClass.NARRATIVE
+
+    # A standing consent asked as a question. "Do you consent to a background
+    # check?" names a bucket in CONSENT_BUCKETS but matched none of the
+    # decision patterns above, so it was SCREENING and the model gate could be
+    # asked about it (outside audit 2026-10-12, M1; the model declined, which
+    # is the model behaving, not the design). A label that *asks for* a
+    # standing consent is CONSENT wherever the fall-through would otherwise
+    # put it: the applicant's own decision for that bucket answers it, and
+    # nothing else does. Last, so a core fact, a document or an essay that
+    # happens to mention "privacy" keeps its own class. 68 corpus fields in
+    # 25 shapes moved here; the ask-gate keeps the 13 "confirm when you will
+    # complete your studies" and the non-compete disclosures out.
+    if is_consent_asked(label, option_count):
+        return FieldClass.CONSENT
 
     return FieldClass.SCREENING
 
