@@ -98,7 +98,8 @@ two companies and an Accept.
    every second-pass answer across 224 postings read line by line (14/14).
 
 **What evaluation does not yet cover, honestly.** The Greenhouse hundred of
-this round is 8 of 100 run (the window must be on screen). The learning
+this round has 1 of 100 recorded (the window must be on screen; seven more
+ran but their rows were never appended — corrected 2026-10-12). The learning
 loop is measured offline only (replay 94.3% / 96.6% on simulated answers);
 its live metric — questions the applicant has to answer twice — has no
 data yet. Essays are out of scope by decision and are not counted. A June
