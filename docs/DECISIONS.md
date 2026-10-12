@@ -2179,6 +2179,40 @@ is stored, the graduate transcript slot the form marks required while its
 label says "if applicable", and one in-person availability read under
 threshold.
 
+## 53. Ask the applicant: the profile is edited in the popup, and a page's unanswered facts become questions
+
+Victor, 2026-10-12, with IMC's form (education start date empty, high-school
+graduation, test type, SAT and ACT required and empty): "you also need to be
+able to edit this stuff and ask the user for this information." Until now
+the profile was a JSON document pasted into the popup; the start date was
+in the file on disk and not in the copy the extension held, and nothing
+told him.
+
+**Mechanism.** Every plan entry whose question the engine recognised but the
+profile holds no value for now carries `needs_fact` — section, key, a
+prompt naming the form's own question, the onboarding example and note.
+`GET /api/autofill/profile-schema` serves the onboarding registry (section,
+key, example, note, how many real fields each key answered). The extension
+(0.4.49) renders a profile editor from that schema, grouped by section in
+the order the registry gives, with the raw JSON kept under "Advanced"; after
+a fill it collects the page's `needs_fact` entries and the popup shows them
+first — "This page asked for N things your profile doesn't have" — each with
+an input, Save, Skip (30 days). A save writes the one key, forgets the cached
+plans, and the next visit fills the field. Protected answers are typed and
+replayed exactly, never inferred, and the editor says so beside them. The
+outcome record counts `asks` per page.
+
+**New facts for IMC's twelve postings.** `education.high_school_graduation`,
+`facts.test_score_type`, `facts.sat_score`, `facts.act_score`, with exact
+aliases for IMC's wording. Two matcher gaps closed on the way: a stored
+month-and-year lands on a year-only option ("May 2024" → "2024"), and a
+number past 100 is a score, not a percentage, so 1480 lands in "1400 – 1490".
+
+**Process.** 635 tests. A test run that fails must not be followed by a
+commit: two commits this week went in on a red suite because the commit was
+chained on a grep of the output rather than on the exit code; the run
+script now gates on the suite's own result.
+
 ---
 
 ## Current state
