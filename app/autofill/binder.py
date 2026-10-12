@@ -247,17 +247,25 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
      re.compile(r"(?=.*\b(?:worked|employee|employed|contractor|intern(?:ed)?)\b)"
                r"(?=.*\b(?:before|previously|previous)\b)", re.I)),
     (QuestionTheme.CURRENT_STATE, re.compile(r"\b(state or province|which state)\b", re.I)),
-    # "Please provide your university email address" is not a street address
-    # (audit 2026-10-12, M9). Nor is a second line ("Street Address (Optional
-    # Second Line)", x5), nor a yes/no about having an address somewhere ("Do
-    # you currently have a permanent or school address in the DC metro
-    # area?", x5): with street_address stored, both would have been filled
-    # with line 1.
+    # The theme reads the stored street address, so it is gated on what a
+    # street address is called — street / mailing / home / residential /
+    # current / legal / permanent / postal address, "Address 1", "Address
+    # Line 1", a bare "Address", or the address one would work from — not on
+    # the word "address" alone. An exclusion list ("university email
+    # address", M9) left "Employer Address", "School Address", "GitHub
+    # address", "Reference 1 Address" and "Billing address" filling with the
+    # applicant's home street at confidence 1.0 (review of 2026-10-12,
+    # finding 3). A second line ("Street Address (Optional Second Line)",
+    # x5) and a yes/no about having an address somewhere ("Do you currently
+    # have a permanent or school address in the DC metro area?", x5) are
+    # still excluded.
     (QuestionTheme.WORK_ADDRESS,
-     re.compile(r"^(?!.*\b(e-?mail|ip|web|website|url|wallet)\s*address\b)"
-               r"(?!.*\b(second line|line 2|address 2)\b)"
+     re.compile(r"^(?!.*\b(second line|line 2|address 2)\b)"
                r"(?!\s*(do|are|have|will|would|can|could|is) you\b)"
-               r"(?=.*\baddress\b)", re.I | re.S)),
+               r"(?=.*(\b(street|mailing|home|residential|current|legal|permanent|physical|postal)\s+address\b"
+               r"|\baddress\s*(line\s*)?1\b"
+               r"|\baddress\b.{0,15}\bwork from\b"
+               r"|^\W*(your\s+|full\s+)?address\W*$))", re.I | re.S)),
     # A general tolerance answers a general question. "Are you able to work
     # in-person in San Jose this summer?" names a place, and the stored
     # in_office_tolerance says nothing about San Jose; it was filled at 1.0
