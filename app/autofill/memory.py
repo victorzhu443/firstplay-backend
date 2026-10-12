@@ -609,6 +609,15 @@ class Memory(BaseModel):
             )
 
         if field.field_class == FieldClass.LEGAL:
+            # A sanctions / export-control disclosure whose every option names
+            # a citizenship or residence (Cuba, Iran, North Korea, Syria,
+            # Russia, Belarus, occupied regions) and offers "None of the
+            # above": with the stored citizenship and country of residence
+            # both outside those, none applies — arithmetic on stored facts,
+            # no model. Databricks (2026-10-12) left it empty and required.
+            none = _sanctions_none(field, self)
+            if none is not None:
+                return none
             # Recognised as protected but unmatched by key: ask once, then it
             # becomes an `answers` entry and is never asked again.
             return Resolution(
@@ -619,6 +628,31 @@ class Memory(BaseModel):
             )
 
         return None
+
+
+_SANCTIONED = re.compile(r"\b(cuba|iran|north korea|syria|russia|belarus|crimea|donetsk|luhansk|zaporizhzhia|kherson|venezuela|sudan|myanmar)\b", re.I)
+_NONE_ABOVE = re.compile(r"^(none of the above|none of these( apply)?|not applicable|n/?a)\b", re.I)
+
+
+def _sanctions_none(field: FormField, memory: "Memory") -> Optional[Resolution]:
+    if not field.options or field.kind not in (FieldKind.MULTI_SELECT, FieldKind.SINGLE_SELECT):
+        return None
+    none = next((o for o in field.options if _NONE_ABOVE.match(o.label.strip())), None)
+    others = [o for o in field.options if o is not none]
+    if none is None or not others or not all(_SANCTIONED.search(o.label) for o in others):
+        return None
+    if not all(re.search(r"\b(citizen|resident|national|residen)", o.label, re.I) for o in others):
+        return None
+    citizenship = (memory.legal_status.get("citizenship") or "").strip()
+    residence = (memory.lookup("country_of_residence") or "").strip()
+    if not citizenship or not residence:
+        return None
+    if _SANCTIONED.search(citizenship) or _SANCTIONED.search(residence):
+        return None
+    reason = "none applies: you are a {} living in {}".format(citizenship, residence)
+    if field.kind == FieldKind.MULTI_SELECT:
+        return Resolution(field_key=field.key, values=[none.label], source=FillSource.MEMORY, reason=reason)
+    return Resolution(field_key=field.key, value=none.label, source=FillSource.MEMORY, reason=reason)
 
 
 #: Default location, outside the repository on purpose. This file holds a real

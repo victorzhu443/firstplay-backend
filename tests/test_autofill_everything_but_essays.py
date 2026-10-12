@@ -414,3 +414,25 @@ def test_every_file_field_names_the_document_it_asks_for_and_required_ones_stay_
     assert by["p"].document == "portfolio" and by["p"].needs_review and "attach your portfolio" in by["p"].reason
     assert by["w"].document == "portfolio" and "required" in by["w"].reason
     assert by["x"].document == "other" and by["x"].needs_review and "required" in by["x"].reason
+
+
+def test_a_sanctions_disclosure_is_none_of_the_above_for_a_us_citizen_living_in_the_us():
+    opts = ["Citizen or permanent resident of Cuba, Iran, North Korea, or Syria",
+            "Ordinarily a resident of Cuba, Iran, North Korea, Syria or the Crimea, Donetsk, Luhansk, Zaporizhzhia, or Kherson regions of Ukraine",
+            "Ordinarily a resident of Russia or Belarus and not willing to relocate for a Databricks role",
+            "None of the above"]
+    field = _field("s", "Please confirm whether any of the below applies to you. Select all that apply.", FieldKind.MULTI_SELECT, opts, required=True)
+    assert field.field_class == FieldClass.LEGAL
+    us = Memory(legal_status={"citizenship": "US citizen"}, facts={"current_location": "Ithaca, NY"})
+    plan = resolve_form(_form(field), us, binder=None)
+    assert plan.entries[0].values == ["None of the above"] and not plan.entries[0].needs_review
+    assert resolve_form(_form(field), Memory(legal_status={"citizenship": "Iranian"}, facts={"current_location": "Tehran, Iran"}), binder=None).entries[0].needs_review
+    assert resolve_form(_form(field), Memory(), binder=None).entries[0].needs_review
+
+
+def test_heard_about_answers_are_never_learned():
+    from app.autofill.learn import Observation, learn
+    memory = Memory(preferences={"heard_about": "Careers Website"})
+    obs = Observation(label="How did you hear about this job?", user_value="Recruiter Reach Out", company="Databricks", ats="greenhouse")
+    result = learn(memory, [obs], binder=None)
+    assert result.learned == 0 and not memory.answers and any("per application" in i["why"] for i in result.ignored)

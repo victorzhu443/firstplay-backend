@@ -163,6 +163,13 @@ def learn(memory: Memory, observations: List[Observation], binder=None) -> Learn
     candidates: List[Tuple[str, Observation, str, FieldClass]] = []
 
     for index, obs in enumerate(observations):
+        # "How did you hear about this job?" is answered per application — a
+        # recruiter this time, LinkedIn next time (Victor, 2026-10-12: "let
+        # them change it, but that shouldn't be remembered"). Never replayed,
+        # never proposed.
+        if re.search(r"\bhear(d)? about\b|\bhow did you (find|learn about)\b", obs.label or "", re.I):
+            ignored.append({"label": obs.label, "why": "answered per application, not remembered"})
+            continue
         value = _as_text(obs.user_value)
         if not value:
             ignored.append({"label": obs.label, "why": "left empty"})
