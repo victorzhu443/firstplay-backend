@@ -49,6 +49,12 @@ services:
       - key: COHERE_API_KEY
         sync: false
 
+      # FirstPlay Autofill: the Jev decision model behind /api/autofill/plan
+      # and /api/autofill/learn (TypeSafe's jev-1.13 via OpenRouter). Without
+      # it the autofill endpoints still answer, deterministically only.
+      - key: OPENROUTER_API_KEY
+        sync: false
+
       # Supplied by the managed instance above. Render emits a postgres://
       # URL, which SQLAlchemy 2.x rejects; app/db.py normalises it.
       - key: DATABASE_URL

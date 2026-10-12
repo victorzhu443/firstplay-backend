@@ -194,3 +194,35 @@ def test_health_reports_without_exercising_the_model():
 
     assert response.status_code == 200
     assert "model_available" in response.json()
+
+
+def test_an_install_token_is_the_rate_limit_key_and_extension_origins_pass_cors():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.rate_limit import client_key
+    from starlette.requests import Request
+    client = TestClient(app)
+    scope = {"type": "http", "headers": [(b"x-firstplay-install", b"4b9a7d1e-2c3f-4e5a-9b8c-0d1e2f3a4b5c")],
+             "client": ("10.0.0.1", 1234), "method": "POST", "path": "/api/autofill/plan", "query_string": b"", "scheme": "http", "server": ("x", 80)}
+    assert client_key(Request(scope)) == "install:4b9a7d1e-2c3f-4e5a-9b8c-0d1e2f3a4b5c"
+    scope["headers"] = [(b"x-firstplay-install", b"<script>")]
+    assert client_key(Request(scope)) == "10.0.0.1"
+    response = client.options("/api/autofill/health", headers={
+        "Origin": "chrome-extension://fpigopojdgjjodoaiefaacgpbpgoccfi",
+        "Access-Control-Request-Method": "POST"})
+    assert response.headers.get("access-control-allow-origin") == "chrome-extension://fpigopojdgjjodoaiefaacgpbpgoccfi"
+
+
+def test_health_reports_a_model_that_failed_last(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.routers import autofill as router
+    from app.exceptions import JevServiceError
+    client = TestClient(app)
+    router._MODEL_STATUS.update({"last_error": None, "last_error_at": None, "last_ok_at": None})
+    router._note_model_error(JevServiceError("API key expired"))
+    health = client.get("/api/autofill/health").json()
+    assert health["model_last_error"].endswith("API key expired")
+    assert health["model_degraded"] is (health["model_available"] is True)
+    router._note_model_ok()
+    assert client.get("/api/autofill/health").json()["model_degraded"] is False

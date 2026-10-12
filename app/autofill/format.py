@@ -62,6 +62,16 @@ def normalize_value(text: Optional[str]) -> str:
     return _WHITESPACE.sub(" ", lowered).strip()
 
 
+#: Polarity by opening words, for answers and options that are sentences.
+#: "I am not a protected veteran" against "No, I am not a veteran or active
+#: member" (x40 in the Greenhouse corpus) and "Yes, I am a veteran or active
+#: member": the stored answer and the option each open with their polarity.
+#: Word-bounded so "none" is not "no" and "yesterday" is not "yes".
+_OPENS_NEGATIVE = re.compile(r"^(no|n|false|never|i am not|i do not|i have not|i will not|i would not)\b")
+_OPENS_AFFIRMATIVE = re.compile(r"^(yes|y|true|i am|i do|i have|i will|i would|agree|i agree|authorized)\b(?! not)")
+_NOT_AN_ANSWER = re.compile(r"^(n a|not applicable|none|not sure|unsure|unknown|i don t know|other)\b")
+
+
 def _as_bool(text: str) -> Optional[bool]:
     normalized = normalize_value(text)
 
@@ -69,6 +79,13 @@ def _as_bool(text: str) -> Optional[bool]:
         return True
     if normalized in _NEGATIVE:
         return False
+    # "I don't wish to answer", "Not applicable" and "None" carry no polarity.
+    if _DECLINE.search(normalized) or _NOT_AN_ANSWER.match(normalized):
+        return None
+    if _OPENS_NEGATIVE.match(normalized):
+        return False
+    if _OPENS_AFFIRMATIVE.match(normalized):
+        return True
 
     return None
 
@@ -151,8 +168,11 @@ def match_country(value: Optional[str], field: FormField) -> Optional[FieldOptio
 _OWN_SITE_ANSWERS = {"careers website", "career website", "careers page", "career page",
                      "company website", "careers site", "career site", "website"}
 _OWN_SITE = re.compile(r"\b(website|web site|careers? page|careers? site|careers)\b", re.I)
+# "College Recruiting - Careers Services" (x27, Greenhouse) is a campus
+# office, not the employer's site; "career fair" and "career center" likewise.
 _THIRD_PARTY = re.compile(r"linkedin|indeed|glassdoor|handshake|ripplematch|wayup|simplify|"
-                          r"builtin|levels|blind|repvue|google|job board|university|school", re.I)
+                          r"builtin|levels|blind|repvue|google|job board|university|school|college|"
+                          r"campus|career(s)? (services?|fair|cent(er|re)|advis|office|counsel)", re.I)
 
 _SYNONYMS = {
     "male": ("man",), "man": ("male",),

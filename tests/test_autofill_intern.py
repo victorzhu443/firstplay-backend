@@ -266,8 +266,18 @@ def test_per_application_attestations_stay_manual(label):
     assert field_class == FieldClass.CONSENT
 
     field = FormField(key="q1", label=label, kind=FieldKind.TEXT, field_class=field_class)
-    assert not field.is_autofillable()
     assert field.may_fill_from(FillSource.HUMAN)
+    assert not field.allows_model_judgement()
+
+    # Since §48 a certification can be a *standing* consent: nothing happens
+    # until the applicant records consents.truthful_certification, and then
+    # it is their own decision replayed, with the form still reviewed by them.
+    from app.autofill.memory import Memory
+    untouched = Memory().resolve(field)
+    assert untouched.source == FillSource.HUMAN and untouched.needs_review
+    if field.is_autofillable():
+        decided = Memory(consents={"truthful_certification": "Agree"}).resolve(field)
+        assert decided.source == FillSource.MEMORY and decided.value == "Yes"
 
 
 def test_memory_only_questions_resolve_from_the_profile():

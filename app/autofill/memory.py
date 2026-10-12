@@ -36,7 +36,7 @@ from typing import ClassVar, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.autofill.classify import memory_key_for, normalize_label
+from app.autofill.classify import memory_key_for, normalize_label, OPTIONAL_BLANK_KEYS, consent_key_for
 from app.autofill.format import OPTION_MISMATCH
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField
 
@@ -291,6 +291,28 @@ class Memory(BaseModel):
     #: review, is replayed verbatim next time.
     answers: Dict[str, str] = Field(default_factory=dict)
 
+    #: Standing consents, decided once: privacy_notice, truthful_certification,
+    #: sms_messages, marketing_communications, interview_recording,
+    #: background_check, terms_and_conditions. The value is the applicant's
+    #: decision ("Agree" / "Yes" / "No"); the binder picks the option on each
+    #: form that says it. Measured on 578 Greenhouse forms: 284 consent fields
+    #: went to review every time, 21 of them an SMS opt-in and 16 a privacy
+    #: statement with one option. An unset bucket stays human. The AI-policy
+    #: attestation and arbitration agreements are never in a bucket.
+    consents: Dict[str, str] = Field(default_factory=dict)
+
+    #: Facts the loop learned from the applicant's own corrections and
+    #: accepted in the popup (§50): key -> value. CoALA's semantic memory —
+    #: what is true of the applicant — grown from episodes (`answers`) the
+    #: way Voyager grows its skill library: a candidate is proposed when the
+    #: same kind of answer recurs, and only the applicant promotes it. Read by
+    #: the second pass and the gate like any stored fact; never protected.
+    learned: Dict[str, str] = Field(default_factory=dict)
+
+    #: Proposals not yet accepted: key -> {value, support, labels, companies}.
+    #: Support counts distinct companies whose forms produced the same answer.
+    learned_pending: Dict[str, Dict[str, object]] = Field(default_factory=dict)
+
     # --- derived facts ------------------------------------------------------
 
     def full_name(self) -> Optional[str]:
@@ -380,14 +402,13 @@ class Memory(BaseModel):
             return _split_location(self.facts)[0]
 
         for section in (self.facts, self.education, self.legal_status,
-                        self.preferences, self.protected):
+                        self.preferences, self.protected, self.learned):
             if section.get(key):
                 return section[key]
 
         return None
 
-    @staticmethod
-    def _as_option(field: FormField, value: str, reason: str) -> Resolution:
+    def _as_option(self, field: FormField, value: str, reason: str) -> Resolution:
         """Express a stored value in the form's own vocabulary.
 
         Without this, a stored "he/him/his" was written verbatim into a select
@@ -408,6 +429,16 @@ class Memory(BaseModel):
 
         option = match_option(value, field)
 
+        # "How did you hear about us?" with no careers-site option (x46
+        # required across 578 Greenhouse forms): the applicant's ordered
+        # second choices, each an exact match or nothing.
+        if option is None and reason == "stored as heard_about":
+            for fallback in (self.preferences.get("heard_about_fallback") or "").split("|"):
+                option = match_option(fallback.strip(), field) if fallback.strip() else None
+                if option is not None:
+                    reason = "stored as heard_about_fallback"
+                    break
+
         if option is None:
             return Resolution(field_key=field.key, value=value,
                               source=FillSource.MEMORY, needs_review=True,
@@ -419,6 +450,57 @@ class Memory(BaseModel):
 
         return Resolution(field_key=field.key, value=option.label,
                           source=FillSource.MEMORY, reason=reason)
+
+    def _resolve_consent(self, field: FormField) -> Resolution:
+        """Replay a standing consent, or leave the field to the applicant.
+
+        The decision is the applicant's, recorded once in `consents`; what is
+        chosen here is only which of this form's options states it. A single
+        option ("I Agree") is that statement when the decision is affirmative.
+        Two or more options are read by polarity, and an ambiguous menu stays
+        for review rather than guessing which box means yes.
+        """
+        from app.autofill.format import option_for_bool, _as_bool
+
+        bucket = consent_key_for(field.label)
+        human = Resolution(
+            field_key=field.key, source=FillSource.HUMAN, needs_review=True,
+            reason="this question is only ever answered by you",
+        )
+        if bucket is None:
+            return human
+
+        decision = (self.consents.get(bucket) or "").strip()
+        if not decision:
+            human.reason = "set consents.{} once to answer this every time".format(bucket)
+            return human
+
+        agree = _as_bool(decision)
+        if agree is None:
+            agree = decision.lower() in ("agree", "accept", "acknowledge", "consent", "opt in", "i agree")
+        reason = "standing consent: {} = {}".format(bucket, decision)
+
+        if field.kind == FieldKind.BOOLEAN or not field.options:
+            return Resolution(field_key=field.key, value="Yes" if agree else "No",
+                              source=FillSource.MEMORY, reason=reason)
+
+        if len(field.options) == 1:
+            if agree:
+                label = field.options[0].label
+                if field.kind == FieldKind.MULTI_SELECT:
+                    return Resolution(field_key=field.key, values=[label], source=FillSource.MEMORY, reason=reason)
+                return Resolution(field_key=field.key, value=label, source=FillSource.MEMORY, reason=reason)
+            human.reason = "you decline {}, and this form offers only agreement".format(bucket)
+            return human
+
+        option = option_for_bool(agree, field)
+        if option is None:
+            human.reason = "could not tell which option means {} for {}".format(
+                "yes" if agree else "no", bucket)
+            return human
+        if field.kind == FieldKind.MULTI_SELECT:
+            return Resolution(field_key=field.key, values=[option.label], source=FillSource.MEMORY, reason=reason)
+        return Resolution(field_key=field.key, value=option.label, source=FillSource.MEMORY, reason=reason)
 
     def resolve(self, field: FormField) -> Optional[Resolution]:
         """Answer a field from memory alone, or return None.
@@ -435,6 +517,9 @@ class Memory(BaseModel):
         """
         # Policy first. A field memory is not permitted to fill is not filled,
         # whatever happens to be stored.
+        if field.field_class == FieldClass.CONSENT:
+            return self._resolve_consent(field)
+
         if not field.may_fill_from(FillSource.MEMORY):
             return Resolution(
                 field_key=field.key,
@@ -450,6 +535,19 @@ class Memory(BaseModel):
             return self._as_option(field, remembered, "you answered this before")
 
         key = memory_key_for(field.key, field.label, field.kind)
+
+        # A transcript of *graduate* studies asked of an undergraduate is not
+        # applicable (screenshot 2026-10-12: the résumé had been attached to
+        # both the undergraduate and the graduate transcript slots).
+        if key == "transcript_file" and re.search(r"\b(graduate|master'?s?|phd|doctoral)\b", field.label or "", re.I) \
+                and not re.search(r"\bundergraduate\b", field.label or "", re.I):
+            degree = (self.education.get("degree") or "").lower()
+            if degree and not any(m in degree for m in ("master", "m.s", "ms ", "phd", "ph.d", "doctor", "msc", "meng")):
+                if field.required:
+                    return Resolution(field_key=field.key, source=FillSource.MEMORY, needs_review=True,
+                                      reason="asks for a graduate transcript; you are pursuing a bachelor's, but the form requires it")
+                return Resolution(field_key=field.key, source=FillSource.MEMORY,
+                                  skipped="a graduate transcript does not apply to a bachelor's student")
 
         if key and key in self.skip:
             if field.required:
@@ -494,6 +592,13 @@ class Memory(BaseModel):
 
             if value:
                 return self._as_option(field, value, "stored as {}".format(key))
+            # A second address line or a Twitter handle the applicant never
+            # recorded: on an optional field, blank is the answer.
+            if key in OPTIONAL_BLANK_KEYS and not field.required:
+                return Resolution(
+                    field_key=field.key, source=FillSource.MEMORY,
+                    skipped="nothing recorded for {}; left blank".format(key),
+                )
             # A recognised field with nothing stored is a gap in onboarding,
             # not a question for a model.
             return Resolution(
@@ -504,6 +609,15 @@ class Memory(BaseModel):
             )
 
         if field.field_class == FieldClass.LEGAL:
+            # A sanctions / export-control disclosure whose every option names
+            # a citizenship or residence (Cuba, Iran, North Korea, Syria,
+            # Russia, Belarus, occupied regions) and offers "None of the
+            # above": with the stored citizenship and country of residence
+            # both outside those, none applies — arithmetic on stored facts,
+            # no model. Databricks (2026-10-12) left it empty and required.
+            none = _sanctions_none(field, self)
+            if none is not None:
+                return none
             # Recognised as protected but unmatched by key: ask once, then it
             # becomes an `answers` entry and is never asked again.
             return Resolution(
@@ -514,6 +628,31 @@ class Memory(BaseModel):
             )
 
         return None
+
+
+_SANCTIONED = re.compile(r"\b(cuba|iran|north korea|syria|russia|belarus|crimea|donetsk|luhansk|zaporizhzhia|kherson|venezuela|sudan|myanmar)\b", re.I)
+_NONE_ABOVE = re.compile(r"^(none of the above|none of these( apply)?|not applicable|n/?a)\b", re.I)
+
+
+def _sanctions_none(field: FormField, memory: "Memory") -> Optional[Resolution]:
+    if not field.options or field.kind not in (FieldKind.MULTI_SELECT, FieldKind.SINGLE_SELECT):
+        return None
+    none = next((o for o in field.options if _NONE_ABOVE.match(o.label.strip())), None)
+    others = [o for o in field.options if o is not none]
+    if none is None or not others or not all(_SANCTIONED.search(o.label) for o in others):
+        return None
+    if not all(re.search(r"\b(citizen|resident|national|residen)", o.label, re.I) for o in others):
+        return None
+    citizenship = (memory.legal_status.get("citizenship") or "").strip()
+    residence = (memory.lookup("country_of_residence") or "").strip()
+    if not citizenship or not residence:
+        return None
+    if _SANCTIONED.search(citizenship) or _SANCTIONED.search(residence):
+        return None
+    reason = "none applies: you are a {} living in {}".format(citizenship, residence)
+    if field.kind == FieldKind.MULTI_SELECT:
+        return Resolution(field_key=field.key, values=[none.label], source=FillSource.MEMORY, reason=reason)
+    return Resolution(field_key=field.key, value=none.label, source=FillSource.MEMORY, reason=reason)
 
 
 #: Default location, outside the repository on purpose. This file holds a real
@@ -598,6 +737,18 @@ PROFILE_FIELDS = {
         ("street_address", "", 2),
         ("postal_code", "94105", 13),
         ("country_of_residence", "United States", 8),
+        # Background the 100-board run kept asking for (DECISIONS §39–§40).
+        # Sent to the model as `background`; never protected, never contact.
+        ("security_clearance", "None", 4),
+        ("attended_career_fair", "No", 12),
+        ("prior_internships", "1", 3),
+        ("gpa_scale", "4.0", 2),
+        # Round 1 of "everything except essays" (DECISIONS §48).
+        ("twitter", "", 9),
+        ("street_address_2", "", 28),
+        ("years_experience", "0", 6),
+        ("google_scholar", "", 2),
+        ("secondary_major", "", 3),
     ],
     "education": [
         ("university", "Cornell University", 14),
@@ -626,6 +777,15 @@ PROFILE_FIELDS = {
         ("timeline_notes", "None", 8),
         ("contact_current_employer", "Yes", 12),
         ("personal_preferences", ""),
+        # The menu often lacks the stored source; tried in order, exact match.
+        ("heard_about_fallback", "Other | Job board | Online search", 46),
+        ("internship_end", "August 2027", 23),
+        ("desired_salary", "Open to the posted range", 25),
+        ("interview_language", "Python", 6),
+        # "Choose the single location you're most interested in" (x12 across
+        # the R48 draws, required): the applicant's offices in order; the
+        # first one the form offers is chosen, else the field stays with them.
+        ("office_preference", "New York, NY | San Francisco, CA | Remote", 12),
     ],
     "protected": [
         ("accommodation_needs", "None", 13),
@@ -637,6 +797,17 @@ PROFILE_FIELDS = {
         ("race_ethnicity", "Decline to self-identify", 27),
         ("gender", "Decline to self-identify", 27),
         ("disability_status", "I do not want to answer", 6),
+        ("transgender", "I don't wish to answer", 41),
+        ("sexual_orientation", "I don't wish to answer", 44),
+    ],
+    "consents": [
+        ("privacy_notice", "Agree", 30),
+        ("truthful_certification", "Agree", 20),
+        ("terms_and_conditions", "Agree", 25),
+        ("sms_messages", "No", 38),
+        ("marketing_communications", "No", 16),
+        ("interview_recording", "", 4),
+        ("background_check", "", 5),
     ],
 }
 

@@ -142,6 +142,7 @@ CORE_LABEL_ALIASES = {
     # own key rather than to `linkedin`, because the applicant may want to put
     # something different in a combined field than in a LinkedIn-only one.
     "linkedin profile github personal website or portfolio": "links_combined",
+    "github or personal website": "github",      # Sierra (Ashby): one field, GitHub first
     "linkedin github personal website or portfolio": "links_combined",
     "website portfolio": "links_combined",
     # identity extras
@@ -164,7 +165,194 @@ CORE_LABEL_ALIASES = {
     "how did you hear about this job": "heard_about",  # x78, the most frequent
     "how did you hear about us": "heard_about",
     "how did you hear about this role": "heard_about",
+    # Ashby custom text fields that restate a core fact under a per-posting
+    # UUID key (coverage baseline 2026-09-30, 413 Ashby forms): "Current
+    # Location" x37, "Current Company" x22, "Please provide your LinkedIn
+    # profile" x10, "Please provide your phone number" x8, "School" x8,
+    # "University" x8, "Degree" x8, "Location" x7, "Last Name" x4. Each one
+    # went to the model gate (or review) for a value the profile holds.
+    "current location": "current_location",
+    "location": "current_location",
+    "current city": "city_of_residence",
+    "current company": "current_employer",
+    "current employer": "current_employer",
+    "company": "current_employer",
+    "current title": "current_job_title",
+    "current job title": "current_job_title",
+    "please provide your linkedin profile": "linkedin",
+    "linkedin profile link": "linkedin",
+    "linkedin link": "linkedin",
+    "please provide your phone number": "phone",
+    "mobile phone": "phone",
+    "mobile number": "phone",
+    "cell phone": "phone",
+    "mobile": "phone",
+    "email address": "email",
+    "e mail": "email",
+    "first name": "first_name",
+    "last name": "last_name",
+    "surname": "last_name",
+    "full name": "full_name",
+    "name": "full_name",
+    "preferred name nickname": "preferred_first_name",
+    "nickname": "preferred_first_name",
+    "school": "university",
+    "school name": "university",
+    "university": "university",
+    "university name": "university",
+    "college": "university",
+    "college university": "university",
+    "degree": "degree",
+    "twitter": "twitter",
+    "twitter handle": "twitter",
+    "x twitter": "twitter",
+    "twitter x": "twitter",
+    "portfolio website link": "website",
+    "portfolio link": "website",
+    "portfolio website url": "website",
+    "portfolio website": "website",
+    "website url": "website",
+    "personal website url": "website",
+    # Jane Street (audit 2026-10-12): "Secondary Major" was answered with the
+    # primary one. An optional secondary fact: blank unless recorded.
+    "secondary major": "secondary_major",
+    "second major": "secondary_major",
+    "minor": "secondary_major",
+    "minor s": "secondary_major",
+    "address line 2": "street_address_2",
+    "address 2": "street_address_2",
+    "apt suite": "street_address_2",
+    "apartment suite": "street_address_2",
 }
+
+#: Memory keys whose absence on an *optional* field means "leave it blank",
+#: not "ask". A second address line, a Twitter handle or a second website is
+#: something most applicants do not have; recording nothing is the answer.
+OPTIONAL_BLANK_KEYS = frozenset({
+    "street_address_2", "twitter", "website_other", "alternate_email",
+    "preferred_last_name", "google_scholar", "secondary_major",
+})
+
+#: Follow-up fields that only apply after a particular answer to the question
+#: before them: "If other, please specify" (x24 in the Greenhouse corpus),
+#: "Please specify" (x24), "If other, please explain" (x15), "Please provide
+#: additional detail if appropriate." (x19), "Other" (x5 on Ashby). When the
+#: form marks one optional and the preceding answer did not trigger it, blank
+#: is the answer.
+FOLLOW_UP_LABEL = re.compile(
+    r"^(if (other|yes|no|so|applicable|not listed|you (selected|chose|answered|were referred|have)|"
+    r"referred)\b"
+    r"|please (specify|explain|elaborate|describe|provide (additional|more|further))\b"
+    r"|other( please specify)?$"
+    r"|additional (detail|information|comments?|context)s?\b"
+    r"|comments?$)",
+    re.I,
+)
+
+#: The answer to the preceding question that makes an "other" follow-up apply.
+FOLLOW_UP_ON_OTHER = re.compile(r"^(if )?other\b|please (specify|explain)\b|^other$", re.I)
+
+
+#: Core facts asked in a sentence rather than a name, so no exact alias can
+#: hit: "Please include your LinkedIn profile" (Antares), "Your Phone Number"
+#: and "Your LinkedIn Profile" (Exegy), "Your GitHub" (Composio), "GitHub or
+#: Portfolio URL" (Etched) — all from the first twelve held-out Ashby boards
+#: of R48-1. Text controls only; checked after the exact aliases.
+CORE_LABEL_PATTERNS = (
+    (re.compile(r"^(your |please (provide|include|share|enter|add) (your )?|what is your |link to your )?"
+                r"(linkedin|linked in)( profile| url| link| profile url| profile link| page)?( url| link)?$", re.I), "linkedin"),
+    (re.compile(r"^(your |please (provide|include|share|enter|add) (your )?|what is your |link to your )?"
+                r"github( profile| url| link| profile url| handle| username| account)?( url| link)?$", re.I), "github"),
+    (re.compile(r"^(your |please (provide|include|share|enter|add) (your )?|what is your |best )?"
+                r"(phone|mobile|cell|telephone|contact)( phone)? ?(number|no)?$", re.I), "phone"),
+    (re.compile(r"^(your |please (provide|include|share|enter) (your )?|what is your )?e ?mail( address)?$", re.I), "email"),
+    (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(first|given) name$", re.I), "first_name"),
+    (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(last|family) name$", re.I), "last_name"),
+    (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(full )?name$", re.I), "full_name"),
+    (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(resume|cv|resume cv)$", re.I), "resume_file"),
+    (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?preferred (first )?name$", re.I), "preferred_first_name"),
+    (re.compile(r"^(github|linkedin|portfolio|website|twitter)(( or | |/|, ?)(github|linkedin|portfolio|website|twitter|etc|url|link|links))+$", re.I), "links_combined"),
+    # "Please share a link to your LinkedIn profile if you have one:" (x5),
+    # "Please provide a link to your LinkedIn profile." (x2) — R48-2.
+    (re.compile(r"^(please )?(share|provide|include|add|paste|enter)( us)?( with)? (a |the )?(link|url) to your linkedin( profile)?\b", re.I), "linkedin"),
+    (re.compile(r"^(please )?(share|provide|include|add|paste|enter)( us)?( with)? (a |the )?(link|url) to your github( profile)?\b", re.I), "github"),
+    # "Provide any relevant profile URLs (LinkedIn, Google Scholar, GitHub)" (x5).
+    (re.compile(r"^(please )?(provide|share|list|add)( any)?( relevant| other)? (profile )?(urls?|links?)\b", re.I), "links_combined"),
+    (re.compile(r"^google scholar( (profile|url|link))?$", re.I), "google_scholar"),
+    (re.compile(r"^(your |please (provide|include|share) (your )?)?(personal )?(website|portfolio)( url| link| website| site)?$", re.I), "website"),
+)
+
+
+def core_pattern_key_for(label: str, kind: Optional[FieldKind]) -> Optional[str]:
+    """A core memory key for a sentence-shaped label on a text control."""
+    if kind not in (None, FieldKind.TEXT):
+        return None
+    normalized = normalize_label(label)
+    for pattern, key in CORE_LABEL_PATTERNS:
+        if pattern.match(normalized):
+            return key
+    return None
+
+
+def is_follow_up(label: str) -> bool:
+    """Whether a label is a follow-up to the question before it."""
+    return bool(FOLLOW_UP_LABEL.search(normalize_label(label)))
+
+
+#: Free-text questions that are essays even though the ATS gives them a
+#: single-line control: Ashby's String type carries "What excites you about
+#: the opportunity to join Talos?" and "What is one project you're really
+#: proud of?". These are the applicant's own words, not a replayable fact.
+NARRATIVE_LABEL = re.compile(
+    r"^(why (do|are|would|did) you\b|why [a-z0-9&.' -]{1,30}\?$|what excites you\b|what interests you\b"
+    r"|tell us (about|why|a bit)\b|describe (a|an|the|your|one)\b|what is one (project|thing)\b"
+    r"|what are you most proud\b|what (would|do) you (bring|hope|want|like) to\b|cover letter\b"
+    r"|anything else\b|is there anything else\b|what makes you\b|record a video\b"
+    r"|additional (information|comments?|notes?)( or a note)?( you('d| would) like to share)?$"
+    r"|additional information or a note\b)",
+    re.I,
+)
+
+#: Standing consents. Each regex names a *kind* of agreement the applicant can
+#: decide once; the profile's `consents` section holds that decision and the
+#: binder replays it. Anything that matches no bucket stays human — the AI
+#: policy attestation and arbitration agreements never enter this table.
+#: Order matters: an SMS opt-in that mentions the privacy policy is an SMS
+#: opt-in.
+CONSENT_BUCKETS = (
+    (re.compile(r"\b(sms|text messag|texting|text message|whatsapp|recruiting (sms|texts))\b", re.I),
+     "sms_messages"),
+    (re.compile(r"\b(marketing|talent (community|network|pool)|future (career )?opportunit|"
+                r"newsletter|promotional|recruitment marketing|occasional (messages|emails))\b", re.I),
+     "marketing_communications"),
+    (re.compile(r"\b(record(ing|ed)?\s+(the\s+)?(interview|conversation)|brighthire|metaview)\b", re.I),
+     "interview_recording"),
+    (re.compile(r"\b(background check|background screening|verify the accuracy|"
+                r"authorize .{0,30}(contact|verify))\b", re.I),
+     "background_check"),
+    (re.compile(r"\b(privacy (statement|notice|policy)|data (protection|processing|privacy)|"
+                r"personal data|candidate (privacy|data)|gdpr|process(ing)? (of )?(my|your) (personal )?"
+                r"(data|information))\b", re.I),
+     "privacy_notice"),
+    (re.compile(r"\b(certify|attest|confirm|declare|acknowledge) .{0,60}\b(true|accurate|complete|"
+                r"correct|truthful)\b|\b(true|accurate) and (complete|correct)\b|\bbest of my knowledge\b", re.I),
+     "truthful_certification"),
+    (re.compile(r"\b(terms (and|&) conditions|terms of (use|service)|code of conduct|"
+                r"interview (conduct|code)|confidentiality agreement|candidate agreement|"
+                r"application statement|pre.?employment requirements)\b", re.I),
+     "terms_and_conditions"),
+)
+
+
+def consent_key_for(label: str) -> Optional[str]:
+    """Which standing consent, if any, a consent-class field asks for."""
+    text = label or ""
+    if _AI_POLICY.search(normalize_label(text)) or re.search(r"\barbitrat", text, re.I):
+        return None
+    for pattern, key in CONSENT_BUCKETS:
+        if pattern.search(text):
+            return key
+    return None
 
 #: Protected-characteristic fields, mapped to the canonical memory key.
 #:
@@ -203,7 +391,11 @@ MEMORY_ONLY_LABEL_KEYS = (
     # accommodation first it was answered from accommodation_needs ("None"),
     # which rendered as "No" — the inverted answer, on a live Lyft posting.
     (re.compile(r"\bessential functions\b", re.I), "essential_functions"),
-    (re.compile(r"\b(reasonable accommodation|accommodation (for|during|request))\b", re.I),
+    # Maven Securities 8043552: "If you require any support or adjustments
+    # during the recruitment process…" is the UK wording. Unmatched, it was
+    # SCREENING and the model gate answered it "No" from nothing (§40).
+    (re.compile(r"\b(reasonable accommodations?|accommodations? (for|during|request)|"
+                r"support or adjustments|reasonable adjustments|adjustments (during|to) the)\b", re.I),
      "accommodation_needs"),
     (re.compile(r"\bclose relative\b", re.I), "close_relative_official"),
     (re.compile(r"\bgovernment official\b", re.I), "government_official"),
@@ -219,6 +411,10 @@ MEMORY_ONLY_LABEL_KEYS = (
 DOCUMENT_LABEL_PATTERNS = (
     (re.compile(r"\b(transcript|academic record|academic transcript)\b", re.I),
      "transcript_file"),
+    # Ashby custom upload fields carry a UUID key and a label such as
+    # "Resume/CV" or "Cover Letter"; only the label says which document.
+    (re.compile(r"\bcover letter\b", re.I), "cover_letter"),
+    (re.compile(r"\b(resume|r\u00e9sum\u00e9|cv|curriculum vitae)\b", re.I), "resume_file"),
 )
 
 
@@ -270,6 +466,19 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
             if pattern.search(label or ""):
                 return memory_key
 
+    # A custom question outside the demographic block that asks the same
+    # thing is the same question. Canonical (Greenhouse, audit of 2026-10-12):
+    # "Which gender do you identify as?" and "Please indicate your race or
+    # ethnicity" as ordinary custom questions were SCREENING, and the gate
+    # inferred both from the profile. Pronouns are not a protected
+    # characteristic and keep their own alias; "race" as in a race car does
+    # not occur on an application form.
+    text = label or ""
+    if text and not re.search(r"\bpronoun", text, re.I):
+        for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
+            if pattern.search(text):
+                return memory_key
+
     return None
 
 
@@ -285,7 +494,8 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
 _MEMORY_ONLY = (
     # ADA / accommodation. Free text or yes/no, and the applicant's own
     # statement either way — most people store "None" and never see it again.
-    re.compile(r"\b(reasonable accommodation|accommodation (for|during|request)"
+    re.compile(r"\b(reasonable accommodations?|accommodations? (for|during|request)"
+               r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
                r"|essential functions)\b", re.I),
     # Conflict-of-interest and political-exposure screens (~30 instances across
     # the fintech boards). Stable facts about relatives and holdings.
@@ -335,6 +545,13 @@ _DECISIONS_NOT_FACTS = (
     # "[Compensation] Do you accept the listed salary range for this role" (x2).
     re.compile(r"\b(accept|agree to).{0,24}\b(salary|compensation|pay)\s*(range|band)?\b",
                re.I),
+    # R48-2: "Please acknowledge that you have read and agree to our Privacy
+    # Policy" (x6, required) and "I consent to have my personal data disclosed
+    # to other Momentum Group entities" (x2) were SCREENING and went to the
+    # model gate, which rightly had nothing. They are the privacy consent.
+    re.compile(r"\b(acknowledge|confirm|agree|accept)\b.{0,60}\b(privacy (policy|notice|statement)|"
+               r"terms (of (use|service)|and conditions|& conditions))\b", re.I),
+    re.compile(r"\bconsent to\b.{0,40}\b(personal data|my data|data (being )?(processed|disclosed|shared))\b", re.I),
 )
 
 _AI_POLICY = re.compile(
@@ -448,6 +665,12 @@ def classify(
     if _AI_POLICY.search(normalized):
         return FieldClass.CONSENT
 
+    # A protected characteristic asked as a custom question (Canonical: "Which
+    # gender do you identify as?", "Please indicate your race or ethnicity")
+    # is LEGAL wherever it sits: the stored answer replays, no model touches it.
+    if protected_key_for(key, label) and normalized not in CORE_LABEL_ALIASES:
+        return FieldClass.LEGAL
+
     if any(pattern.search(normalized) for pattern in _DECISIONS_NOT_FACTS):
         return FieldClass.CONSENT
 
@@ -466,6 +689,8 @@ def classify(
     # alias table aimed a URL at a checkbox on a live Ashby form.
     if normalized in CORE_LABEL_ALIASES and kind != FieldKind.BOOLEAN:
         return FieldClass.CORE
+    if kind == FieldKind.TEXT and option_count == 0 and core_pattern_key_for(label, kind):
+        return FieldClass.CORE
 
     # Multi-selects were once classified UNKNOWN wholesale, because 46 of the 52
     # in the general corpus were conflict-of-interest disclosures where a wrong
@@ -483,6 +708,12 @@ def classify(
     # Checked after the alias table, so a recognised "LinkedIn" stays a stored
     # fact rather than becoming something an essay writer is asked to compose.
     if kind == FieldKind.LONG_TEXT:
+        return FieldClass.NARRATIVE
+
+    # A single-line control can still ask for an essay (Ashby's String type
+    # does). Judged by the opening words only, so "Describe your work
+    # authorization status" with options is not caught: options exclude it.
+    if kind == FieldKind.TEXT and option_count == 0 and NARRATIVE_LABEL.search(normalized):
         return FieldClass.NARRATIVE
 
     return FieldClass.SCREENING
@@ -515,11 +746,13 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
     if memory_only:
         return memory_only
 
-    document = document_key_for(label)
+    # Only an upload is a document. "Resume/CV" as a textarea is the paste
+    # alternative, handled as a sibling of the upload, never given a path.
+    document = document_key_for(label) if kind in (None, FieldKind.FILE) else None
     if document:
         return document
 
     if kind == FieldKind.BOOLEAN:
         return None
 
-    return CORE_LABEL_ALIASES.get(normalize_label(label))
+    return CORE_LABEL_ALIASES.get(normalize_label(label)) or core_pattern_key_for(label, kind)

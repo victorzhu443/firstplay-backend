@@ -147,8 +147,11 @@ app.add_middleware(
         "http://localhost:3001",
         "https://firstplay-frontend.vercel.app",
     ],
-    # Vercel preview deployments: <project>-<hash>-<scope>.vercel.app
-    allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app",
+    # Vercel preview deployments: <project>-<hash>-<scope>.vercel.app, and
+    # the FirstPlay Autofill extension's service worker (chrome-extension://<id>),
+    # which sends the applicant's profile with each plan request and stores
+    # nothing here — the backend stays stateless for it.
+    allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app|chrome-extension://[a-z]+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
