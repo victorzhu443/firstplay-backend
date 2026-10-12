@@ -215,6 +215,15 @@ CORE_LABEL_ALIASES = {
     "personal website url": "website",
     # Jane Street (audit 2026-10-12): "Secondary Major" was answered with the
     # primary one. An optional secondary fact: blank unless recorded.
+    "when did you graduate from high school": "high_school_graduation",
+    "high school graduation year": "high_school_graduation",
+    "high school graduation date": "high_school_graduation",
+    "select your standardized test score type": "test_score_type",
+    "standardized test score type": "test_score_type",
+    "provide your best result on sat": "sat_score",
+    "sat score": "sat_score",
+    "provide your best result on act": "act_score",
+    "act score": "act_score",
     "secondary major": "secondary_major",
     "second major": "secondary_major",
     "minor": "secondary_major",

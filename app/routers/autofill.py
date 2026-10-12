@@ -260,6 +260,16 @@ def _note_model_ok() -> None:
     _MODEL_STATUS["last_ok_at"] = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 
+@router.get("/profile-schema")
+def autofill_profile_schema():
+    """The onboarding registry: what the profile can hold, with examples and
+    notes, ordered by how many real application fields each key answers."""
+    from app.autofill.memory import profile_schema
+    rows = profile_schema()
+    return {"sections": sorted({r["section"] for r in rows}, key=["facts", "education", "legal_status", "preferences", "consents", "protected"].index),
+            "fields": sorted(rows, key=lambda r: -int(r["answers"] or 0))}
+
+
 @router.get("/health")
 def autofill_health():
     """Whether the model path is available, and what it last did."""

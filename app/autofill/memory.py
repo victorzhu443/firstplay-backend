@@ -749,6 +749,10 @@ PROFILE_FIELDS = {
         ("years_experience", "0", 6),
         ("google_scholar", "", 2),
         ("secondary_major", "", 3),
+        # IMC (12 postings, all required): high-school year, test type, scores.
+        ("test_score_type", "SAT", 11),
+        ("sat_score", "", 11),
+        ("act_score", "", 11),
     ],
     "education": [
         ("university", "Cornell University", 14),
@@ -758,6 +762,7 @@ PROFILE_FIELDS = {
         ("gpa", "3.8", 12),
         ("enrollment_status", "Currently enrolled", 9),
         ("university_country", "United States", 7),
+        ("high_school_graduation", "May 2024", 11),
     ],
     "legal_status": [
         ("citizenship", "US citizen", 0),
@@ -810,6 +815,25 @@ PROFILE_FIELDS = {
         ("background_check", "", 5),
     ],
 }
+
+
+def profile_schema() -> List[Dict[str, object]]:
+    """The onboarding registry, for a form that asks the applicant directly.
+
+    One row per profile key: section, key, an example, the setup note, and
+    how many real application fields it answered when counted — so a popup
+    can render an editor and order questions by how much each one is worth.
+    """
+    from app.autofill.setup import NOTES
+
+    rows: List[Dict[str, object]] = []
+    for section, entries in PROFILE_FIELDS.items():
+        for entry in entries:
+            name, example, *rest = entry
+            rows.append({"section": section, "key": name, "example": example,
+                         "note": NOTES.get(name, ""), "answers": rest[0] if rest else 0,
+                         "protected": section == "protected", "consent": section == "consents"})
+    return rows
 
 
 def profile_template() -> Dict[str, object]:
