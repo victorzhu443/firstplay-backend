@@ -608,11 +608,30 @@ def vendor_protected_key_for(key: str, label: str = "") -> Optional[str]:
             return memory_key
 
     if (key or "").startswith(DEMOGRAPHIC_KEY_PREFIX):
-        for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
+        for pattern, memory_key in _VENDOR_LABEL_PATTERNS:
             if pattern.search(label or ""):
                 return memory_key
 
     return None
+
+
+#: The label patterns for a field the vendor has *already* marked as EEOC
+#: (Greenhouse's numbered demographic block). Same table as the custom one,
+#: except that "disability" is the bare word: the vendor's own disability
+#: question may mention "reasonable accommodation" without being an
+#: accommodation request, and the custom table's exclusion let such a field
+#: fall through to the memory-only key and replay `accommodation_needs` as
+#: the EEOC answer (review of 2026-10-12, finding 4).
+_VENDOR_LABEL_PATTERNS = tuple(
+    (re.compile(r"\bdisabilit", re.I), memory_key) if memory_key == "disability_status" else (pattern, memory_key)
+    for pattern, memory_key in PROTECTED_LABEL_PATTERNS
+)
+
+#: The EEOC disability question's own phrasing, as distinct from an
+#: accommodation request that happens to mention a disability.
+_EEOC_DISABILITY_ASK = re.compile(
+    r"\b(do you have a disabilit|disability status|identify as (having|a person with) a disabilit)", re.I)
+_CHOICE_KINDS = (FieldKind.SINGLE_SELECT, FieldKind.MULTI_SELECT, FieldKind.BOOLEAN)
 
 
 def custom_protected_key_for(label: str) -> Optional[str]:
@@ -931,6 +950,14 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
         return protected
 
     memory_only = memory_only_key_for(label)
+    # A *choice* control phrased as the EEOC disability question ("Do you
+    # have a disability? (If you need a reasonable accommodation …)") is not
+    # the free-text accommodation box, and the accommodation note must not
+    # be selected as the EEOC answer (review of 2026-10-12, finding 4). Nor
+    # is it safely the EEOC question. No key: review-only.
+    if (memory_only == "accommodation_needs" and kind in _CHOICE_KINDS
+            and _EEOC_DISABILITY_ASK.search(label or "")):
+        return None
     if memory_only:
         return memory_only
 

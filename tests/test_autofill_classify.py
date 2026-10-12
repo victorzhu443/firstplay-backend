@@ -98,6 +98,34 @@ def test_the_vendor_marker_outranks_accommodation_wording():
     assert memory_key_for("abc__systemfield_eeoc_disability_status", label) == "disability_status"
     assert memory_key_for("question_1", "Will you need housing accommodation in Seattle?") is None
 
+    # Greenhouse's numbered demographic block is vendor-marked too, and only
+    # the label says which question it is. Review of 2026-10-12, finding 4:
+    # the custom table's accommodation exclusion let this fall through to
+    # the memory-only key, and the stored accommodation note ("No") was
+    # selected as the EEOC answer over a stored decline.
+    from app.autofill.memory import Memory
+    eeoc = "Do you have a disability? (If you need a reasonable accommodation for the application process, contact us)"
+    options = ("Yes, I have a disability", "No, I don't have a disability", "I don't wish to answer")
+    memory = Memory(protected={"disability_status": "I don't wish to answer"},
+                    legal_status={"accommodation_needs": "No"})
+    vendor = _field(eeoc, options=options, key="demographic_answers.123")
+    assert vendor.field_class == FieldClass.LEGAL
+    assert memory_key_for(vendor.key, eeoc, FieldKind.SINGLE_SELECT) == "disability_status"
+    replayed = memory.resolve(vendor)
+    assert replayed.value == "I don't wish to answer" and not replayed.needs_review
+
+    # The same wording on a custom key and a choice control is neither the
+    # accommodation box nor safely the EEOC question: no key, review-only.
+    custom = _field(eeoc, options=options)
+    assert custom.field_class == FieldClass.LEGAL
+    assert memory_key_for(custom.key, eeoc, FieldKind.SINGLE_SELECT) is None
+    asked = memory.resolve(custom)
+    assert asked.needs_review and asked.value is None
+    # A free-text accommodation box that mentions a disability keeps its key.
+    assert memory_key_for("question_1", eeoc, FieldKind.TEXT) == "accommodation_needs"
+    assert memory_key_for("question_1", "If you require any support or adjustments during the recruitment process, "
+                          "including those related to a disability, please indicate here", FieldKind.SINGLE_SELECT) == "accommodation_needs"
+
 
 # --- M1: a standing consent asked as a question is a consent -----------------
 
