@@ -75,7 +75,9 @@ def match_numeric_bucket(value: str, options: List[FieldOption]) -> Optional[Fie
         return None
 
     # Stay on one scale. A GPA must not land in "80% or above".
-    wants_percent = bool(_PERCENT.search(value)) or number > 5.0
+    # Stay on one scale. A GPA must not land in "80% or above"; a number past
+    # 100 is a score (SAT 1480), not a percentage.
+    wants_percent = bool(_PERCENT.search(value)) or 5.0 < number <= 100.0
 
     hits = []
 
