@@ -89,6 +89,12 @@ class AutofillResponse(BaseModel):
     cost_usd: float = 0.0
     #: Fingerprint of the engine that built this plan (see app.autofill.ENGINE).
     engine: str = ""
+    #: True when the model path was configured but failed on this plan or on
+    #: the last one with no success since (an expired key). A caller that
+    #: caches plans must not cache this one: it is the deterministic fallback,
+    #: not the plan the engine would make. 2026-10-12: the extension kept
+    #: serving plans made during the outage for a day after the key was fixed.
+    model_degraded: bool = False
 
 
 def _parse_form(ats: str, payload: Dict[str, Any]) -> FormSchema:
@@ -168,6 +174,7 @@ def build_plan(request: AutofillRequest):
         jev = None
 
     return AutofillResponse(
+        model_degraded=bool(_MODEL_STATUS["last_error_at"] and (not _MODEL_STATUS["last_ok_at"] or _MODEL_STATUS["last_ok_at"] < _MODEL_STATUS["last_error_at"])),
         plan=plan,
         summary=plan.summary(),
         jev_calls=jev.calls if jev else 0,
