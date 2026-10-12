@@ -231,6 +231,36 @@ def test_a_follow_up_answer_is_never_remembered_or_replayed():
     assert memory.answers == {}
 
 
+def test_a_label_that_merely_opens_like_a_follow_up_is_still_remembered():
+    """Review of 2026-10-12, finding 5: the memory gate reused the wide
+    conditional-skip regex and refused (and deleted) 144 distinct corpus
+    labels, 477 instances, that are stable answers. A follow-up is refused
+    only when it names its referent or is a bare "Please specify" / "Other"."""
+    memory = Memory()
+    kept = {"If applicable, which US state do you reside in?": "New York",
+            "If applicable, what is your middle initial?": "Q",
+            "Please provide additional context on your availability": "Free from June",
+            "Please provide additional detail if appropriate.": "N/A"}
+    result = learn(memory, [_obs(label, value) for label, value in kept.items()])
+    assert result.learned == len(kept), result.ignored
+    for label, value in kept.items():
+        assert memory.recall_answer(label) == value, label
+        plan = _plan_for(memory, "Beta", _field("q", label))
+        assert plan.entries[0].value == value and plan.entries[0].reason == "you answered this before", label
+    # A narrative box is not learned, but a remembered one still replays.
+    assert memory.remember_answer("Additional Information", "N/A") is True
+    narrative = _field("q", "Additional Information", FieldKind.LONG_TEXT, klass=FieldClass.NARRATIVE)
+    assert _plan_for(memory, "Beta", narrative).entries[0].value == "N/A"
+
+    # The real follow-ups still never are.
+    for label in ("Please specify", "Please specify:", "If yes, please explain", "If other, please specify",
+                  "If you selected 'Other', please list your University:", "Other", "If no, why not?"):
+        assert memory.remember_answer(label, "x") is False, label
+        assert memory.recall_answer(label) is None, label
+    refused = learn(memory, [_obs("If yes, please explain", "see above")])
+    assert refused.learned == 0 and "follow-up" in refused.ignored[0]["why"]
+
+
 def test_a_referral_at_one_company_does_not_replay_at_another():
     memory = Memory()
     learn(memory, [_obs("Who referred you?", "Jane Doe", company="Acme")])

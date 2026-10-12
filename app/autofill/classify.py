@@ -321,6 +321,28 @@ def is_follow_up(label: str) -> bool:
     return bool(FOLLOW_UP_LABEL.search(normalize_label(label)))
 
 
+#: The follow-ups that are never an *episode*. `FOLLOW_UP_LABEL` is the
+#: conditional-skip net and is deliberately wide ("If applicable, …",
+#: "Please provide additional …", "Additional information", "Comments"); as
+#: the memory gate it refused and deleted 144 distinct corpus labels, 477
+#: instances, among them "If applicable, which US state do you reside in?"
+#: (x12), "If applicable, what is your middle initial?" (x12) and
+#: "Additional Information" (x20) — stable answers (review of 2026-10-12,
+#: finding 5). An episode is refused only when the label names its referent,
+#: the answer just before it, or is a bare "Please specify" / "Other".
+EPISODE_FOLLOW_UP = re.compile(
+    r"^(if (yes|no|so|other|not|none|referred|you (selected|chose|answered|were referred|indicated|said))\b"
+    r"|please (specify|explain|elaborate)( below| here| further)?$"
+    r"|other( please specify)?$)",
+    re.I,
+)
+
+
+def is_episode_follow_up(label: str) -> bool:
+    """Whether a label is a follow-up whose answer must never be remembered."""
+    return bool(EPISODE_FOLLOW_UP.search(normalize_label(label)))
+
+
 #: Free-text questions that are essays even though the ATS gives them a
 #: single-line control: Ashby's String type carries "What excites you about
 #: the opportunity to join Talos?" and "What is one project you're really
