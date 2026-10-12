@@ -248,6 +248,24 @@ def test_an_sms_opt_in_asked_as_a_phone_number_box_is_a_consent_and_so_never_a_f
     assert classify("question_1", label, FieldKind.TEXT) == FieldClass.CONSENT
     assert consent_key_for(label) == "sms_messages"
 
+    # Review of 2026-10-12, finding 7: with the consent unset the plan asked
+    # the applicant to set consents.sms_messages, and once set the field was
+    # still theirs to type — a prompt for a fact that can never fill it.
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+    field = _field(label, FieldKind.TEXT, options=())
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[field])
+    unset = resolve_form(form, Memory(), binder=DeterministicBinder()).entries[0]
+    assert unset.needs_review and unset.needs_fact is None
+    decided = resolve_form(form, Memory(consents={"sms_messages": "Agree"}), binder=DeterministicBinder()).entries[0]
+    assert decided.needs_review and decided.value is None and decided.needs_fact is None
+    # A consent on a tick box still asks for the decision it would replay.
+    box = _field("Do you consent to a background check?")
+    asked = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[box]),
+                         Memory(), binder=DeterministicBinder()).entries[0]
+    assert asked.needs_fact and asked.needs_fact["key"] == "background_check"
+
 
 def test_a_one_option_checkbox_naming_a_bucket_is_a_consent():
     """"Privacy Policy" as a one-option multi-select (x6) is a checkbox with

@@ -1433,12 +1433,22 @@ def document_kind(field: FormField) -> str:
 _UNSET = re.compile(r"recognised as ([a-z_]+) but you have not set it|set consents\.([a-z_]+) once|you have not set this( for ([A-Z]{2}))?$")
 
 
-def _mark_missing_facts(entries: List[FillPlanEntry]) -> None:
+def _mark_missing_facts(entries: List[FillPlanEntry], form: Optional[FormSchema] = None) -> None:
     """Turn "recognised as X but you have not set it" into a question to ask."""
     from app.autofill.memory import profile_schema
     schema = {row["key"]: row for row in profile_schema()}
+    fields = {f.key: f for f in form.fields} if form is not None else {}
     for entry in entries:
         if not entry.needs_review or entry.skipped or entry.satisfied_by:
+            continue
+        # A standing consent is never typed into a text control (M1), so
+        # asking the applicant to set it would not fill this field: "If you
+        # wish to receive information via text/SMS, please indicate the cell
+        # number below" sent them to set consents.sms_messages, which then
+        # did nothing here (review of 2026-10-12, finding 7).
+        field = fields.get(entry.field_key)
+        if (field is not None and field.field_class == FieldClass.CONSENT
+                and field.kind in (FieldKind.TEXT, FieldKind.LONG_TEXT)):
             continue
         m = _UNSET.search(entry.reason or "")
         if not m:
@@ -1640,7 +1650,7 @@ def resolve_form(
         )
 
     _mark_attachments(entries, form)
-    _mark_missing_facts(entries)
+    _mark_missing_facts(entries, form)
     _resolve_option_mismatches(entries, form, binder, matched)
     _mark_satisfied_alternates(entries, form)
     _resolve_conditionals(entries, form)
