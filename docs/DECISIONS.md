@@ -2413,8 +2413,10 @@ profile, `coverage.py`, 2026-10-12): Greenhouse 77.8% → 76.2%, Ashby 74.9%
 Greenhouse forms with a race block, all unset today) and ~80 city-specific
 in-office fields plus 21 sensitive-topic fields left the 1.0 path on
 purpose. Precision was bought with coverage, which is the trade this
-project makes; the with-model figure is recorded in the README entry once
-the run finishes.
+project makes. With the model, same run (339 s, $0.32): Greenhouse **85.0%**
+(12,030 / 14,147), Ashby **85.5%** (3,044 / 3,558), against the audit's
+86.3% / 85.6% that morning on the smaller denominator — the gate recovers
+most of what the local patterns gave up.
 
 **Not done, by decision or scope.** Item 7's OpenRouter key on Render is
 Victor's to set in the dashboard (the deploy itself has caught up). M3's
@@ -2437,7 +2439,7 @@ target met".
 | | |
 |---|---|
 | **Coverage, deterministic** | Greenhouse **77.8%** (10,790 / 13,863 in-scope fields over 578 frozen forms), Ashby **74.9%** (2,665 / 3,558 over 413) — re-run 2026-10-12, real profile, `coverage.py`. "Blank by choice" fields (258 / 86) count as filled; essays and files are outside the denominator |
-| **Coverage, with the model** | Greenhouse **86.3%**, Ashby **85.6%** — the outside audit's run of 2026-10-12 (`coverage.py --model`, $0.31, 0 form errors; 273 / 77 blank by choice counted) |
+| **Coverage, with the model** | Greenhouse **85.0%** (12,030 / 14,147), Ashby **85.5%** (3,044 / 3,558) — run 2026-10-12 after §55 (`coverage.py --model`, $0.32; 278 / 78 blank by choice counted). The audit's run that morning, before §55 and on the smaller denominator: 86.3% / 85.6% |
 | **Precision of model decisions** | **98.0%** over 289 hand-judged decisions from 168 forms (§52): 283 correct, 5 wrong, 1 unsure. Target 99% **not met**. Second pass 43 / 43 |
 | **Live, Greenhouse** | 117 live boards, 1,866 filled, 21 "known but could not be entered", all 21 before 0.4.19 by round order (`survey/`); the hundred of R48-2 has 1 of 100 recorded |
 | **Live, Ashby** | A1: 100 organisations, 702 filled, 246 review; R48-2: 100 organisations, 719 / 250 / 1 could-not-enter, median fill 110 ms |
