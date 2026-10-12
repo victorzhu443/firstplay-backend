@@ -2179,6 +2179,87 @@ is stored, the graduate transcript slot the form marks required while its
 label says "if applicable", and one in-person availability read under
 threshold.
 
+## 53. Ask the applicant: the profile is edited in the popup, and a page's unanswered facts become questions
+
+Victor, 2026-10-12, with IMC's form (education start date empty, high-school
+graduation, test type, SAT and ACT required and empty): "you also need to be
+able to edit this stuff and ask the user for this information." Until now
+the profile was a JSON document pasted into the popup; the start date was
+in the file on disk and not in the copy the extension held, and nothing
+told him.
+
+**Mechanism.** Every plan entry whose question the engine recognised but the
+profile holds no value for now carries `needs_fact` — section, key, a
+prompt naming the form's own question, the onboarding example and note.
+`GET /api/autofill/profile-schema` serves the onboarding registry (section,
+key, example, note, how many real fields each key answered). The extension
+(0.4.49) renders a profile editor from that schema, grouped by section in
+the order the registry gives, with the raw JSON kept under "Advanced"; after
+a fill it collects the page's `needs_fact` entries and the popup shows them
+first — "This page asked for N things your profile doesn't have" — each with
+an input, Save, Skip (30 days). A save writes the one key, forgets the cached
+plans, and the next visit fills the field. Protected answers are typed and
+replayed exactly, never inferred, and the editor says so beside them. The
+outcome record counts `asks` per page.
+
+**New facts for IMC's twelve postings.** `education.high_school_graduation`,
+`facts.test_score_type`, `facts.sat_score`, `facts.act_score`, with exact
+aliases for IMC's wording. Two matcher gaps closed on the way: a stored
+month-and-year lands on a year-only option ("May 2024" → "2024"), and a
+number past 100 is a score, not a percentage, so 1480 lands in "1400 – 1490".
+
+**Process.** 635 tests. A test run that fails must not be followed by a
+commit: two commits this week went in on a red suite because the commit was
+chained on a grep of the output rather than on the exit code; the run
+script now gates on the suite's own result.
+
+---
+
+## 54. A choice on a core field is answered from the profile, never from an episode
+
+IMC, 2026-10-12, after the 0.4.49 reload: Country failed with `no option
+matching "+1" among United States +1 | Afghanistan +93 | …`, while a fresh
+plan built here from the same posting and profile said `Country → United
+States, stored as country_of_residence`. The difference was the profile the
+extension holds: learning was on (`learned_sent: 1` on the page record), and
+on an earlier Greenhouse form the capture had read the phone-country
+widget's *display* — "+1" for the option "United States +1" — compared it to
+the plan's "United States", called it a correction, and stored it as the
+episodic answer to "Country". `resolve` replays an episode ahead of every
+fact, so every later Greenhouse form was handed "+1" and failed on a field
+the engine had answered correctly. The loop built in §50 had poisoned
+itself, and nothing in the audit set caught it because the audit replans
+from the file on disk, which has no episodes.
+
+**Rule.** An episode on a *choice* control (select, multi-select, yes/no)
+of a CORE field is never stored and never replayed: what a select reports is
+the widget's rendering of an option, not the applicant's words, and the
+profile's fact already answers the question. A different choice there is a
+candidate change to the fact, proposed with the same two-company support as
+anything else. A typed core answer (a preferred name) is the applicant's own
+words and still replays — `test_a_remembered_answer_beats_a_stored_fact`
+stands. `learn` also drops a stale episode of that shape when it next sees
+the question, which is how the stored "+1" is cleared without a reset.
+
+**Capture.** The extension (0.4.50) reads a react-select's held option by
+its own label (`heldOptionText`, from the instance's `selectValue`) before
+falling back to the display; and both sides treat an option label that
+*extends* the planned value ("United States +1" for "United States") as the
+plan's own fill — the same `startsWith` rule the filler uses to pick it —
+so a successful select fill never reads as a correction.
+
+**Tests.** 639 passing (+4): a core choice is not an episode; a stale core
+episode is dropped and not replayed; a typed core answer still replays; an
+option label extending the plan value is the same answer.
+
+**What this says about the loop.** The research note's warning (Chromium's
+vote model: one form is not evidence) covered proposals but not episodes,
+which were trusted verbatim on the strength of being "the applicant's own
+answer". They are the applicant's own answer only when the applicant made
+them; here the extension made the fill, mis-read it, and taught itself the
+mis-reading. Every observation now has to clear "is this what we put there?"
+under the filler's own matching rule before it counts as a correction.
+
 ---
 
 ## Current state

@@ -264,6 +264,15 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
         if len(declines) == 1:
             return declines[0]
 
+    # A stored month-and-year ("May 2024") against a list of years: the year
+    # alone is the answer when exactly one option is that year (IMC's "When
+    # did you graduate from High School?").
+    year = re.search(r"\b(19|20)\d{2}\b", target)
+    if year:
+        same_year = [o for o in field.options if normalize_value(o.label) == year.group(0)]
+        if len(same_year) == 1:
+            return same_year[0]
+
     # A stored answer that is a unique prefix of exactly one option label.
     prefix = [o for o in field.options if normalize_value(o.label).startswith(target)]
     if len(prefix) == 1:

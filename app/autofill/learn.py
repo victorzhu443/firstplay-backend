@@ -41,7 +41,7 @@ from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from app.autofill.classify import classify
-from app.autofill.memory import Memory
+from app.autofill.memory import Memory, normalize_label
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField
 
 #: A correction becomes a proposal only when the model is this sure it is a
@@ -145,6 +145,25 @@ def _section_of(memory: Memory, key: str) -> str:
 MIN_SUPPORT_COMPANIES = 2
 
 
+#: Controls whose reported value is the widget's rendering of an option.
+_CHOICE_KINDS = (FieldKind.SINGLE_SELECT, FieldKind.MULTI_SELECT, FieldKind.BOOLEAN)
+
+
+def _same_answer(plan: str, observed: str) -> bool:
+    """Whether what the applicant left is what the plan put there.
+
+    A select shows its option's own label, and the plan carried the stored
+    fact: "United States" was selected and the option reads "United States
+    +1". The filler accepts an option that starts with the planned value (the
+    same rule as the extension's `pickOption`), so the capture must too, or
+    every successful select fill reads as a correction.
+    """
+    a, b = normalize_label(plan or ""), normalize_label(observed or "")
+    if not a or not b:
+        return a == b
+    return a == b or b.startswith(a)
+
+
 def learn(memory: Memory, observations: List[Observation], binder=None) -> LearnResult:
     """Fold the applicant's edits into the profile; propose what generalises.
 
@@ -174,7 +193,7 @@ def learn(memory: Memory, observations: List[Observation], binder=None) -> Learn
         if not value:
             ignored.append({"label": obs.label, "why": "left empty"})
             continue
-        if _as_text(obs.plan_value) == value:
+        if _same_answer(_as_text(obs.plan_value), value):
             ignored.append({"label": obs.label, "why": "same as the plan; nothing new"})
             continue
         kind = _kind(obs.kind)
@@ -190,6 +209,23 @@ def learn(memory: Memory, observations: List[Observation], binder=None) -> Learn
             continue
         if not field.may_fill_from(FillSource.MEMORY):
             ignored.append({"label": obs.label, "why": "this field is never filled from memory"})
+            continue
+
+        # A choice on a core field (country, location, a pronoun select) is
+        # answered from the profile's facts, never from an episode: what a
+        # select reports is the widget's rendering, not the applicant's words.
+        # IMC, 2026-10-12: the phone-country select displays "+1" for the
+        # option "United States +1"; the capture read the display, learned
+        # "Country" -> "+1" as a correction, and every later Greenhouse form
+        # failed on Country with `no option matching "+1"`. A different choice
+        # is a change to the fact, proposed below with the same two-company
+        # support as any other. Typed core answers (a preferred name) are the
+        # applicant's own words and still replay.
+        if field_class == FieldClass.CORE and kind in _CHOICE_KINDS:
+            if memory.recall_answer(obs.label) is not None:
+                memory.forget_answer(obs.label)
+            ignored.append({"label": obs.label, "why": "answered from your profile; a different choice is proposed as a change to that fact"})
+            candidates.append(("obs_{}".format(index), obs, value, field_class))
             continue
 
         # Episodic: the exact question gets the exact answer next time.

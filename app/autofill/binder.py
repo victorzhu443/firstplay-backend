@@ -87,6 +87,12 @@ class FillPlanEntry(BaseModel):
     #: and rather than as "needs review", since the tool knows exactly which
     #: file; only the last click is the applicant's.
     attach: Optional[str] = None
+    #: When a recognised profile key has no value, what to ask the applicant:
+    #: {"section", "key", "prompt", "example", "note"}. The popup turns these
+    #: into questions and saves the answers into the profile (Victor,
+    #: 2026-10-12: "you also need to be able to edit this stuff and ask the
+    #: user for this information").
+    needs_fact: Optional[Dict[str, object]] = None
     #: For a file field: which document the form is asking for — resume,
     #: cover_letter, transcript, portfolio, or other — decided from the key and
     #: the label, whether or not that document is stored. The extension
@@ -1365,6 +1371,32 @@ def document_kind(field: FormField) -> str:
     return "other"
 
 
+_UNSET = re.compile(r"recognised as ([a-z_]+) but you have not set it|set consents\.([a-z_]+) once|you have not set this( for ([A-Z]{2}))?$")
+
+
+def _mark_missing_facts(entries: List[FillPlanEntry]) -> None:
+    """Turn "recognised as X but you have not set it" into a question to ask."""
+    from app.autofill.memory import profile_schema
+    schema = {row["key"]: row for row in profile_schema()}
+    for entry in entries:
+        if not entry.needs_review or entry.skipped or entry.satisfied_by:
+            continue
+        m = _UNSET.search(entry.reason or "")
+        if not m:
+            continue
+        key = m.group(1) or m.group(2)
+        if not key:
+            continue
+        row = schema.get(key)
+        if row is None:
+            continue
+        entry.needs_fact = {
+            "section": row["section"], "key": key,
+            "prompt": "{} asks: {}".format("This form", (entry.label or key)[:120]),
+            "example": row["example"], "note": row["note"],
+        }
+
+
 def _mark_attachments(entries: List[FillPlanEntry], form: FormSchema) -> None:
     """Every file field gets the document kind it asks for; a resolved one
     becomes an attachment instruction, an unresolved one a note naming the
@@ -1549,6 +1581,7 @@ def resolve_form(
         )
 
     _mark_attachments(entries, form)
+    _mark_missing_facts(entries)
     _resolve_option_mismatches(entries, form, binder, matched)
     _mark_satisfied_alternates(entries, form)
     _resolve_conditionals(entries, form)

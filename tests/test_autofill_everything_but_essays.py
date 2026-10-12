@@ -436,3 +436,32 @@ def test_heard_about_answers_are_never_learned():
     obs = Observation(label="How did you hear about this job?", user_value="Recruiter Reach Out", company="Databricks", ats="greenhouse")
     result = learn(memory, [obs], binder=None)
     assert result.learned == 0 and not memory.answers and any("per application" in i["why"] for i in result.ignored)
+
+
+def test_an_unset_recognised_key_becomes_a_question_for_the_applicant():
+    plan = resolve_form(_form(_field("hs", "When did you graduate from High School?", FieldKind.SINGLE_SELECT, ["2022", "2023", "2024", "2025"], required=True),
+                              _field("sd", "Start date year", required=True)),
+                        Memory(education={"degree": "BS Computer Science"}), binder=None)
+    by = {e.field_key: e for e in plan.entries}
+    assert by["hs"].needs_fact and by["hs"].needs_fact["key"] == "high_school_graduation" and by["hs"].needs_fact["section"] == "education"
+    assert by["hs"].needs_fact["example"] and "High School" in by["hs"].needs_fact["prompt"]
+
+
+def test_the_profile_schema_lists_every_key_with_its_section_and_marks_protected_ones():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    body = TestClient(app).get("/api/autofill/profile-schema").json()
+    keys = {(r["section"], r["key"]) for r in body["fields"]}
+    assert ("education", "start_date") in keys and ("facts", "sat_score") in keys and ("consents", "privacy_notice") in keys
+    assert all(r["protected"] for r in body["fields"] if r["section"] == "protected")
+    assert body["fields"][0]["answers"] >= body["fields"][-1]["answers"]
+
+
+def test_imc_facts_fill_once_stored():
+    memory = Memory(education={"high_school_graduation": "May 2024"}, facts={"test_score_type": "SAT", "sat_score": "1480"})
+    form = _form(_field("hs", "When did you graduate from High School?", FieldKind.SINGLE_SELECT, ["2022", "2023", "2024", "2025"]),
+                 _field("tt", "Select your Standardized Test score type:", FieldKind.SINGLE_SELECT, ["SAT", "ACT", "Did not take"]),
+                 _field("sat", "Provide your best result on SAT:", FieldKind.SINGLE_SELECT, ["Below 1400", "1400 - 1490", "1500 - 1600"]))
+    plan = resolve_form(form, memory, binder=None)
+    values = {e.field_key: e.value for e in plan.entries}
+    assert values["hs"] == "2024" and values["tt"] == "SAT" and values["sat"] == "1400 - 1490"
