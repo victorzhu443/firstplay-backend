@@ -1877,9 +1877,12 @@ boards), both in `survey/draws/draw_r48_2_*.json`.
 | hidden tab | yes throughout; four organisations needed a second visit after a page navigated mid-poll |
 
 The Greenhouse hundred is drawn and batched but Greenhouse tabs fill only
-while the window is on screen (§45); 8 of 100 ran before the window was
-hidden (all 0 could-not-enter) and the rest wait for it. Recorded as they
-land in `survey/survey_results.jsonl`, round R48-2.
+while the window is on screen (§45). Corrected 2026-10-12 after the outside
+audit: **one** of the 100 is recorded (Alten, round R48-2 in
+`survey/survey_results.jsonl`). Seven more ran in the session before the
+window was hidden, but their rows were never appended, so they do not
+count; the earlier "8 of 100" here, in README entry 41 and in
+`agent-evaluation.md` overstated the record. The rest wait for the window.
 
 **The unanswered list, as asked.** "Compile the questions we couldn't
 answer, decide yes or no whether we have the information, and answer it as
@@ -2114,7 +2117,11 @@ Victor was seeing as "it knows the answer but can't pick it" (confirmed:
 "now it works").
 
 **The audit (2026-10-12, key renewed, 419 forms from every recorded draw).**
-289 model-decided values read one by one against the profile:
+Of the 419 forms attempted, 72 errored (backend and OpenRouter rate limits,
+fetch failures) and 61 completed with no model call, so the 289
+model-decided values below come from **168 forms** (`audit/run.log`; the
+counts were missing here until the outside audit of 2026-10-12 asked for
+them). 289 values read one by one against the profile:
 
 | source | rows | correct | wrong | unsure |
 |---|---|---|---|---|
@@ -2122,7 +2129,10 @@ Victor was seeing as "it knows the answer but can't pick it" (confirmed:
 | second pass | 43 | 43 | 0 | 0 |
 
 Threshold sweep on the gate: precision 98.0% at the current 0.85; 98.3%
-at 0.90 for 6% fewer correct answers; 98.0% at 0.95 for 17% fewer. Four
+at 0.90 for 6% fewer correct answers; 98.0% at 0.95 for 17% fewer. The
+99% precision target coded in `tune.py` and `evaluate.py` is **not met**
+at any threshold on this set; the target stands, and "Current state" below
+no longer claims it. Four
 of the five wrong answers sat at confidence 0.97–1.00, so no threshold
 removes them: they are mechanism errors, and each became a rule.
 1. *Canonical:* "Which gender do you identify as?" and "Please indicate
@@ -2264,26 +2274,19 @@ under the filler's own matching rule before it counts as a correction.
 
 ## Current state
 
-For coverage of the "everything except the essays" goal see §48; the
-figures below are the earlier 42-posting measurement.
-
-Measured against 42 unique live SWE-intern postings, 909 fields:
+Rewritten 2026-10-12 after the outside audit; the previous table here was
+the 42-posting measurement of 2026-09-26 and still said "precision 100%,
+target met".
 
 | | |
 |---|---|
-| **Coverage** | **87.2%** (650/745 fillable) — 618 filled, 32 skipped by standing decision |
-| **Precision** | **100%** over 428 human-labelled fields, including 12/12 model decisions — target 99% **met** |
-| **Review load** | **median 2** fields per application, mean 2.3, worst 6 |
-| | 7/42 applications need no review at all; 24/42 need ≤2 |
-| **Model-decided share** | 4.1% of filled values |
-| **Cost** | ~$0.006 for a full 42-posting run; near zero warm, since caches persist |
-| **Tests** | 553, offline, no credentials, ~13s |
-
-The remaining 95 unfilled fields are 86 screening, 8 core (profile gaps), 1
-document. Most of the 86 are bespoke per company — a track preference, an
-availability confirmation — and no taxonomy reaches them.
-
----
+| **Coverage, deterministic** | Greenhouse **77.8%** (10,790 / 13,863 in-scope fields over 578 frozen forms), Ashby **74.9%** (2,665 / 3,558 over 413) — re-run 2026-10-12, real profile, `coverage.py`. "Blank by choice" fields (258 / 86) count as filled; essays and files are outside the denominator |
+| **Coverage, with the model** | Greenhouse **86.3%**, Ashby **85.6%** — the outside audit's run of 2026-10-12 (`coverage.py --model`, $0.31, 0 form errors; 273 / 77 blank by choice counted) |
+| **Precision of model decisions** | **98.0%** over 289 hand-judged decisions from 168 forms (§52): 283 correct, 5 wrong, 1 unsure. Target 99% **not met**. Second pass 43 / 43 |
+| **Live, Greenhouse** | 117 live boards, 1,866 filled, 21 "known but could not be entered", all 21 before 0.4.19 by round order (`survey/`); the hundred of R48-2 has 1 of 100 recorded |
+| **Live, Ashby** | A1: 100 organisations, 702 filled, 246 review; R48-2: 100 organisations, 719 / 250 / 1 could-not-enter, median fill 110 ms |
+| **Learning loop** | offline replay 93.2% (1,679 of 1,802 later occurrences, 991 forms, re-run 2026-10-12); counts fills, not correct fills; no live metric yet; one self-poisoning found and closed (§54) |
+| **Tests** | 639, offline, no credentials, ~13 s |
 
 ## Open, with numbers attached
 
