@@ -398,9 +398,13 @@ PROTECTED_FIELD_SUFFIXES = {
 #: 2026-10-12 produced. One regex, shared by `MEMORY_ONLY_LABEL_KEYS` and
 #: `classify`, so the key and the class can never disagree about what an
 #: accommodation question is. "Housing accommodation in Seattle" is not one.
+#:
+#: Deliberately not "need an accommodation": "If you need an accommodation,
+#: we'll partner with you… Are you able to commit to working from one of our
+#: offices on Anchor Days?" (x7 in the Greenhouse corpus) offers one and asks
+#: about office days; matching it made a yes/no about attendance LEGAL.
 _ACCOMMODATION = re.compile(
-    r"\b(reasonable accommodations?|accommodations? (for|during|request|due to|needed|required)"
-    r"|(require|need|request)(s|d|ing)? (any |an |some )?accommodations?"
+    r"\b(reasonable accommodations?|accommodations? (for|during|request|due to)"
     r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
     r"|assistance (during|with|in|for) the (interview|recruit|hiring|application))\b", re.I)
 

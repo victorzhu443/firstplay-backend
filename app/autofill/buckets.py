@@ -58,6 +58,20 @@ def parse_number(text: str) -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
+#: A value that is a date, not a quantity: a named month or season with a year
+#: ("May 2026", "Spring 2028"), or a numeric month-year ("06/2026", "2026-06").
+#: A bare year is left to the caller, since year buckets are real.
+_DATED = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}\b"
+                    r"|\b(winter|spring|summer|fall|autumn)\s*\d{4}\b"
+                    r"|\b\d{1,2}\s*[/.-]\s*\d{4}\b|\b\d{4}-\d{1,2}(-\d{1,2})?\b", re.I)
+_YEAR = re.compile(r"\b(19|20)\d{2}\b")
+
+
+def looks_like_date(text: str) -> bool:
+    """Whether a stored answer is a month-and-year date rather than a number."""
+    return bool(_DATED.search(text or ""))
+
+
 def match_numeric_bucket(value: str, options: List[FieldOption]) -> Optional[FieldOption]:
     """The one option whose range contains `value`.
 
@@ -69,6 +83,14 @@ def match_numeric_bucket(value: str, options: List[FieldOption]) -> Optional[Fie
         The containing bucket, or None when nothing contains it or more than
         one does
     """
+    # A date is not a quantity. "June 2027" against a notice-period menu
+    # (Immediate / 2 weeks / 1 month / 2 months / 3+ months) parsed as 2027
+    # and landed in "3+ months" — right by accident (audit 2026-10-12, H4).
+    # Year buckets ("2027 - 2028") are the one place a date's number means
+    # something, so the refusal applies only when no option names a year.
+    if looks_like_date(value) and not any(_YEAR.search(o.label) for o in options):
+        return None
+
     number = parse_number(value)
 
     if number is None:
