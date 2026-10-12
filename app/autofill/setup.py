@@ -50,6 +50,7 @@ NOTES: Dict[str, str] = {
     "secondary_major": "a second major or minor, if any; empty leaves such fields blank",
     "transgender": "exactly as you'd answer it, e.g. \"I don't wish to answer\"",
     "sexual_orientation": "exactly as you'd answer it, e.g. \"I don't wish to answer\"",
+    "hispanic_latino": "Greenhouse asks this before race: 'Yes', 'No' or 'Prefer not to say'. Typed once, replayed exactly, never inferred from your race answer",
     "privacy_notice": "'Agree' to accept privacy notices/data-processing statements every time; empty to decide each time",
     "truthful_certification": "'Agree' to certify your answers are true every time (you still review before submit)",
     "terms_and_conditions": "'Agree' to accept terms/codes of conduct every time; empty to decide each time",
@@ -72,6 +73,7 @@ PROTECTED_CHOICES: Dict[str, List[str]] = {
     "race_ethnicity": ["Asian", "White", "Black or African American",
                        "Hispanic or Latino", "Two or More Races", "Prefer not to say"],
     "gender": ["Male", "Female", "Prefer not to say"],
+    "hispanic_latino": ["Yes", "No", "Prefer not to say"],
 }
 
 

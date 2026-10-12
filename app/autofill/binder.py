@@ -192,10 +192,14 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
      re.compile(r"\b(major|field of study|degree (program|programme|type)"
                r"|what degree|area of study)\b", re.I)),
     # Before INTERNSHIP_TERM: "I confirm my availability for a Summer 2027
-    # (May/June starts)" names a season but asks yes/no, not which.
+    # (May/June starts)" names a season but asks yes/no, not which. Not an
+    # interview slot: "Interview availability: are you available for
+    # interviews in the next two weeks?" was filled from term_flexible
+    # (audit 2026-10-12, H4).
     (QuestionTheme.INTERNSHIP_AVAILABILITY,
-     re.compile(r"\bi confirm my availability\b|\bare you available for\b"
-               r"|\bconfirm .{0,20}availability\b|\bflexibility to consider\b", re.I)),
+     re.compile(r"^(?!.*\binterview)"
+               r"(?=.*(\bi confirm my availability\b|\bare you available for\b"
+               r"|\bconfirm .{0,20}availability\b|\bflexibility to consider\b))", re.I | re.S)),
     (QuestionTheme.INTERNSHIP_TERM,
      re.compile(r"\b(winter or summer|summer or winter|internship (term|season|cohort)"
                r"|cohort dates|prefer a (winter|summer))\b", re.I)),
@@ -210,15 +214,30 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
      re.compile(r"\bat least \d+ years? of age\b|\bare you (18|over 18)\b", re.I)),
     (QuestionTheme.CURRENT_JOB_TITLE,
      re.compile(r"\b(current|previous).{0,12}\bjob title\b|\byour (job )?title\b", re.I)),
+    # "May we contact you via text message?" is an SMS consent, not a
+    # reference check; it was filled from contact_current_employer (audit
+    # 2026-10-12, H4). The theme is about an employer, so the object of
+    # "contact" must not be the applicant and the channel must not be named.
     (QuestionTheme.CONTACT_CURRENT_EMPLOYER,
-     re.compile(r"\bmay we contact\b|\bcontact your (current|previous)\b"
-               r"|\bpermission to contact\b", re.I)),
+     re.compile(r"^(?!.*\b(text|texts|sms|whatsapp|messag\w*|phone call)\b)"
+               r"(?=.*(\bmay we contact (?!you\b)|\bcontact your (current|previous|present|former)\b"
+               r"|\bpermission to contact (?!you\b)))", re.I | re.S)),
     (QuestionTheme.CURRENT_EMPLOYER,
      re.compile(r"\b(who is your )?(current|previous).{0,12}\bemployer\b", re.I)),
     (QuestionTheme.VISA_SPONSORSHIP, re.compile(r"\bsponsor", re.I)),
+    # Not a visa-programme question: "Do you have a STEM degree that would
+    # make you eligible for extended work authorization?" was answered "Yes"
+    # from the stored authorisation (audit 2026-10-12, H4). OPT / CPT / STEM
+    # extension questions are left for the model gate, whose applicant state
+    # says whether those programmes apply at all.
     (QuestionTheme.WORK_AUTHORIZATION,
-     re.compile(r"\b(authoriz\w*|entitled|eligible)\b[^?]{0,40}\bwork\b", re.I)),
-    (QuestionTheme.INTERVIEWED_HERE_BEFORE, re.compile(r"\binterview", re.I)),
+     re.compile(r"^(?!.*\b(stem|opt|cpt|extension|extended)\b)"
+               r"(?=.*\b(authoriz\w*|entitled|eligible)\b[^?]{0,40}\bwork\b)", re.I | re.S)),
+    # "Interview availability" is not "interviewed here before": the theme
+    # needs a past-tense marker, else an interview-scheduling question lands
+    # on an ASK theme and its wording is lost (audit 2026-10-12, H4).
+    (QuestionTheme.INTERVIEWED_HERE_BEFORE,
+     re.compile(r"(?=.*\binterview)(?=.*\b(before|previously|prior|past|ever|already)\b)", re.I | re.S)),
     # Lookaheads rather than a sequence: real forms write both "worked for X
     # before" and "have you previously worked for X", and an ordered pattern
     # caught only the first — 56 instances across 149 postings went to review
@@ -228,10 +247,31 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
      re.compile(r"(?=.*\b(?:worked|employee|employed|contractor|intern(?:ed)?)\b)"
                r"(?=.*\b(?:before|previously|previous)\b)", re.I)),
     (QuestionTheme.CURRENT_STATE, re.compile(r"\b(state or province|which state)\b", re.I)),
-    (QuestionTheme.WORK_ADDRESS, re.compile(r"\baddress\b", re.I)),
+    # "Please provide your university email address" is not a street address
+    # (audit 2026-10-12, M9). Nor is a second line ("Street Address (Optional
+    # Second Line)", x5), nor a yes/no about having an address somewhere ("Do
+    # you currently have a permanent or school address in the DC metro
+    # area?", x5): with street_address stored, both would have been filled
+    # with line 1.
+    (QuestionTheme.WORK_ADDRESS,
+     re.compile(r"^(?!.*\b(e-?mail|ip|web|website|url|wallet)\s*address\b)"
+               r"(?!.*\b(second line|line 2|address 2)\b)"
+               r"(?!\s*(do|are|have|will|would|can|could|is) you\b)"
+               r"(?=.*\baddress\b)", re.I | re.S)),
+    # A general tolerance answers a general question. "Are you able to work
+    # in-person in San Jose this summer?" names a place, and the stored
+    # in_office_tolerance says nothing about San Jose; it was filled at 1.0
+    # (audit 2026-10-12, H4). A capitalised word right after "in-person in /
+    # at / from" is a place name; "in one of our offices" is not.
     (QuestionTheme.IN_OFFICE_TOLERANCE,
-     re.compile(r"\b(in[-\s]?person|in[-\s]?office|days?\s*/\s*week|hybrid)\b", re.I)),
-    (QuestionTheme.WILLING_TO_RELOCATE, re.compile(r"\brelocat", re.I)),
+     re.compile(r"^(?!.*\b(in[-\s]?person|in[-\s]?office|on[-\s]?site|hybrid)\b[^?]{0,30}?"
+               r"\b(in|at|from|to)\s+(the\s+|our\s+)?(?-i:[A-Z]))"
+               r"(?=.*\b(in[-\s]?person|in[-\s]?office|days?\s*/\s*week|hybrid)\b)", re.I | re.S)),
+    # Willingness to move, not the cost of moving: "Do you require relocation
+    # assistance?" was filled from open_to_relocation (audit 2026-10-12, H4).
+    (QuestionTheme.WILLING_TO_RELOCATE,
+     re.compile(r"\brelocat(?!\w*\s+(assistance|package|support|bonus|benefits?|expenses?|costs?"
+               r"|reimbursement|stipend|allowance))", re.I)),
     (QuestionTheme.CURRENT_LOCATION,
      re.compile(r"\b(currently (located|based|live)|where .{0,30}"
                r"(based|work from|intend to work))", re.I)),
@@ -247,8 +287,19 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
                 r"|\b(salary|compensation|pay)\s+(expectation|requirement)s?\b|\bexpected base\b", re.I)),
     (QuestionTheme.INTERNSHIP_END,
      re.compile(r"\b(ideal |anticipated |expected )?end date\b|\bending your internship\b|\binternship end\b", re.I)),
+    # A bare "Start Date" is some other date on an education or employment
+    # block; it was filled with the earliest-start month (audit 2026-10-12,
+    # H4). The theme needs "earliest", a notice period, "when … start", or a
+    # preference / availability word on the start ("Preferred Internship/
+    # Co-Op Start Date" x9, "When are you available to start?" x7 in the
+    # corpora). "Are you available to start on <date>?" asks yes/no about
+    # the employer's date, not for the applicant's, and is excluded.
     (QuestionTheme.EARLIEST_START,
-     re.compile(r"\b(earliest|notice period|start date|when .{0,20}start)\b", re.I)),
+     re.compile(r"^(?!.*\bstart and end\b)"
+               r"(?=.*\b(earliest|notice period|when .{0,20}start\b"
+               r"|(available|availability|preferred|desired|ideal|target|possible|potential|anticipated|expected)\b"
+               r".{0,25}\bstart( date)?\b(?! (on|the|in|by|for)\b)"
+               r"|start date (that |which )?(you )?(could|can|would|availab|prefer)))", re.I | re.S)),
     (QuestionTheme.TIMELINE_NOTES,
      re.compile(r"\b(deadline|timeline consideration)", re.I)),
     (QuestionTheme.PERSONAL_PREFERENCES,

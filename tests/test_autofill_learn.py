@@ -101,7 +101,8 @@ def test_a_company_specific_answer_is_kept_for_that_question_only():
     memory = Memory(facts={"phone": "1"})
     binder = _binder({"Who referred you": (0.15, "new", 0.9)})
     result = learn(memory, [_obs("Who referred you to Acme?", "Jane Doe")], binder=binder)
-    assert memory.recall_answer("Who referred you to Acme?") == "Jane Doe"
+    assert memory.recall_answer("Who referred you to Acme?", "Acme") == "Jane Doe"
+    assert memory.recall_answer("Who referred you to Acme?", "Beta") is None   # H2: scoped to Acme
     assert result.proposals == [] and "this question only" in result.ignored[0]["why"]
 
 
@@ -200,3 +201,94 @@ def test_an_option_label_that_extends_the_plan_value_is_the_same_answer():
     assert result.learned == 0 and result.ignored[0]["why"].startswith("same as the plan")
     changed = learn(memory, [_obs("Which office?", "London", kind="single_select", plan_value="New York")])
     assert changed.learned == 1
+
+
+# H2 (audit 2026-10-12) — episodes were keyed on the label alone, so "Please
+# specify" and a referral name replayed into unrelated questions and other
+# companies as a confident fill.
+
+def _plan_for(memory, company, *fields):
+    form = FormSchema(ats="greenhouse", source="t", posting_id="1", company=company, title="SWE Intern",
+                      fields=list(fields))
+    return resolve_form(form, memory.for_company(company), binder=DeterministicBinder())
+
+
+def test_a_follow_up_answer_is_never_remembered_or_replayed():
+    memory = Memory()
+    result = learn(memory, [_obs("Please specify", "Cornell career fair"),
+                            _obs("If yes, please explain", "see above"),
+                            _obs("Other", "Mastodon")])
+    assert result.learned == 0 and memory.answers == {}
+    assert all("follow-up" in i["why"] for i in result.ignored)
+
+    # One stored before this rule is inert and dropped when next seen.
+    memory.answers[Memory.fingerprint("Please specify")] = "Cornell career fair"
+    assert memory.recall_answer("Please specify") is None
+    heard = _field("heard", "How did you hear about us?", FieldKind.SINGLE_SELECT, ("LinkedIn", "Other"))
+    plan = _plan_for(memory, "Beta", heard, _field("spec", "Please specify"))
+    assert plan.entries[1].value != "Cornell career fair"
+    learn(memory, [_obs("Please specify", "x", company="Beta")])
+    assert memory.answers == {}
+
+
+def test_a_referral_at_one_company_does_not_replay_at_another():
+    memory = Memory()
+    learn(memory, [_obs("Who referred you?", "Jane Doe", company="Acme")])
+    assert len(memory.answers) == 1
+
+    at_beta = _plan_for(memory, "Beta", _field("q", "Who referred you?"))
+    assert at_beta.entries[0].value is None and at_beta.entries[0].needs_review
+    at_acme = _plan_for(memory, "Acme", _field("q", "Who referred you?"))
+    assert at_acme.entries[0].value == "Jane Doe" and at_acme.entries[0].reason == "you answered this before"
+    # The company name is normalised the same way as for "worked here before".
+    assert memory.recall_answer("Who referred you?", "Acme Labs, Inc.") == "Jane Doe"
+
+
+def test_office_team_and_company_named_questions_are_company_scoped():
+    from app.autofill.memory import is_company_shaped
+    for label in ("Which office are you applying to?", "Which team are you most interested in?",
+                  "What role are you applying for?", "Please indicate your preferred office location",
+                  "Did anyone refer you to this position? If so, who?"):
+        assert is_company_shaped(label), label
+    assert is_company_shaped("Have you applied to Acme before?", "Acme Labs, Inc.")
+    assert not is_company_shaped("Have you applied to Acme before?", "Beta")
+    for label in ("What is your T-shirt size?", "What is your current role?", "Expected graduation year",
+                  "What pronouns would you like our team to use?", "Are you authorized to work in the US?"):
+        assert not is_company_shaped(label, "Acme"), label
+    # A two-letter company name scopes nothing: it would match inside words.
+    assert not is_company_shaped("Do you have an offer?", "Do")
+
+
+def test_a_plain_screening_answer_still_replays_across_companies():
+    memory = Memory()
+    learn(memory, [_obs("What is your T-shirt size?", "M", company="Acme")])
+    plan = _plan_for(memory, "Beta", _field("q", "What is your T-shirt size?"))
+    assert plan.entries[0].value == "M" and plan.entries[0].reason == "you answered this before"
+
+
+def test_label_only_fingerprints_stored_before_this_rule_still_replay():
+    import hashlib
+    from app.autofill.memory import normalize_label
+    legacy = hashlib.sha256(normalize_label("What is your T-shirt size?").encode()).hexdigest()[:16]
+    memory = Memory(answers={legacy: "M"})
+    assert Memory.fingerprint("What is your T-shirt size?", "Acme") == legacy
+    assert memory.recall_answer("What is your T-shirt size?", "Acme") == "M"
+    assert Memory.fingerprint("Who referred you?", "Acme") != Memory.fingerprint("Who referred you?", "Beta")
+
+
+def test_the_plan_endpoint_scopes_a_referral_to_the_request_company():
+    client = TestClient(app)
+    form = {"id": 1, "company_name": "Beta", "title": "SWE Intern",
+            "questions": [{"label": "Who referred you?", "required": False,
+                           "fields": [{"name": "question_1", "type": "input_text"}]}]}
+    profile = {"answers": {Memory.fingerprint("Who referred you?", "Acme"): "Jane Doe"}}
+
+    def entry(**kw):
+        body = {"ats": "greenhouse", "form": form, "profile": profile, "use_model": False}
+        body.update(kw)
+        response = client.post("/api/autofill/plan", json=body)
+        assert response.status_code == 200, response.text
+        return next(e for e in response.json()["plan"]["entries"] if e["field_key"] == "question_1")
+
+    assert entry()["value"] is None                      # the form says Beta
+    assert entry(company="Acme")["value"] == "Jane Doe"  # the caller says Acme

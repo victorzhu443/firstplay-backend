@@ -283,3 +283,100 @@ def test_resume_upload_and_paste_are_one_onboarding_question(anthropic):
     resume_rows = [row for row in ranked if "resume" in row[0]]
 
     assert len(resume_rows) == 1, resume_rows
+
+
+# --- H1: Hispanic/Latino is its own stored answer, never derived from race ---
+#
+# Greenhouse renders `hispanic_ethnicity` (Yes / No / Decline To Self
+# Identify) before `race`; the board API lists only `race`. The extension used
+# to derive the answer from the stored race by substring, so Ashby's own race
+# wording "White (Not Hispanic or Latino)" became Yes (audit 2026-10-12, H1).
+
+def _hispanic_entry(protected):
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    form = parse_greenhouse_job(_fixture("greenhouse_anthropic_ae.json"), board="anthropic")
+    plan = resolve_form(form, Memory(protected=protected), binder=DeterministicBinder())
+    return next(e for e in plan.entries if e.field_key == "hispanic_ethnicity")
+
+
+def test_the_hispanic_question_is_synthesised_before_race_for_a_form_with_a_race_field(anthropic):
+    keys = [f.key for f in anthropic.fields]
+    assert "hispanic_ethnicity" in keys and keys.index("hispanic_ethnicity") == keys.index("race") - 1
+    field = next(f for f in anthropic.fields if f.key == "hispanic_ethnicity")
+    assert field.field_class == FieldClass.LEGAL and field.kind == FieldKind.SINGLE_SELECT
+    assert not field.required and not field.allows_model_judgement()
+    assert [o.label for o in field.options] == ["Yes", "No", "Decline To Self Identify"]
+
+
+def test_no_hispanic_question_without_a_race_field():
+    payload = dict(_fixture("greenhouse_anthropic_ae.json"))
+    payload["compliance"] = []
+    assert "hispanic_ethnicity" not in [f.key for f in parse_greenhouse_job(payload).fields]
+
+
+def test_ashby_race_wording_never_answers_the_hispanic_question():
+    """"White (Not Hispanic or Latino)" stored as race, hispanic_latino unset:
+    the entry is a question for the applicant, never Yes and never No."""
+    entry = _hispanic_entry({"race_ethnicity": "White (Not Hispanic or Latino)"})
+    assert entry.needs_review and entry.value is None
+    assert entry.needs_fact and entry.needs_fact["key"] == "hispanic_latino"
+    assert entry.needs_fact["section"] == "protected"
+
+    # Nor does a stored "Hispanic or Latino" race, nor a stored decline.
+    for race in ("Hispanic or Latino", "I don't wish to answer"):
+        entry = _hispanic_entry({"race_ethnicity": race})
+        assert entry.needs_review and entry.value is None, race
+
+
+def test_a_stored_hispanic_decline_replays_as_the_forms_decline_option():
+    entry = _hispanic_entry({"hispanic_latino": "Prefer not to say",
+                             "race_ethnicity": "White (Not Hispanic or Latino)"})
+    assert entry.value == "Decline To Self Identify" and not entry.needs_review
+    assert entry.source == FillSource.MEMORY and entry.reason == "stored as hispanic_latino"
+
+
+def test_a_stored_hispanic_yes_fills_yes():
+    entry = _hispanic_entry({"hispanic_latino": "Yes"})
+    assert entry.value == "Yes" and not entry.needs_review and entry.source == FillSource.MEMORY
+    assert _hispanic_entry({"hispanic_latino": "No"}).value == "No"
+
+
+def test_hispanic_latino_is_in_the_profile_registry_as_protected():
+    from app.autofill.memory import profile_schema, profile_template
+    row = next(r for r in profile_schema() if r["key"] == "hispanic_latino")
+    assert row["section"] == "protected" and row["protected"] is True
+    assert row["example"] and "never inferred" in row["note"]
+    assert "hispanic_latino" in profile_template()["protected"]
+
+
+# --- M1: a standing consent is never typed into a text control -------------
+
+_SIGNATURE = ("I certify that the facts set forth in this application are true and complete. "
+              "Please type your full name as your signature.")
+
+
+def _consent_field(kind, options=()):
+    from app.autofill.schema import FieldOption
+    return FormField(key="q9", label=_SIGNATURE, kind=kind, field_class=FieldClass.CONSENT,
+                     required=True, options=[FieldOption(label=o, value=o) for o in options])
+
+
+def test_a_standing_certification_is_never_typed_as_a_signature():
+    from app.autofill.classify import consent_key_for
+    assert consent_key_for(_SIGNATURE) == "truthful_certification"
+    memory = Memory(consents={"truthful_certification": "Agree"})
+    for kind in (FieldKind.TEXT, FieldKind.LONG_TEXT):
+        resolution = memory.resolve(_consent_field(kind))
+        assert resolution.value is None and resolution.needs_review, kind
+        assert resolution.source == FillSource.HUMAN
+        assert "yours to type" in resolution.reason
+
+
+def test_a_standing_certification_still_replays_on_a_tick_box_or_option():
+    memory = Memory(consents={"truthful_certification": "Agree"})
+    assert memory.resolve(_consent_field(FieldKind.BOOLEAN)).value == "Yes"
+    one = memory.resolve(_consent_field(FieldKind.SINGLE_SELECT, ("I Agree",)))
+    assert one.value == "I Agree" and not one.needs_review
+    two = memory.resolve(_consent_field(FieldKind.SINGLE_SELECT, ("Yes", "No")))
+    assert two.value == "Yes" and two.source == FillSource.MEMORY
+    assert memory.resolve(_consent_field(FieldKind.MULTI_SELECT, ("I Agree",))).values == ["I Agree"]

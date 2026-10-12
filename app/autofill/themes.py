@@ -254,7 +254,11 @@ THEME_MEMORY_KEYS: Dict[QuestionTheme, str] = {
     QuestionTheme.AGE_ELIGIBILITY: "age_18_plus",
     QuestionTheme.CURRENT_LOCATION: "current_location",
     QuestionTheme.CURRENT_STATE: "current_state",
-    QuestionTheme.WORK_ADDRESS: "work_address",
+    # The stored street address. The theme once read `work_address`, a key no
+    # profile section sets, so "Address 1" (12 required fields in the R48 gap
+    # list) and "Address" were reported as "recognised but not set" while
+    # street_address sat in the profile (outside audit 2026-10-12, M9).
+    QuestionTheme.WORK_ADDRESS: "street_address",
     QuestionTheme.WILLING_TO_RELOCATE: "open_to_relocation",
     QuestionTheme.IN_OFFICE_TOLERANCE: "in_office_tolerance",
     QuestionTheme.EARLIEST_START: "earliest_start",

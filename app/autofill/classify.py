@@ -122,6 +122,16 @@ CORE_LABEL_ALIASES = {
     "address": "street_address",
     "address line 1": "street_address",
     "street address": "street_address",
+    # "Address 1" was 12 required fields in the R48 gap list and reached the
+    # theme router, whose key nothing set (audit 2026-10-12, M9); the rest
+    # are the wordings the corpora use for the same line.
+    "address 1": "street_address",
+    "street address 1": "street_address",
+    "street address line 1": "street_address",
+    "home address": "street_address",
+    "mailing address": "street_address",
+    "current address": "street_address",
+    "residential address": "street_address",
     "zip": "postal_code",
     "zip code": "postal_code",
     "zip postal code": "postal_code",
@@ -230,6 +240,9 @@ CORE_LABEL_ALIASES = {
     "minor s": "secondary_major",
     "address line 2": "street_address_2",
     "address 2": "street_address_2",
+    "street address optional second line": "street_address_2",   # x5, would otherwise take line 1
+    "street address 2": "street_address_2",
+    "street address line 2": "street_address_2",
     "apt suite": "street_address_2",
     "apartment suite": "street_address_2",
 }
@@ -353,6 +366,37 @@ CONSENT_BUCKETS = (
 )
 
 
+#: The buckets a yes/no question can *grant*. The certification bucket is left
+#: out deliberately: its wording ("confirm … complete") also fits "Please
+#: confirm when you will complete your university studies" (x13 in the
+#: Greenhouse corpus), and certifications arrive as attestations, which
+#: `_ATTESTATION` already routes.
+_GRANT_BUCKETS = frozenset({
+    "sms_messages", "marketing_communications", "interview_recording",
+    "background_check", "privacy_notice", "terms_and_conditions",
+})
+
+#: The words that make a label an *ask* for consent rather than a mention of
+#: the subject. Measured over the two corpora (2026-10-12): without this gate
+#: the bucket regexes alone turned a non-compete disclosure ("any agreement
+#: with your current employer … confidentiality agreement", x5) and "experience
+#: coding in Python for data processing" into consents.
+_CONSENT_ASKED = re.compile(
+    r"\b(consent|agree|acknowledg\w*|willing|authoriz\w*|authoris\w*|permission|opt[- ]?in"
+    r"|accept|understand|confirm|certify|attest|happy to|wish to receive|would you like)\b", re.I)
+
+
+def is_consent_asked(label: str, option_count: int = 0) -> bool:
+    """Whether a label asks for one of the standing consents the profile holds.
+
+    True when the label names a grant bucket and either asks (a consent verb)
+    or is a one-option control, which is a checkbox with legal text.
+    """
+    if consent_key_for(label) not in _GRANT_BUCKETS:
+        return False
+    return option_count == 1 or bool(_CONSENT_ASKED.search(normalize_label(label)))
+
+
 def consent_key_for(label: str) -> Optional[str]:
     """Which standing consent, if any, a consent-class field asks for."""
     text = label or ""
@@ -380,6 +424,13 @@ PROTECTED_FIELD_NAMES = {
     "race": "race_ethnicity",
     "gender": "gender",
     "disability_status": "disability_status",
+    # Greenhouse's EEO block asks Hispanic/Latino as its own yes/no beside
+    # race. Its own stored answer, replayed exactly: the outside audit of
+    # 2026-10-12 (H1) found the extension *deriving* it from the stored race
+    # by substring, which answered Yes for Ashby's "White (Not Hispanic or
+    # Latino)" wording and No for a stored decline. Derivation is a judgement
+    # about a protected characteristic; this key is what replaces it.
+    "hispanic_ethnicity": "hispanic_latino",
 }
 
 #: Ashby's suffix form, matched against the end of the field name.
@@ -394,6 +445,20 @@ PROTECTED_FIELD_SUFFIXES = {
 #: Label patterns for the memory-only questions, mapped to their profile key.
 #: Matched on the label because these arrive as custom questions with per-posting
 #: names, so there is no stable key to look up.
+#: An accommodation request, in every wording the corpora and the audit of
+#: 2026-10-12 produced. One regex, shared by `MEMORY_ONLY_LABEL_KEYS` and
+#: `classify`, so the key and the class can never disagree about what an
+#: accommodation question is. "Housing accommodation in Seattle" is not one.
+#:
+#: Deliberately not "need an accommodation": "If you need an accommodation,
+#: we'll partner with you… Are you able to commit to working from one of our
+#: offices on Anchor Days?" (x7 in the Greenhouse corpus) offers one and asks
+#: about office days; matching it made a yes/no about attendance LEGAL.
+_ACCOMMODATION = re.compile(
+    r"\b(reasonable accommodations?|accommodations? (for|during|request|due to)"
+    r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
+    r"|assistance (during|with|in|for) the (interview|recruit|hiring|application))\b", re.I)
+
 MEMORY_ONLY_LABEL_KEYS = (
     # Order matters: "Can you perform these essential functions of the job with
     # reasonable accommodation?" mentions both. It asks about ability, and with
@@ -403,9 +468,7 @@ MEMORY_ONLY_LABEL_KEYS = (
     # Maven Securities 8043552: "If you require any support or adjustments
     # during the recruitment process…" is the UK wording. Unmatched, it was
     # SCREENING and the model gate answered it "No" from nothing (§40).
-    (re.compile(r"\b(reasonable accommodations?|accommodations? (for|during|request)|"
-                r"support or adjustments|reasonable adjustments|adjustments (during|to) the)\b", re.I),
-     "accommodation_needs"),
+    (_ACCOMMODATION, "accommodation_needs"),
     (re.compile(r"\bclose relative\b", re.I), "close_relative_official"),
     (re.compile(r"\bgovernment official\b", re.I), "government_official"),
     (re.compile(r"\b(personal/familial|familial) relationship", re.I),
@@ -452,17 +515,82 @@ def memory_only_key_for(label: str) -> Optional[str]:
 DEMOGRAPHIC_KEY_PREFIX = "demographic_answers."
 
 PROTECTED_LABEL_PATTERNS = (
+    # First, and only when the label does not also name race: "Are you
+    # Hispanic or Latino?" is its own question; "Race/Ethnicity (Hispanic or
+    # Latino, White, ...)" is the race question listing its options.
+    (re.compile(r"^(?!.*\b(race|racial)\b)(?=.*\b(hispanic|latino|latina|latinx|latine)\b)", re.I | re.S),
+     "hispanic_latino"),
     (re.compile(r"\bsexual orientation\b", re.I), "sexual_orientation"),
     (re.compile(r"\btransgender\b", re.I), "transgender"),
     (re.compile(r"\bgender\b", re.I), "gender"),
     (re.compile(r"\b(racial|ethnic|race|ethnicity)\b", re.I), "race_ethnicity"),
-    (re.compile(r"\bdisabilit", re.I), "disability_status"),
+    # "disability" names the EEOC question only when the label is not asking
+    # about accommodation. The outside audit of 2026-10-12 (H3) found "If you
+    # require accommodations due to a disability, please describe them" and
+    # "Do you have a disability that requires accommodation during the
+    # interview?" both replaying the stored EEOC disability sentence; the
+    # accommodation wording is the question, and it has its own memory-only
+    # key (`accommodation_needs`).
+    (re.compile(r"^(?!.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))"
+                r"(?=.*\bdisabilit)", re.I | re.S), "disability_status"),
     (re.compile(r"\bveteran\b", re.I), "veteran_status"),
 )
 
 
-def protected_key_for(key: str, label: str = "") -> Optional[str]:
-    """Canonical memory key for a protected-characteristic field, if it is one."""
+#: Protected or sensitive topics no vendor marks and no profile key answers.
+#: Routed to LEGAL with **no memory key**, so the field is review-only: no
+#: model judges it, the second pass never sees it, and the learning loop
+#: proposes no fact from it (LEGAL returns before the candidate list).
+#:
+#: The outside audit of 2026-10-12 (M2) traced fourteen such labels: all were
+#: SCREENING, all reached the model gate or the second pass, and the model
+#: declined every one — the model behaving, not the design. The asymmetry in
+#: the module docstring decides this: misreading one of these costs a glance;
+#: the reverse puts a judgement on a protected characteristic.
+#:
+#: Matched on the normalised label. What is deliberately *not* here:
+#:   - age eligibility ("Are you 18 years of age or older?") — a computed
+#:     theme with its own key, so "your age" is matched and "years of age" is
+#:     not;
+#:   - work authorisation, sponsorship, "citizen or permanent resident" and
+#:     the sanctions citizenship-residence disclosure, which are answered
+#:     deterministically from legal_status; only citizenship / nationality
+#:     asked bare, as a demographic, is listed;
+#:   - "criminal background check", which is a consent (CONSENT_BUCKETS);
+#:   - Hispanic/Latino, which is a protected characteristic with its own
+#:     replayable key (PROTECTED_LABEL_PATTERNS).
+SENSITIVE_TOPIC_PATTERNS = (
+    re.compile(r"\bdate of birth\b|\bbirth ?da(te|y)\b|\bdob\b|\byear of birth\b|\bhow old are you\b"
+               r"|\byour age\b|^age$|\bage (range|group|bracket)\b", re.I),
+    re.compile(r"\breligio(n|us|sity)\b", re.I),
+    re.compile(r"\bmarital\b|\bmarriage\b|\bmarried\b", re.I),
+    re.compile(r"\bnationality\b|\bnational origin\b|\bcountry of (origin|birth|nationality)\b"
+               r"|\bplace of birth\b|\bbirthplace\b"
+               r"|^(what is your |your |please (state|indicate|enter|select) your )?citizenship( s)?$"
+               r"|^country of citizenship$", re.I),
+    re.compile(r"\bconvict(ed|ion)s?\b|\bfelon(y|ies)\b|\bmisdemeanou?rs?\b|\barrest(ed|s)?\b"
+               r"|\bcriminal (history|record|offen[cs]es?|charges?)\b"
+               r"|\bcriminal background(?! (check|screening|investigation))", re.I),
+    re.compile(r"\blgbt", re.I),
+    re.compile(r"\bfirst[-\s]gen(eration)?\b", re.I),
+    re.compile(r"\bmilitary spouse\b|\bspouse of (a |an )?(veteran|service member|active[- ]duty|military)", re.I),
+)
+
+
+def is_sensitive_topic(label: str) -> bool:
+    """Whether a label asks about a protected or sensitive topic no key answers."""
+    normalized = normalize_label(label)
+    return bool(normalized) and any(p.search(normalized) for p in SENSITIVE_TOPIC_PATTERNS)
+
+
+def vendor_protected_key_for(key: str, label: str = "") -> Optional[str]:
+    """Memory key for a field the *vendor* marks as a protected characteristic.
+
+    Greenhouse's stable names and compliance block, Ashby's `_systemfield_eeoc`
+    suffix, and Greenhouse's numbered demographic block (where only the label
+    says which question it is). Exact, so it is consulted before anything
+    matched on wording alone.
+    """
     if key in PROTECTED_FIELD_NAMES:
         return PROTECTED_FIELD_NAMES[key]
 
@@ -475,13 +603,20 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
             if pattern.search(label or ""):
                 return memory_key
 
-    # A custom question outside the demographic block that asks the same
-    # thing is the same question. Canonical (Greenhouse, audit of 2026-10-12):
-    # "Which gender do you identify as?" and "Please indicate your race or
-    # ethnicity" as ordinary custom questions were SCREENING, and the gate
-    # inferred both from the profile. Pronouns are not a protected
-    # characteristic and keep their own alias; "race" as in a race car does
-    # not occur on an application form.
+    return None
+
+
+def custom_protected_key_for(label: str) -> Optional[str]:
+    """Memory key for a protected characteristic asked as a custom question.
+
+    A custom question outside the demographic block that asks the same thing
+    is the same question. Canonical (Greenhouse, audit of 2026-10-12): "Which
+    gender do you identify as?" and "Please indicate your race or ethnicity"
+    as ordinary custom questions were SCREENING, and the gate inferred both
+    from the profile. Pronouns are not a protected characteristic and keep
+    their own alias; "race" as in a race car does not occur on an application
+    form.
+    """
     text = label or ""
     if text and not re.search(r"\bpronoun", text, re.I):
         for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
@@ -489,6 +624,11 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
                 return memory_key
 
     return None
+
+
+def protected_key_for(key: str, label: str = "") -> Optional[str]:
+    """Canonical memory key for a protected-characteristic field, if it is one."""
+    return vendor_protected_key_for(key, label) or custom_protected_key_for(label)
 
 
 #: Questions a model must never answer, but the applicant answers **once** and
@@ -503,9 +643,8 @@ def protected_key_for(key: str, label: str = "") -> Optional[str]:
 _MEMORY_ONLY = (
     # ADA / accommodation. Free text or yes/no, and the applicant's own
     # statement either way — most people store "None" and never see it again.
-    re.compile(r"\b(reasonable accommodations?|accommodations? (for|during|request)"
-               r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
-               r"|essential functions)\b", re.I),
+    _ACCOMMODATION,
+    re.compile(r"\bessential functions\b", re.I),
     # Conflict-of-interest and political-exposure screens (~30 instances across
     # the fintech boards). Stable facts about relatives and holdings.
     re.compile(r"\bgovernment official\b", re.I),
@@ -520,12 +659,19 @@ _MEMORY_ONLY = (
     re.compile(r"\bselect all that apply\b.{0,40}\b(disclos|relationship|conflict)", re.I),
 )
 
-#: Genuine per-application attestations. These stay human, because the act of
-#: certifying is *made* at submission time rather than reporting a fact that
-#: already exists — the same distinction that keeps arbitration agreements
-#: manual. "I certify that the facts set forth in this Application are true"
-#: (x13) arrives as a plain text field, so the single-option-select rule never
-#: sees it.
+#: Per-application attestations, routed to CONSENT. "I certify that the facts
+#: set forth in this Application are true" (x13) arrives as a plain text
+#: field, so the single-option-select rule never sees it.
+#:
+#: What CONSENT means in practice (DECISIONS §48, §51–§52): the applicant's
+#: *standing decision* for the bucket the label names (`consent_key_for`,
+#: here `truthful_certification`) is replayed from `Memory.consents`; with no
+#: recorded decision the field is theirs; no model ever produces the value.
+#: An attestation that names no bucket — an arbitration agreement, the AI
+#: policy — stays human whatever the profile says: there is no prior decision
+#: to replay, the act is the click. An earlier version of this comment said
+#: every attestation stays human; the outside audit of 2026-10-12 (M1) read
+#: that against the code and the code was right.
 _ATTESTATION = (
     re.compile(r"\bi (certify|attest|declare)\b", re.I),
     re.compile(r"\bcertif(y|ication) that the (facts|information)\b", re.I),
@@ -533,16 +679,11 @@ _ATTESTATION = (
 )
 
 
-#: Employer attestations about the applicant's own use of AI in the application.
-#: Anthropic's "AI Policy for Application" appears on 27 of 148 postings.
-#:
-#: Routed to CONSENT — human-only — deliberately. This is the one field where an
-#: autofill tool would be attesting to its own involvement, and it is an
-#: attestation the applicant makes rather than a fact about them that already
-#: exists. Costs one click per application.
 #: Consent-shaped questions that are decisions rather than facts, found in the
 #: intern corpus and initially unclassified. Each grants something — a recording,
-#: a marketing channel, acceptance of terms — so none is a fact to replay.
+#: a marketing channel, acceptance of terms — so none is a *fact* about the
+#: applicant; each is a standing decision in `Memory.consents`, replayed per
+#: bucket and human while unrecorded.
 _DECISIONS_NOT_FACTS = (
     # "To ensure we can focus fully on our conversation, we use Brighthire to
     # record interviews" (x4). Consent to being recorded.
@@ -563,6 +704,13 @@ _DECISIONS_NOT_FACTS = (
     re.compile(r"\bconsent to\b.{0,40}\b(personal data|my data|data (being )?(processed|disclosed|shared))\b", re.I),
 )
 
+#: Employer attestations about the applicant's own use of AI in the application.
+#: Anthropic's "AI Policy for Application" appears on 27 of 148 postings.
+#:
+#: Routed to CONSENT and matched to no consent bucket, so it is human-only.
+#: This is the one field where an autofill tool would be attesting to its own
+#: involvement, and it is an attestation the applicant makes rather than a
+#: fact about them that already exists. Costs one click per application.
 _AI_POLICY = re.compile(
     r"\bai\b.{0,24}\b(polic|guidance|guideline|disclosure)"
     # Intern-corpus phrasings: "I understand that Coinbase may use AI tools to
@@ -677,7 +825,9 @@ def classify(
     # A protected characteristic asked as a custom question (Canonical: "Which
     # gender do you identify as?", "Please indicate your race or ethnicity")
     # is LEGAL wherever it sits: the stored answer replays, no model touches it.
-    if protected_key_for(key, label) and normalized not in CORE_LABEL_ALIASES:
+    # A sensitive topic with no key is LEGAL too, and review-only.
+    if normalized not in CORE_LABEL_ALIASES and (
+            protected_key_for(key, label) or is_sensitive_topic(label)):
         return FieldClass.LEGAL
 
     if any(pattern.search(normalized) for pattern in _DECISIONS_NOT_FACTS):
@@ -725,6 +875,20 @@ def classify(
     if kind == FieldKind.TEXT and option_count == 0 and NARRATIVE_LABEL.search(normalized):
         return FieldClass.NARRATIVE
 
+    # A standing consent asked as a question. "Do you consent to a background
+    # check?" names a bucket in CONSENT_BUCKETS but matched none of the
+    # decision patterns above, so it was SCREENING and the model gate could be
+    # asked about it (outside audit 2026-10-12, M1; the model declined, which
+    # is the model behaving, not the design). A label that *asks for* a
+    # standing consent is CONSENT wherever the fall-through would otherwise
+    # put it: the applicant's own decision for that bucket answers it, and
+    # nothing else does. Last, so a core fact, a document or an essay that
+    # happens to mention "privacy" keeps its own class. 68 corpus fields in
+    # 25 shapes moved here; the ask-gate keeps the 13 "confirm when you will
+    # complete your studies" and the non-compete disclosures out.
+    if is_consent_asked(label, option_count):
+        return FieldClass.CONSENT
+
     return FieldClass.SCREENING
 
 
@@ -747,13 +911,28 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
     if key in DOCUMENT_FIELD_NAMES:
         return DOCUMENT_FIELD_NAMES[key]
 
-    protected = protected_key_for(key, label)
+    # The vendor's own marker is exact and wins outright. On a custom key the
+    # wording decides, and the memory-only questions are read *before* the
+    # protected-label patterns: an accommodation request mentions disability
+    # ("If you require accommodations due to a disability…"), and the audit
+    # of 2026-10-12 (H3) found the stored EEOC disability answer replayed into
+    # that free-text box because the protected pattern was consulted first.
+    protected = vendor_protected_key_for(key, label)
     if protected:
         return protected
 
     memory_only = memory_only_key_for(label)
     if memory_only:
         return memory_only
+
+    # No key, on purpose: "Are you a veteran or the spouse of a veteran?"
+    # would otherwise replay veteran_status for half the question.
+    if is_sensitive_topic(label):
+        return None
+
+    protected = custom_protected_key_for(label)
+    if protected:
+        return protected
 
     # Only an upload is a document. "Resume/CV" as a textarea is the paste
     # alternative, handled as a sibling of the upload, never given a path.
