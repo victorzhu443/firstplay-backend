@@ -574,6 +574,15 @@ SENSITIVE_TOPIC_PATTERNS = (
     re.compile(r"\blgbt", re.I),
     re.compile(r"\bfirst[-\s]gen(eration)?\b", re.I),
     re.compile(r"\bmilitary spouse\b|\bspouse of (a |an )?(veteran|service member|active[- ]duty|military)", re.I),
+    # A disability question with accommodation wording that is *not* an
+    # accommodation request ("Do you have a disability or require an
+    # accommodation?"). The protected pattern excludes it, so it must not
+    # replay `disability_status`; `_ACCOMMODATION` does not match it, so it
+    # has no memory-only key either. Between the two it fell to SCREENING and
+    # the model gate (review of 2026-10-12, finding 1). Keyless LEGAL instead.
+    # Checked after `memory_only_key_for` in `memory_key_for`, so a genuine
+    # accommodation request still reaches `accommodation_needs`.
+    re.compile(r"(?=.*\bdisabilit)(?=.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))", re.I | re.S),
 )
 
 

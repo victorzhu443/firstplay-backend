@@ -63,6 +63,31 @@ def test_the_eeoc_disability_question_as_a_custom_label_still_replays(label):
     assert not field.allows_model_judgement()
 
 
+@pytest.mark.parametrize("label", [
+    # Review of 2026-10-12, finding 1: between the protected pattern's
+    # accommodation exclusion and `_ACCOMMODATION`'s narrower wording, these
+    # were SCREENING with no key, and the model gate could answer them.
+    "Do you have a disability or require an accommodation?",
+    "Do you have a disability? If you need an accommodation to complete this application, please email us.",
+    "Disability status (if you need an accommodation, let us know)",
+])
+def test_a_disability_question_with_accommodation_wording_is_legal_and_keyless(label):
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    field = _field(label, options=("Yes", "No", "I don't wish to answer"))
+    assert field.field_class == FieldClass.LEGAL
+    assert not field.allows_model_judgement()
+    # Neither the EEOC answer nor the accommodation note answers it.
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) is None
+    memory = Memory(protected={"disability_status": "I don't wish to answer"},
+                    legal_status={"accommodation_needs": "None"})
+    form = FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[field])
+    entry = resolve_form(form, memory, binder=DeterministicBinder()).entries[0]
+    assert entry.needs_review and entry.value is None and entry.needs_fact is None
+
+
 def test_the_vendor_marker_outranks_accommodation_wording():
     """Greenhouse's compliance block names the EEOC disability question by key
     and its official text mentions accommodation. The vendor's marker is
