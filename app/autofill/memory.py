@@ -557,6 +557,14 @@ class Memory(BaseModel):
             agree = decision.lower() in ("agree", "accept", "acknowledge", "consent", "opt in", "i agree")
         reason = "standing consent: {} = {}".format(bucket, decision)
 
+        # A typed control is not a box to tick. "I certify that the facts set
+        # forth … Please type your full name as your signature" received the
+        # literal "Yes" from the standing certification (audit 2026-10-12,
+        # M1). The decision stands; the signature is the applicant's to type.
+        if field.kind in (FieldKind.TEXT, FieldKind.LONG_TEXT, FieldKind.FILE):
+            human.reason = "you agreed to {} once, but a signature is yours to type".format(bucket)
+            return human
+
         if field.kind == FieldKind.BOOLEAN or not field.options:
             return Resolution(field_key=field.key, value="Yes" if agree else "No",
                               source=FillSource.MEMORY, reason=reason)

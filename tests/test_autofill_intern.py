@@ -271,13 +271,18 @@ def test_per_application_attestations_stay_manual(label):
 
     # Since §48 a certification can be a *standing* consent: nothing happens
     # until the applicant records consents.truthful_certification, and then
-    # it is their own decision replayed, with the form still reviewed by them.
+    # it is their own decision replayed on a tick box or an option — never
+    # typed into a text control, which asks for a signature (audit M1).
     from app.autofill.memory import Memory
     untouched = Memory().resolve(field)
     assert untouched.source == FillSource.HUMAN and untouched.needs_review
+    decided = Memory(consents={"truthful_certification": "Agree"})
+    typed = decided.resolve(field)
+    assert typed.source == FillSource.HUMAN and typed.value is None and typed.needs_review
     if field.is_autofillable():
-        decided = Memory(consents={"truthful_certification": "Agree"}).resolve(field)
-        assert decided.source == FillSource.MEMORY and decided.value == "Yes"
+        box = FormField(key="q1", label=label, kind=FieldKind.BOOLEAN, field_class=field_class)
+        ticked = decided.resolve(box)
+        assert ticked.source == FillSource.MEMORY and ticked.value == "Yes"
 
 
 def test_memory_only_questions_resolve_from_the_profile():

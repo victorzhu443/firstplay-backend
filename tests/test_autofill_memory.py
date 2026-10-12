@@ -347,3 +347,36 @@ def test_hispanic_latino_is_in_the_profile_registry_as_protected():
     assert row["section"] == "protected" and row["protected"] is True
     assert row["example"] and "never inferred" in row["note"]
     assert "hispanic_latino" in profile_template()["protected"]
+
+
+# --- M1: a standing consent is never typed into a text control -------------
+
+_SIGNATURE = ("I certify that the facts set forth in this application are true and complete. "
+              "Please type your full name as your signature.")
+
+
+def _consent_field(kind, options=()):
+    from app.autofill.schema import FieldOption
+    return FormField(key="q9", label=_SIGNATURE, kind=kind, field_class=FieldClass.CONSENT,
+                     required=True, options=[FieldOption(label=o, value=o) for o in options])
+
+
+def test_a_standing_certification_is_never_typed_as_a_signature():
+    from app.autofill.classify import consent_key_for
+    assert consent_key_for(_SIGNATURE) == "truthful_certification"
+    memory = Memory(consents={"truthful_certification": "Agree"})
+    for kind in (FieldKind.TEXT, FieldKind.LONG_TEXT):
+        resolution = memory.resolve(_consent_field(kind))
+        assert resolution.value is None and resolution.needs_review, kind
+        assert resolution.source == FillSource.HUMAN
+        assert "yours to type" in resolution.reason
+
+
+def test_a_standing_certification_still_replays_on_a_tick_box_or_option():
+    memory = Memory(consents={"truthful_certification": "Agree"})
+    assert memory.resolve(_consent_field(FieldKind.BOOLEAN)).value == "Yes"
+    one = memory.resolve(_consent_field(FieldKind.SINGLE_SELECT, ("I Agree",)))
+    assert one.value == "I Agree" and not one.needs_review
+    two = memory.resolve(_consent_field(FieldKind.SINGLE_SELECT, ("Yes", "No")))
+    assert two.value == "Yes" and two.source == FillSource.MEMORY
+    assert memory.resolve(_consent_field(FieldKind.MULTI_SELECT, ("I Agree",))).values == ["I Agree"]
