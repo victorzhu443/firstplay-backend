@@ -2164,6 +2164,21 @@ pattern route it.
 re-checks after the key fix: Decagon 10/10 with the university selected,
 Vital 10 filled / 2 essays, Sail 3/3 through the embedded Apply flow.
 
+**Databricks, read back after the fixes (2026-10-12).** The required sanctions
+disclosure was the real error on Victor's screenshot, not its follow-up:
+with "None of the above" derived from stored citizenship and residence, the
+follow-up's own wording ("if you selected a response other than none of the
+above") makes "Not applicable" the right answer, which is what had been
+ticked. "How did you hear about this job?" now lands on "LinkedIn Job
+Posting" through a fallback list with LinkedIn first — a per-application
+answer the learning loop is told never to remember, because a recruiter
+conversation this time says nothing about next time. Re-plan of the same
+posting: 26 filled, 2 to attach (the undergraduate transcript among them),
+3 for the applicant — the office choice until an `office_preference` list
+is stored, the graduate transcript slot the form marks required while its
+label says "if applicable", and one in-person availability read under
+threshold.
+
 ---
 
 ## Current state
