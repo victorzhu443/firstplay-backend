@@ -25,6 +25,15 @@ os.environ["OPENAI_API_KEY"] = TEST_API_KEY
 # ChatOpenAI — 6 failures that had nothing to do with the code under test.
 os.environ["LLM_PROVIDER"] = "openai"
 
+# The model key is pinned too (audit 2026-10-12, F29). app.jev_client calls
+# load_dotenv() at import, so a developer's real OPENROUTER_API_KEY in .env
+# would otherwise decide whether /plan builds a JevBinder — and that binder
+# would try the network. An empty value is "not configured" to JevClient and
+# blocks load_dotenv (which never overrides a variable that is present, even
+# empty). A test that wants a key sets one through monkeypatch; a test that
+# wants none inherits this.
+os.environ["OPENROUTER_API_KEY"] = ""
+
 # Point the suite at a throwaway database, set before app.db is imported since
 # it binds its engine at import time. Without this the tests share the
 # developer's working firstplay.db: they accumulated rows in it run after run,
@@ -40,6 +49,10 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 # create_all() runs.
 from app.db import Base, engine  # noqa: E402
 from app import models  # noqa: E402,F401
+# Imported now, while the sentinels above are in place, so that both modules'
+# load_dotenv() calls have already run and cannot be reached later by a lazy
+# import inside a test that has unset a variable.
+from app import jev_client, llm_client  # noqa: E402,F401
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -84,10 +97,39 @@ def reset_rate_limiters():
         rate_limit.pipeline_limit,
         rate_limit.llm_limit,
         rate_limit.ingest_limit,
+        rate_limit.autofill_limit,
     ):
         dependency.limiter.reset()
 
     yield
+
+
+@pytest.fixture(autouse=True)
+def reset_autofill_process_state(monkeypatch):
+    """Fresh theme/option caches and model-status records for every test.
+
+    The autofill router holds process-wide state on purpose (a theme cache
+    shared across callers, the last model error for /health). Shared across
+    tests it is an order dependency: a test that tripped the model path left
+    `model_degraded` true for the next one, and a cached theme or option
+    match from one test answered a question in another without a model call
+    being observed (audit 2026-10-12, F29). The caches are replaced rather
+    than cleared so a test keeping a reference to the old one is unaffected.
+    """
+    from app.autofill.jev_binder import OptionCache, ThemeCache
+    from app.routers import autofill as router
+
+    monkeypatch.setattr(router, "_THEME_CACHE", ThemeCache())
+    monkeypatch.setattr(router, "_OPTION_CACHE", OptionCache())
+    router._MODEL_STATUS.clear()
+    router._MODEL_STATUS.update({"last_error": None, "last_error_at": None, "last_ok_at": None})
+    router._CALLER_STATUS.clear()
+    router._MODEL_SEQ["n"] = 0
+    yield
+    router._MODEL_STATUS.clear()
+    router._MODEL_STATUS.update({"last_error": None, "last_error_at": None, "last_ok_at": None})
+    router._CALLER_STATUS.clear()
+    router._MODEL_SEQ["n"] = 0
 
 
 @pytest.fixture(autouse=True)
@@ -157,3 +199,16 @@ def dummy_openai_key(monkeypatch):
     tests that run after it. monkeypatch undoes the change automatically.
     """
     monkeypatch.setenv("OPENAI_API_KEY", TEST_API_KEY)
+
+
+@pytest.fixture(autouse=True)
+def no_model_key_unless_set(monkeypatch):
+    """Every test starts without an OpenRouter key (audit 2026-10-12, F29).
+
+    Set, not deleted: an absent variable is one a later load_dotenv() would
+    fill from a developer's .env, while an empty one is left alone and reads
+    as "not configured". A test that needs the model path configured sets
+    `OPENROUTER_API_KEY` itself (the endpoint tests use "sk-or-test-…") and
+    must then fake the client, since a configured JevBinder calls the network.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
