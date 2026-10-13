@@ -24,6 +24,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from app.autofill.classify import classify
+from app.autofill.greenhouse import _as_dict, _as_list
 from app.autofill.schema import FieldKind, FieldOption, FormField, FormSchema
 
 #: The query the page itself sends, reconstructed from the bundle's AST.
@@ -83,16 +84,22 @@ def parse_ashby_posting(payload: Dict[str, Any], *, org: Optional[str] = None) -
     and the form does not require them. Deactivated fields likewise.
     """
     posting = _posting(payload)
-    form = posting.get("applicationForm") or {}
+    form = _as_dict(posting.get("applicationForm"), "form.applicationForm")
     fields: List[FormField] = []
 
-    for section in form.get("sections") or []:
+    # Shape-checked node by node: a section, entry, field or option that is
+    # not an object is a 400 naming the path, not a 500 (audit F11).
+    for s_index, section in enumerate(_as_list(form.get("sections"), "form.applicationForm.sections")):
+        section_path = "form.applicationForm.sections[{}]".format(s_index)
+        section = _as_dict(section, section_path)
         if section.get("isHidden"):
             continue
-        for entry in section.get("fieldEntries") or []:
+        for e_index, entry in enumerate(_as_list(section.get("fieldEntries"), section_path + ".fieldEntries")):
+            entry_path = "{}.fieldEntries[{}]".format(section_path, e_index)
+            entry = _as_dict(entry, entry_path)
             if entry.get("isHidden"):
                 continue
-            field = entry.get("field") or {}
+            field = _as_dict(entry.get("field"), entry_path + ".field")
             if field.get("isDeactivated"):
                 continue
             key = str(field.get("path") or field.get("id") or "")
@@ -101,7 +108,8 @@ def parse_ashby_posting(payload: Dict[str, Any], *, org: Optional[str] = None) -
             kind = _KIND_BY_TYPE.get(str(field.get("type") or ""), FieldKind.TEXT)
             options = [
                 FieldOption(label=str(o.get("label", "")), value=str(o.get("value", "")))
-                for o in field.get("selectableValues") or []
+                for o in (_as_dict(raw, entry_path + ".field.selectableValues[]")
+                          for raw in _as_list(field.get("selectableValues"), entry_path + ".field.selectableValues"))
                 if not o.get("isArchived")
             ]
             # A ValueSelect with one option and a checkbox-like title is an

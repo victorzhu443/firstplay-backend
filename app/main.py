@@ -175,6 +175,52 @@ class RequestIdMiddleware:
             request_id_var.reset(token)
 
 
+#: Largest request body the autofill endpoints accept. The largest frozen
+#: corpus form is 172 KB of board-API JSON (1,269 Greenhouse postings, p99
+#: 157 KB; Ashby max 94 KB) plus a profile of a few KB; one megabyte is six
+#: times that. Beyond it a stranger is buying worker time, not a plan
+#: (audit 2026-10-12, F10).
+AUTOFILL_MAX_BODY_BYTES = int(os.getenv("AUTOFILL_MAX_BODY_BYTES", str(1024 * 1024)))
+_BODY_LIMITED_PATHS = frozenset({"/api/autofill/plan", "/api/autofill/learn"})
+
+
+class BodySizeLimitMiddleware:
+    """413 for a declared body over the limit, 411 for an undeclared one.
+
+    Decided from the headers alone, before a byte of the body is read or
+    JSON-parsed: every real client of these two endpoints (the extension's
+    `fetch` with a string body, urllib, the test client) declares
+    Content-Length, and uvicorn enforces that the body matches it. A chunked
+    body with no length is refused rather than counted, so the limit is
+    exact and nothing is buffered to find out.
+    """
+
+    def __init__(self, app, limit: int = None, paths=_BODY_LIMITED_PATHS):
+        self.app = app
+        self.limit = AUTOFILL_MAX_BODY_BYTES if limit is None else limit
+        self.paths = paths
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path") in self.paths \
+                and scope.get("method", "GET").upper() in ("POST", "PUT", "PATCH"):
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []}
+            declared = headers.get("content-length")
+            if declared is None or not declared.isdigit():
+                response = JSONResponse(status_code=411, content={
+                    "detail": "Content-Length is required on this endpoint."})
+                await response(scope, receive, send)
+                return
+            if int(declared) > self.limit:
+                response = JSONResponse(status_code=413, content={
+                    "detail": "Request body of {} bytes exceeds the limit of {} bytes.".format(declared, self.limit)})
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+# Outermost first: the id wraps everything, the size check sits inside it so
+# a refused body still gets a request id.
+app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(RequestIdMiddleware)
 
 

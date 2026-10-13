@@ -234,3 +234,48 @@ def test_request_body_422s_do_not_echo_the_input():
     assert rows and all(set(row) == {"loc", "msg", "type"} for row in rows)
     assert "ada@example.com" not in response.text
     assert rows[0]["loc"] == ["body", "ats"]
+
+
+# --- the three model flags have one meaning each (tests stream, F19) --------------
+
+def test_a_breaker_trip_in_a_sequential_gate_reports_model_skipped(monkeypatch, model_configured):
+    """`_decide` trips on a timeout and re-raises; when that happens in a
+    sequential gate the error propagates out of `resolve_form` and the
+    router rebuilds deterministically. The response must still say the
+    breaker tripped (`model_skipped`), that a call failed (`model_failed`,
+    `model_error`), and the caller's record is degraded — one meaning per
+    flag, documented on AutofillResponse."""
+    from app.autofill import jev_binder
+
+    def boom(self, labels):
+        self.tripped = True
+        self._record_failure("classify 2 label(s)", JevServiceError("classify: decisions call timed out after 4.0s"))
+        raise JevServiceError("classify 2 label(s): decisions call timed out after 4.0s")
+    monkeypatch.setattr(jev_binder.JevBinder, "classify_themes", boom)
+
+    body = client.post("/api/autofill/plan", json={"ats": "greenhouse", "form": FORM, "profile": PROFILE}).json()
+
+    assert body["model_skipped"] is True
+    assert body["model_failed"] is True and body["model_error"] == "upstream timed out"
+    assert body["model_degraded"] is True
+    assert body["jev_calls"] == 0 and body["cost_usd"] == 0.0
+    assert body["summary"]["filled"] >= 1
+
+
+def test_learn_counts_the_episode_it_kept_when_the_judge_fails(monkeypatch, model_configured):
+    """`learn` saves the episode into the Memory before the judge runs; the
+    fallback used to re-run over that same Memory, find the episode stored,
+    and report `learned: 0` for an episode it had kept."""
+    from app.autofill import jev_binder
+    from app.autofill.memory import Memory
+
+    def boom(self, state, items):
+        raise JevError("judge 1 correction(s) for memory: boom")
+    monkeypatch.setattr(jev_binder.JevBinder, "judge_observations", boom)
+
+    body = client.post("/api/autofill/learn", json={
+        "profile": PROFILE, "observations": [{"label": "What is your T-shirt size?", "user_value": "M", "kind": "text"}]}).json()
+
+    assert body["learned"] == 1
+    assert Memory(**body["profile"]).recall_answer("What is your T-shirt size?") == "M"
+    assert body["model_failed"] is True and body["jev_calls"] == 0

@@ -23,6 +23,35 @@ from app.autofill.classify import classify
 from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField, FormSchema
 from app.autofill.themes import country_in_text
 
+
+class MalformedPayload(ValueError):
+    """An ATS payload that is JSON but not the shape the adapter reads.
+
+    Raised with the path of the offending node (`form.questions[2].fields`)
+    so the router can answer 400 and name it. Before this, eight such shapes
+    reached `.get` on a string and came back as 500s with a traceback in
+    the log (audit 2026-10-12, F11; probe p14). Shared with the Ashby
+    adapter, which is why it lives at module level here.
+    """
+
+
+def _as_list(value: Any, path: str) -> List[Any]:
+    """`value` as a list; None is empty; anything else is malformed."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    raise MalformedPayload("{}: expected a list, got {}".format(path, type(value).__name__))
+
+
+def _as_dict(value: Any, path: str) -> Dict[str, Any]:
+    """`value` as a dict; None is empty; anything else is malformed."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    raise MalformedPayload("{}: expected an object, got {}".format(path, type(value).__name__))
+
 #: Observed across 40 live postings; no other type appeared. `multi_value_
 #: multi_select` is included from the documented vocabulary though it did not
 #: occur in the sample.
@@ -35,7 +64,7 @@ _KIND_BY_TYPE = {
 }
 
 
-def _options(raw_values: List[Dict[str, Any]]) -> List[FieldOption]:
+def _options(raw_values: Any, path: str = "values") -> List[FieldOption]:
     """Option label/value pairs, with the value coerced to a string.
 
     Greenhouse types option values inconsistently — a yes/no question uses the
@@ -46,7 +75,8 @@ def _options(raw_values: List[Dict[str, Any]]) -> List[FieldOption]:
     """
     options = []
 
-    for value in raw_values or []:
+    for index, value in enumerate(_as_list(raw_values, path)):
+        value = _as_dict(value, "{}[{}]".format(path, index))
         options.append(
             FieldOption(label=str(value.get("label", "")), value=str(value.get("value", "")))
         )
@@ -55,7 +85,7 @@ def _options(raw_values: List[Dict[str, Any]]) -> List[FieldOption]:
 
 
 def _fields_from_question(
-    question: Dict[str, Any], *, from_compliance_block: bool
+    question: Any, *, from_compliance_block: bool, path: str = "question"
 ) -> List[FormField]:
     """Flatten one Greenhouse question into normalised fields.
 
@@ -63,12 +93,14 @@ def _fields_from_question(
     (an upload) and `resume_text` (a paste alternative). They share the
     question's label and required flag but are separate controls.
     """
-    label = (question.get("label") or "").strip()
+    question = _as_dict(question, path)
+    label = str(question.get("label") or "").strip()
     required = bool(question.get("required"))
 
     fields = []
 
-    for raw in question.get("fields") or []:
+    for index, raw in enumerate(_as_list(question.get("fields"), path + ".fields")):
+        raw = _as_dict(raw, "{}.fields[{}]".format(path, index))
         kind = _KIND_BY_TYPE.get(raw.get("type"))
 
         if kind is None:
@@ -77,15 +109,15 @@ def _fields_from_question(
             # silently scores itself against a form it has quietly shrunk.
             kind = FieldKind.TEXT
 
-        options = _options(raw.get("values"))
+        options = _options(raw.get("values"), "{}.fields[{}].values".format(path, index))
 
         fields.append(
             FormField(
-                key=raw.get("name") or "",
+                key=str(raw.get("name") or ""),
                 label=label,
                 kind=kind,
                 field_class=classify(
-                    raw.get("name") or "",
+                    str(raw.get("name") or ""),
                     label,
                     kind,
                     option_count=len(options),
@@ -99,16 +131,21 @@ def _fields_from_question(
     return fields
 
 
+def _location_text(payload: Dict[str, Any]) -> str:
+    """The posting's location and office names, joined."""
+    names = [str(_as_dict(payload.get("location"), "form.location").get("name") or "")]
+    for index, office in enumerate(_as_list(payload.get("offices"), "form.offices")):
+        names.append(str(_as_dict(office, "form.offices[{}]".format(index)).get("name") or ""))
+    return " ".join(names)
+
+
 def _is_remote(payload: Dict[str, Any]) -> Optional[bool]:
     """Whether the ATS describes this posting as remote.
 
     Returns None rather than False when nothing says either way, so a caller
     can tell "stated to be onsite" from "not stated".
     """
-    text = " ".join(
-        [(payload.get("location") or {}).get("name") or ""]
-        + [(o or {}).get("name") or "" for o in payload.get("offices") or []]
-    ).lower()
+    text = _location_text(payload).lower()
 
     if "remote" in text:
         return True
@@ -128,16 +165,19 @@ def _demographic_fields(payload: Dict[str, Any]) -> List[FormField]:
     8805925002 (2026-09-27): six questions, two of them multi-select. Treated
     as LEGAL on the strength of arriving in this block, like compliance.
     """
-    block = payload.get("demographic_questions") or {}
+    block = _as_dict(payload.get("demographic_questions"), "form.demographic_questions")
     fields = []
 
-    for question in block.get("questions") or []:
+    for index, question in enumerate(_as_list(block.get("questions"), "form.demographic_questions.questions")):
+        path = "form.demographic_questions.questions[{}]".format(index)
+        question = _as_dict(question, path)
         key = "demographic_answers.{}".format(question.get("id"))
-        label = (question.get("label") or "").strip()
+        label = str(question.get("label") or "").strip()
         kind = _KIND_BY_TYPE.get(question.get("type"), FieldKind.SINGLE_SELECT)
         options = [
-            FieldOption(label=str(o.get("label", "")).strip(), value=str(o.get("id", "")))
-            for o in question.get("answer_options") or []
+            FieldOption(label=str(_as_dict(o, path + ".answer_options[]").get("label", "")).strip(),
+                        value=str(_as_dict(o, path + ".answer_options[]").get("id", "")))
+            for o in _as_list(question.get("answer_options"), path + ".answer_options")
         ]
         fields.append(FormField(
             key=key, label=label, kind=kind,
@@ -168,12 +208,14 @@ def _education_fields(payload: Dict[str, Any]) -> List[FormField]:
         return []
 
     required = mode == "education_required"
-    extra = payload.get("education_options") or {}
+    extra = _as_dict(payload.get("education_options"), "form.education_options")
 
-    def select(key: str, label: str, items: Optional[List[Dict[str, Any]]],
+    def select(key: str, label: str, items: Any,
                fallback_options: Optional[List[FieldOption]] = None) -> FormField:
-        options = [FieldOption(label=str(i.get("text", "")), value=str(i.get("id", "")))
-                   for i in items or []] or (fallback_options or [])
+        path = "form.education_options." + key
+        options = [FieldOption(label=str(_as_dict(i, path + "[]").get("text", "")),
+                               value=str(_as_dict(i, path + "[]").get("id", "")))
+                   for i in _as_list(items, path)] or (fallback_options or [])
         kind = FieldKind.SINGLE_SELECT if options else FieldKind.TEXT
         return FormField(key=key, label=label, kind=kind,
                          field_class=classify(key, label, kind, option_count=len(options)),
@@ -243,12 +285,15 @@ def _location_fields(payload: Dict[str, Any]) -> List[FormField]:
     """
     fields = []
 
-    for question in payload.get("location_questions") or []:
-        for raw in question.get("fields") or []:
+    for q_index, question in enumerate(_as_list(payload.get("location_questions"), "form.location_questions")):
+        path = "form.location_questions[{}]".format(q_index)
+        question = _as_dict(question, path)
+        for f_index, raw in enumerate(_as_list(question.get("fields"), path + ".fields")):
+            raw = _as_dict(raw, "{}.fields[{}]".format(path, f_index))
             if raw.get("type") == "input_hidden":
                 continue
-            key = raw.get("name") or ""
-            label = (question.get("label") or "").strip()
+            key = str(raw.get("name") or "")
+            label = str(question.get("label") or "").strip()
             kind = _KIND_BY_TYPE.get(raw.get("type"), FieldKind.TEXT)
             fields.append(FormField(
                 key=key, label=label, kind=kind,
@@ -271,14 +316,18 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
     """
     fields: List[FormField] = []
 
-    for question in payload.get("questions") or []:
-        fields.extend(_fields_from_question(question, from_compliance_block=False))
+    for index, question in enumerate(_as_list(payload.get("questions"), "form.questions")):
+        fields.extend(_fields_from_question(question, from_compliance_block=False,
+                                            path="form.questions[{}]".format(index)))
 
     # Compliance blocks arrive separately and are trusted as legal on the
     # strength of arriving there, rather than on their wording.
-    for block in payload.get("compliance") or []:
-        for question in block.get("questions") or []:
-            fields.extend(_fields_from_question(question, from_compliance_block=True))
+    for b_index, block in enumerate(_as_list(payload.get("compliance"), "form.compliance")):
+        block_path = "form.compliance[{}]".format(b_index)
+        block = _as_dict(block, block_path)
+        for q_index, question in enumerate(_as_list(block.get("questions"), block_path + ".questions")):
+            fields.extend(_fields_from_question(question, from_compliance_block=True,
+                                                path="{}.questions[{}]".format(block_path, q_index)))
 
     # Rendered before `race` on the page, so placed before it in the plan.
     hispanic = _hispanic_field(fields)
@@ -299,11 +348,6 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
         title=payload.get("title"),
         apply_url=payload.get("absolute_url"),
         remote=_is_remote(payload),
-        country=country_in_text(
-            " ".join(
-                [(payload.get("location") or {}).get("name") or ""]
-                + [(o or {}).get("name") or "" for o in payload.get("offices") or []]
-            )
-        ),
+        country=country_in_text(_location_text(payload)),
         fields=fields,
     )
