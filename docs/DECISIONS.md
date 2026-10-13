@@ -2631,6 +2631,26 @@ same way, 14 unlisted-country reviews, 2 typed "None"s). Corpus class and key
 movement across the whole classifier stream: 2 labels / 5 instances, all F2.
 With-model coverage is recorded below once the run finishes.
 
+**Live, the same evening, on 0.4.52 against the hosted backend** (window
+on screen; read back from each page's record and its network log):
+
+| page | check | filled / failed / review | fill | on the wire |
+|---|---|---|---|---|
+| Together AI (Greenhouse, EEO block) | dom, no press | 22 / 0 / 8 | 1,026 ms | GETs to the lookups, Greenhouse's own analytics POST, nothing else |
+| General Matter (Greenhouse, EEO block) | dom, no press | 25 / 0 / 8 | 906 ms | same |
+| Forus (Ashby) | ashby-local, no press | 4 / 0 / 2 | 107 ms | — |
+| Bitmovin's own careers page (Greenhouse embed) | dom, in the frame | 12 / 0 / 2 | 722 ms | the top document's inputs held none of the plan's values |
+
+The Hispanic/Latino question stayed amber with `race` unmounted on both EEO
+boards, as designed while the answer is unset. Nothing a page could read
+as a value appears in any record. One defect found: react-select's hidden
+`required` decoy input surfaced in the DOM check as "INPUT · not in plan"
+(three on General Matter, one on Bitmovin) — fixed in 0.4.53. Not yet
+measured: the `wants` versus `dom_wants` fidelity diff (the click mode has
+no UI and is set from the extension's console) and whether Ashby's
+autosave carries the replayed protected answers; both wait for a session
+with the developer flag on.
+
 **Audit claims corrected in the doing.** The 300-option cap (above); F15(a)
 "off-corpus" (24 on-corpus wrong fills); F5's files were already 0600 by
 the time the stream read them (chmod'd by hand after the report); dotenv
