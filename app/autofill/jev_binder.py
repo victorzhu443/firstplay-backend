@@ -29,6 +29,7 @@ import re
 import json
 import logging
 import os
+import threading
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
@@ -260,6 +261,12 @@ class OptionCache:
         self.hits = 0
         self.misses = 0
         self.evicted = 0
+        #: Handlers run in FastAPI's threadpool and the speculative gate runs
+        #: in a pool of its own, so one thread's `get` + `move_to_end` can
+        #: straddle another's eviction of that same key and raise KeyError
+        #: (audit 2026-10-12, F12; the same defect §56 fixed for
+        #: `_CALLER_STATUS`). One lock around every touch of `_entries`.
+        self._lock = threading.Lock()
 
         if path and os.path.exists(path):
             try:
@@ -272,30 +279,35 @@ class OptionCache:
                 logger.warning("Could not read option cache at %s; starting empty", path)
 
     def get(self, signature: str) -> Optional[Tuple[Optional[str], float]]:
-        entry = self._entries.get(signature)
-        if entry is None:
-            self.misses += 1
-            return None
-        self.hits += 1
-        self._entries.move_to_end(signature)
-        return entry
+        with self._lock:
+            entry = self._entries.get(signature)
+            if entry is None:
+                self.misses += 1
+                return None
+            self.hits += 1
+            self._entries.move_to_end(signature)
+            return entry
 
     def put(self, signature: str, label: Optional[str], confidence: float) -> None:
-        self._entries[signature] = (label, confidence)
-        self._entries.move_to_end(signature)
-        while len(self._entries) > self.max_entries:
-            self._entries.popitem(last=False)
-            self.evicted += 1
+        with self._lock:
+            self._entries[signature] = (label, confidence)
+            self._entries.move_to_end(signature)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+                self.evicted += 1
 
     def save(self) -> None:
         if not self.path:
             return
+        with self._lock:
+            snapshot = {k: [v[0], v[1]] for k, v in self._entries.items()}
         with open(self.path, "w") as handle:
-            json.dump({k: [v[0], v[1]] for k, v in self._entries.items()}, handle, indent=1)
+            json.dump(snapshot, handle, indent=1)
 
     @property
     def size(self) -> int:
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
 
 
 def _local_theme(label: str):
