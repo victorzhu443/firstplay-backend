@@ -267,3 +267,62 @@ def test_quantities_and_year_buckets_still_match():
                        options=_options("2025 - 2026", "2027 - 2028", "2029 - 2030"))
     assert match_option("May 2028", ranged).label == "2027 - 2028"
     assert match_term_bucket("May 2028", _options("Earlier than Fall 2027", "Spring 2028", "Later than Summer 2028")).label == "Spring 2028"
+
+
+# --- thousands separators (code audit of 2026-10-12, F32) ---------------------
+
+SALARY_WITH_COMMAS = _options("$40,000 - $55,000", "$55,000 - $70,000", "$70,000+")
+SALARY_PLAIN = _options("$40000 - $55000", "$55000 - $70000", "$70000+")
+SAT_WITH_COMMAS = _options("1,000 - 1,190", "1,200 - 1,390", "1,400 - 1,490", "1,500 - 1,600")
+SAT_PLAIN = _options("1000 - 1190", "1200 - 1390", "1400 - 1490", "1500 - 1600")
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("45000", "$40,000 - $55,000"),       # p20: landed in "$70,000+"
+    ("45,000", "$40,000 - $55,000"),
+    ("$45,000", "$40,000 - $55,000"),
+    ("60000", "$55,000 - $70,000"),
+    ("72000", "$70,000+"),
+    ("$120,000", "$70,000+"),
+    ("1,000,000", "$70,000+"),
+])
+def test_a_salary_lands_in_its_own_bucket_whether_or_not_the_menu_uses_commas(value, expected):
+    """"$70,000+" read as the number 000 "or more", so every salary was the
+    top bucket. The separator is noise inside a number, on either side."""
+    assert match_numeric_bucket(value, SALARY_WITH_COMMAS).label == expected
+    assert match_numeric_bucket(value, SALARY_PLAIN).label == expected.replace(",", "")
+    field = FormField(key="s", label="What are your salary expectations?", kind=FieldKind.SINGLE_SELECT,
+                      options=SALARY_WITH_COMMAS)
+    assert match_option(value, field).label == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1480", "1,400 - 1,490"),
+    ("1,480", "1,400 - 1,490"),
+    ("1200", "1,200 - 1,390"),
+    ("1600", "1,500 - 1,600"),
+])
+def test_a_test_score_lands_in_its_own_bucket_whether_or_not_the_menu_uses_commas(value, expected):
+    """"1,400 - 1,490" parsed as the range 400–1, which contains nothing."""
+    assert match_numeric_bucket(value, SAT_WITH_COMMAS).label == expected
+    assert match_numeric_bucket(value, SAT_PLAIN).label == expected.replace(",", "")
+
+
+@pytest.mark.parametrize("value", ["30000", "30,000", "$39,999"])
+def test_a_salary_below_every_bucket_matches_nothing(value):
+    assert match_numeric_bucket(value, SALARY_WITH_COMMAS) is None
+
+
+def test_a_salary_on_a_shared_boundary_is_ambiguous_and_so_review():
+    """70,000 is inside "$55,000 - $70,000" and "$70,000+" alike; two
+    containing buckets is a choice the applicant makes."""
+    assert match_numeric_bucket("70000", SALARY_WITH_COMMAS) is None
+    assert match_numeric_bucket("70,000", SALARY_WITH_COMMAS) is None
+
+
+def test_a_gap_between_buckets_and_the_other_scales_are_left_alone():
+    """1,495 sits in no SAT bucket, which is review, not the nearest one; a
+    GPA and a percentage still find their own scale."""
+    assert match_numeric_bucket("1,495", SAT_WITH_COMMAS) is None
+    assert match_numeric_bucket("3.8", _options("3.6 or above", "3.0 - 3.5")).label == "3.6 or above"
+    assert match_numeric_bucket("85", _options("80% or above", "70-79%", "3.6 or above")).label == "80% or above"

@@ -24,11 +24,24 @@ from typing import List, Optional, Tuple
 
 from app.autofill.schema import FieldOption
 
-#: "3.6 or above", "80% or above", "3.4 - 3.5", "70-79%", "2.4 or below".
+#: "3.6 or above", "80% or above", "3.4 - 3.5", "70-79%", "2.4 or below",
+#: and a salary band's second currency sign: "$40,000 - $55,000".
 _NUMBER = r"(\d+(?:\.\d+)?)"
-_RANGE = re.compile(_NUMBER + r"\s*(?:-|–|to)\s*" + _NUMBER)
+_RANGE = re.compile(_NUMBER + r"\s*(?:-|–|to)\s*[$€£]?\s*" + _NUMBER)
 _AT_LEAST = re.compile(_NUMBER + r"\s*%?\s*(?:or (?:above|higher|more)|\+|and above)")
 _AT_MOST = re.compile(_NUMBER + r"\s*%?\s*(?:or (?:below|less|lower)|and below)")
+
+#: A thousands separator inside a digit run: "$70,000+", "1,400 - 1,490",
+#: "$1,000,000". Read as written, "$70,000+" was the number 000 "or more",
+#: so every stored salary landed in the top bucket and an SAT menu parsed
+#: as 400–1 (code audit of 2026-10-12, F32). Three digits then a word
+#: boundary, so a decimal comma ("3,8") is left alone.
+_THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}\b)")
+
+
+def _plain(text: str) -> str:
+    """`text` with thousands separators removed from inside its numbers."""
+    return _THOUSANDS.sub("", text or "")
 
 #: A percentage bucket is a different scale from a 4.0 GPA and the two must not
 #: be mixed — "80% or above" and "3.6 or above" can appear in the same list.
@@ -53,7 +66,7 @@ _LATER = re.compile(r"\b(later|after)\b", re.I)
 
 def parse_number(text: str) -> Optional[float]:
     """The first number in a string, or None."""
-    match = re.search(_NUMBER, text or "")
+    match = re.search(_NUMBER, _plain(text))
 
     return float(match.group(1)) if match else None
 
@@ -104,7 +117,7 @@ def match_numeric_bucket(value: str, options: List[FieldOption]) -> Optional[Fie
     hits = []
 
     for option in options:
-        label = option.label
+        label = _plain(option.label)
 
         if bool(_PERCENT.search(label)) != wants_percent:
             continue
