@@ -834,3 +834,19 @@ def test_a_protected_word_in_another_sense_is_never_filled_from_the_stored_answe
     for entry in plan.entries:
         assert entry.value is None and not entry.values and entry.needs_review, entry.label
         assert entry.needs_fact is None, entry.label
+
+
+# --- the bare "Company" alias (binder stream, code audit of 2026-10-12) --------
+
+@pytest.mark.parametrize("label", ["Company", "Company:", "Company *", "Employer"])
+def test_a_bare_company_label_is_an_employment_block_column_not_the_current_employer(label):
+    """An employment-history or reference block's "Company" has no vendor key,
+    so nothing downstream could tell it from a question about the applicant;
+    the alias filled a previous job's row with the current employer."""
+    assert memory_key_for("question_1", label, FieldKind.TEXT) is None
+    assert classify("question_1", label, FieldKind.TEXT) != FieldClass.CORE
+
+
+@pytest.mark.parametrize("label", ["Current Company", "Current company", "Current Employer"])   # "Who is your current employer?" is the theme
+def test_the_current_employer_question_still_keys(label):
+    assert memory_key_for("question_1", label, FieldKind.TEXT) == "current_employer"

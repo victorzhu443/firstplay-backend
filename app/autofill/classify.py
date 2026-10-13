@@ -199,7 +199,11 @@ CORE_LABEL_ALIASES = {
     "current city": "city_of_residence",
     "current company": "current_employer",
     "current employer": "current_employer",
-    "company": "current_employer",
+    # Not the bare "Company": that is the employer column of an employment
+    # or reference block, which has no vendor key the binder's F18 guard
+    # could recognise, and it filled the applicant's current employer into
+    # a previous job's row (code audit of 2026-10-12). 0 bare occurrences
+    # in the corpora; "Current Company" is x25.
     "current title": "current_job_title",
     "current job title": "current_job_title",
     "please provide your linkedin profile": "linkedin",

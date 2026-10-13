@@ -44,3 +44,41 @@ def test_the_reverse_prefix_pass_still_serves_pronouns_and_real_answers():
     assert match_option("he/him/his", _select("He / Him", "She / Her", "They / Them")).label == "He / Him"
     assert match_option("No, I am not", _select("Yes", "No")).label == "No"
     assert match_option("Bachelor's degree in Computer Science", _select("Bachelor's", "Master's")).label == "Bachelor's"
+
+
+# --- polarity of Greenhouse's veteran options (code audit of 2026-10-12) ------
+
+GREENHOUSE_VETERAN = _select("I identify as one or more of the classifications of a protected veteran",
+                             "I am not a protected veteran", "I don't wish to answer")
+
+
+def test_i_identify_as_opens_affirmative_and_i_do_not_identify_opens_negative():
+    from app.autofill.format import _as_bool
+    assert _as_bool("I identify as one or more of the classifications of a protected veteran") is True
+    assert _as_bool("I do not identify as a protected veteran") is False
+    assert _as_bool("I don't identify as a protected veteran") is False
+    assert _as_bool("I don't wish to answer") is None
+    assert match_option("Yes", GREENHOUSE_VETERAN).label.startswith("I identify")
+    assert match_option("No", GREENHOUSE_VETERAN).label == "I am not a protected veteran"
+    assert match_option("I identify as a protected veteran", GREENHOUSE_VETERAN).label.startswith("I identify")
+    assert match_option("Prefer not to say", GREENHOUSE_VETERAN).label == "I don't wish to answer"
+
+
+def test_a_stored_none_on_a_yes_no_question_is_review_not_no():
+    """Expected from the F2 rule: "Do you have any deadlines?" with
+    timeline_notes "None" was a lucky "No"; now the matcher declines and the
+    field is reviewed with the value intact (OPTION_MISMATCH)."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.classify import classify
+    from app.autofill.format import OPTION_MISMATCH
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    label = "Do you have any deadlines we should be aware of?"
+    field = FormField(key="q1", label=label, kind=FieldKind.SINGLE_SELECT,
+                      options=[FieldOption(label=o, value=o) for o in ("Yes", "No")],
+                      field_class=classify("q1", label, FieldKind.SINGLE_SELECT, option_count=2))
+    entry = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=[field]),
+                         Memory(preferences={"timeline_notes": "None"}), binder=DeterministicBinder()).entries[0]
+    assert entry.value != "No"
+    assert entry.needs_review and entry.reason == OPTION_MISMATCH
