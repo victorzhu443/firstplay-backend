@@ -2715,11 +2715,20 @@ round `R50`, with `version`; draw in `survey/draws/draw_r50.json`.
   profile is missing those facts, and the popup has **61 queued questions**
   from this round alone that Victor has not answered. The engine asked; the
   answers are owed.
-- *Three engine gaps, each small, fixed on the backend branch:* "Full Legal
-  Name" had no alias (xAI, review at 50%); "Please select the month you
-  will be able to start" with month-name options could not take a stored
-  month-year; "Will you be graduating in 2028?" / "…in December 2027 or May
-  2028?" are computable from the graduation date and went to review.
+- *Three engine gaps, each small, fixed here (tests 1,210 → 1,284, 74
+  near-miss cases; corpus movement 4 labels / 7 instances, all "Legal
+  Name" shapes to `full_name`):* "Full Legal Name" had no alias (xAI,
+  review at 50%); "Please select the month you will be able to start" with
+  month-name options matched a stored month-year only by the accident of a
+  prefix — a month pass now decides it, and on the way a real precision bug
+  fell out (stored "Aug 2027" against a month-year menu picked "June 2027"
+  because both read as "summer 2027"; a (month, year) equality pass now
+  runs before the season buckets); "Will you be graduating in 2028?" /
+  "…in December 2027 or May 2028?" / "…by June 2027?" are computed from the
+  graduation date at the question's granularity, review when the question
+  names no date or a degree level the applicant is not in. The Country entry
+  carries `iso2` and `dial_code` (UK as GB) for localised boards.
+  Details and what was deliberately left alone: `docs/r50-engine-gaps.md`.
 - *What stays review by design:* 49 essays, 27 experience questions ("what
   tools have you used…"), 13 consents and attestations the extension's
   profile copy lacks, 7 legal/clearance questions (FINRA, DOD clearance,
@@ -2750,7 +2759,7 @@ target met".
 | **Live, Greenhouse** | 117 live boards, 1,866 filled, 21 "known but could not be entered", all 21 before 0.4.19 by round order (`survey/`); the hundred of R48-2 has 1 of 100 recorded |
 | **Live, Ashby** | A1: 100 organisations, 702 filled, 246 review; R48-2: 100 organisations, 719 / 250 / 1 could-not-enter, median fill 110 ms |
 | **Learning loop** | offline replay 93.2% (1,679 of 1,802 later occurrences, 991 forms, re-run 2026-10-12); counts fills, not correct fills; no live metric yet; one self-poisoning found and closed (§54) |
-| **Tests** | 1,210, offline, no credentials, ~15 s |
+| **Tests** | 1,284, offline, no credentials, ~14 s |
 
 ## Open, with numbers attached
 
