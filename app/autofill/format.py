@@ -12,9 +12,9 @@ answer on an application, so anything short of an unambiguous match returns None
 and the field goes to review instead.
 """
 import re
-from typing import Optional
+from typing import Optional, Tuple
 
-from app.autofill.buckets import match_numeric_bucket, match_term_bucket
+from app.autofill.buckets import match_numeric_bucket, match_term_bucket, parse_month_year, month_span
 from app.autofill.schema import FieldOption, FormField
 
 #: Set as a resolution's reason when a stored answer exists but matches no
@@ -142,6 +142,8 @@ _COUNTRY_ALIASES = {
     "great britain": "united kingdom", "britain": "united kingdom",
     "england": "united kingdom",
     "uae": "united arab emirates",
+    "the netherlands": "netherlands", "holland": "netherlands",
+    "deutschland": "germany",
     "south korea": "korea republic of", "republic of korea": "korea republic of",
 }
 
@@ -154,6 +156,36 @@ def canonical_country(text: Optional[str]) -> Optional[str]:
         return None
 
     return _COUNTRY_ALIASES.get(normalized, normalized)
+
+
+#: ISO 3166-1 alpha-2 code and international dialling prefix, by canonical
+#: country name. Haven Interactive's French Greenhouse board (R50 live round)
+#: rendered the country select as "États-Unis +1": the stored "United States"
+#: matched nothing, and the one stable token across locales is the dial
+#: code. Covers every country `themes.country_in_text` knows plus the
+#: countries applicants to US internships commonly live in; a country not
+#: listed simply carries no codes and the value stands on its own. The
+#: United Kingdom's ISO code is GB (themes uses "UK" for its own purposes).
+_COUNTRY_CODES = {
+    "united states": ("US", "+1"), "canada": ("CA", "+1"), "mexico": ("MX", "+52"),
+    "united kingdom": ("GB", "+44"), "ireland": ("IE", "+353"), "germany": ("DE", "+49"),
+    "france": ("FR", "+33"), "india": ("IN", "+91"), "spain": ("ES", "+34"), "italy": ("IT", "+39"),
+    "netherlands": ("NL", "+31"), "belgium": ("BE", "+32"), "switzerland": ("CH", "+41"),
+    "austria": ("AT", "+43"), "portugal": ("PT", "+351"), "sweden": ("SE", "+46"), "norway": ("NO", "+47"),
+    "denmark": ("DK", "+45"), "finland": ("FI", "+358"), "poland": ("PL", "+48"), "turkey": ("TR", "+90"),
+    "israel": ("IL", "+972"), "united arab emirates": ("AE", "+971"), "australia": ("AU", "+61"),
+    "new zealand": ("NZ", "+64"), "singapore": ("SG", "+65"), "china": ("CN", "+86"), "japan": ("JP", "+81"),
+    "korea republic of": ("KR", "+82"), "taiwan": ("TW", "+886"), "hong kong": ("HK", "+852"),
+    "philippines": ("PH", "+63"), "vietnam": ("VN", "+84"), "pakistan": ("PK", "+92"),
+    "bangladesh": ("BD", "+880"), "nigeria": ("NG", "+234"), "south africa": ("ZA", "+27"),
+    "brazil": ("BR", "+55"), "argentina": ("AR", "+54"), "colombia": ("CO", "+57"), "chile": ("CL", "+56"),
+}
+
+
+def country_codes(value: Optional[str]) -> Optional[Tuple[str, str]]:
+    """(iso2, dial code) for a stored country, or None when it is not in the table."""
+    canonical = canonical_country(value)
+    return _COUNTRY_CODES.get(canonical) if canonical else None
 
 
 def match_country(value: Optional[str], field: FormField) -> Optional[FieldOption]:
@@ -255,6 +287,21 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
     if bucket is not None:
         return bucket
 
+    # A stored month-and-year against options that are themselves
+    # month-and-years ("June 2027" / "July 2027" / "August 2027"): the same
+    # month and year, or nothing. Before the term buckets, which read both
+    # sides as seasons and picked "June 2027" for a stored "Aug 2027" (R50,
+    # found while adding the month pass below). Only when the menu is dated
+    # by month: season menus ("Spring 2028") keep the bucket arithmetic.
+    month_year = parse_month_year(value)
+    if month_year is not None:
+        dated = [(o, parse_month_year(o.label)) for o in field.options]
+        if any(parsed is not None for _o, parsed in dated):
+            same = [o for o, parsed in dated if parsed == month_year]
+            if len(same) == 1:
+                return same[0]
+            return None
+
     bucket = match_term_bucket(value, field.options)
     if bucket is not None:
         return bucket
@@ -275,6 +322,23 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
         same_year = [o for o in field.options if normalize_value(o.label) == year.group(0)]
         if len(same_year) == 1:
             return same_year[0]
+
+    # And the symmetric case (R50 live round): a stored month-and-year
+    # ("August 2027", "Aug 2027", "08/2027") against a list of bare months,
+    # "Please select the month you will be able to start" (January …
+    # December). The month alone is the answer. A month *range* option
+    # ("January–March") counts only when the stored month falls inside it,
+    # and the winner must be unique: overlapping ranges are the applicant's
+    # call. Options carrying a year or any other words are not months and
+    # are left to the exact pass above.
+    if month_year is not None:
+        month = month_year[0]
+        spans = [(o, month_span(o.label)) for o in field.options]
+        if any(span is not None for _o, span in spans):
+            inside = [o for o, span in spans if span is not None and _month_in_span(month, span)]
+            if len(inside) == 1:
+                return inside[0]
+            return None
 
     # A stored answer that is a unique prefix of exactly one option label.
     prefix = [o for o in field.options if normalize_value(o.label).startswith(target)]
@@ -304,6 +368,14 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
         return contained[0]
 
     return None
+
+
+def _month_in_span(month: int, span: "Tuple[int, int]") -> bool:
+    """Whether `month` (1-12) falls in an inclusive span, wrapping past December."""
+    low, high = span
+    if low <= high:
+        return low <= month <= high
+    return month >= low or month <= high
 
 
 def option_for_bool(answer: bool, field: FormField) -> Optional[FieldOption]:

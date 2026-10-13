@@ -173,6 +173,15 @@ CORE_LABEL_ALIASES = {
     # standard ones; the stored name is the legal one.
     "legal first name": "first_name",
     "legal last name": "last_name",
+    # xAI (Greenhouse, R50 live round): "Full Legal Name" as a custom
+    # question went to review at p=0.50 with the whole name on file. The
+    # stored name is the legal one, composed from first/last
+    # (`Memory.full_name`). Not "Full Legal Name in Native Language": that
+    # asks for a different string and stays with the applicant.
+    "full legal name": "full_name",
+    "legal name": "full_name",
+    "legal full name": "full_name",
+    "full name legal": "full_name",
     "preferred first name": "preferred_first_name",   # x72, the single largest
     "preferred name": "preferred_first_name",
     # Asked alongside the first-name variant. Its own key rather than an alias
@@ -307,7 +316,14 @@ CORE_LABEL_PATTERNS = (
     (re.compile(r"^(your |please (provide|include|share|enter) (your )?|what is your )?e ?mail( address)?$", re.I), "email"),
     (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(first|given) name$", re.I), "first_name"),
     (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(last|family) name$", re.I), "last_name"),
-    (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(full )?name$", re.I), "full_name"),
+    # "Full Name (as it appears on your passport)" — the parenthetical is
+    # flattened by `normalize_label`, so the tail is matched as words. Only
+    # an "as it appears / shown / written on|in …" tail: "Full Legal Name in
+    # Native Language" and "Name of your reference" end differently and
+    # must not reach the stored name (R50 near misses).
+    (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(full |legal |full legal |legal full )?name"
+                r"( as (it appears|it is written|it is shown|it is printed|shown|written|listed|printed) (on|in) [^?]{1,80})?$",
+                re.I), "full_name"),
     (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?(resume|cv|resume cv)$", re.I), "resume_file"),
     (re.compile(r"^(your |please (provide|include|share|enter) (your )?)?preferred (first )?name$", re.I), "preferred_first_name"),
     (re.compile(r"^(github|linkedin|portfolio|website|twitter)(( or | |/|, ?)(github|linkedin|portfolio|website|twitter|etc|url|link|links))+$", re.I), "links_combined"),

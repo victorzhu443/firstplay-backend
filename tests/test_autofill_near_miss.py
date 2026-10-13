@@ -20,7 +20,7 @@ import pytest
 from app.autofill.binder import DeterministicBinder, _THEME_PATTERNS
 from app.autofill.buckets import looks_like_date, match_numeric_bucket, match_term_bucket
 from app.autofill.format import match_option
-from app.autofill.schema import FieldKind, FieldOption, FormField
+from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField
 from app.autofill.themes import QuestionTheme
 
 
@@ -343,3 +343,284 @@ def test_theme_matching_is_bounded_in_label_length():
     assert themed == DeterministicBinder().classify_themes([head])[head]
     assert local == _local_theme(head)
     assert elapsed < 2.0
+
+
+# --- R50 live round, item 1: the legal name is the stored name ----------------
+
+def _core_key(label, kind=FieldKind.TEXT):
+    from app.autofill.classify import classify, memory_key_for
+    return classify("question_1", label, kind).value, memory_key_for("question_1", label, kind)
+
+
+@pytest.mark.parametrize("label", [
+    "Full Legal Name",                                        # xAI, Greenhouse custom question
+    "Legal Name",
+    "Legal Full Name",
+    "Full Name (as it appears on your passport)",
+    "Full name as shown on your government ID",
+    "Your full legal name",
+])
+def test_the_legal_name_is_the_stored_full_name(label):
+    """xAI asked "Full Legal Name" and the plan went to review at p=0.50 with
+    the whole name on file. The stored name *is* the legal one, composed from
+    first and last (`Memory.full_name`)."""
+    from app.autofill.memory import Memory
+
+    assert _core_key(label) == ("core", "full_name"), label
+    assert Memory(facts={"first_name": "Ada", "last_name": "Lovelace"}).lookup("full_name") == "Ada Lovelace"
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("Preferred Name", ("core", "preferred_first_name")),     # not the legal name
+    ("Legal First Name", ("core", "first_name")),             # the existing DRW alias
+    ("Legal Last Name", ("core", "last_name")),
+])
+def test_the_other_name_fields_keep_their_own_keys(label, expected):
+    assert _core_key(label) == expected, label
+
+
+@pytest.mark.parametrize("label", [
+    "Full Legal Name in Native Language",                     # a different string, not the English name
+    "Name of your reference",
+    "Reference's full name",
+    "Legal Name of Employer",
+    "Name of the person who referred you",
+])
+def test_a_name_that_is_not_the_applicants_is_never_the_stored_name(label):
+    """Neither alias nor pattern may reach `full_name` for someone else's name
+    or for the name in another script. These go to review or to the model
+    gate, which costs one glance; the alternative is the applicant's English
+    name typed into a native-language box or a reference slot."""
+    assert _core_key(label)[1] != "full_name", label
+    assert _core_key(label)[0] != "core", label
+
+
+# --- R50 live round, item 2: a stored month-year against a month menu ---------
+
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August",
+          "September", "October", "November", "December")
+
+
+def _month_field(*labels):
+    return FormField(key="m", label="Please select the month you will be able to start",
+                     kind=FieldKind.SINGLE_SELECT, options=_options(*labels))
+
+
+@pytest.mark.parametrize("value", ["August 2027", "Aug 2027", "Aug. 2027", "August 1, 2027", "08/2027", "8/2027", "2027-08", "2027-08-01"])
+def test_a_stored_month_year_matches_a_bare_month_option_by_its_month(value):
+    """"Please select the month you will be able to start" (January … December)
+    against a stored earliest start in month-year shape. Full names already
+    matched by accident through the reverse-prefix pass; abbreviated and
+    numeric shapes did not. The month is the answer, in both spellings."""
+    assert match_option(value, _month_field(*MONTHS)).label == "August"
+    assert match_option(value, _month_field(*[m[:3] for m in MONTHS])).label == "Aug"
+
+
+def test_a_stored_month_year_still_matches_a_year_only_menu_by_its_year():
+    """The other half, kept from §53: the year alone on a list of years."""
+    assert match_option("August 2027", _month_field("2026", "2027", "2028")).label == "2027"
+    assert match_option("08/2027", _month_field("2026", "2027", "2028")).label == "2027"
+
+
+def test_a_month_range_menu_matches_only_when_exactly_one_range_holds_the_month():
+    quarters = _month_field("January–March", "April–June", "July–September", "October–December")
+    assert match_option("August 2027", quarters).label == "July–September"
+    assert match_option("Dec 2027", quarters).label == "October–December"
+    assert match_option("Nov 2027", _month_field("November to February", "March to October")).label == "November to February"
+    # Two ranges hold May: the applicant's call, not the engine's.
+    overlapping = _month_field("January - June", "April - September", "October - December")
+    assert match_option("May 2027", overlapping) is None
+    assert match_option("August 2027", overlapping).label == "April - September"
+
+
+@pytest.mark.parametrize("value", ["Summer 2027", "2027", "ASAP", "N/A", "Immediately", "Fall 2027"])
+def test_a_value_that_names_no_month_never_selects_a_month(value):
+    """A season, a bare year or a non-date carries no month: nothing is
+    selected and the field goes to the option-translation gate or review."""
+    assert match_option(value, _month_field(*MONTHS)) is None
+    assert match_option(value, _month_field("January–March", "April–June", "July–September", "October–December")) is None
+
+
+def test_a_month_year_menu_is_matched_by_month_and_year_never_by_season():
+    """Pre-existing, found while adding the month pass: a stored "Aug 2027"
+    against "June 2027 / July 2027 / August 2027" picked June 2027 — the
+    term buckets read both sides as "summer 2027" and took the first. Same
+    month and year, or nothing."""
+    dated = _month_field(*["{} 2027".format(m) for m in MONTHS])
+    assert match_option("Aug 2027", dated).label == "August 2027"
+    assert match_option("August 1, 2027", dated).label == "August 2027"
+    assert match_option("08/2027", dated).label == "August 2027"
+    assert match_option("August 2028", dated) is None                       # right month, wrong year
+    assert match_option("Aug 2027", _month_field("June 2027", "July 2027", "Other")) is None
+    # Season menus keep the bucket arithmetic (DECISIONS: Spring/Summer buckets).
+    assert match_option("May 2028", _month_field("Fall 2027", "Spring 2028", "Later than Summer 2028")).label == "Spring 2028"
+
+
+def test_a_bare_month_option_menu_does_not_catch_other_dated_answers():
+    """"Graduation Date" as a text field and a stored date on a non-month
+    menu are unchanged: the pass only runs when some option *is* a month."""
+    from app.autofill.memory import Memory
+    text = FormField(key="g", label="Graduation Date", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING)
+    assert text.options == [] and match_option("May 2028", text) is None
+    assert match_option("May 2028", _month_field("Yes", "No")) is None
+
+
+# --- R50 live round, item 3: graduation yes/no computed from the stored date --
+
+def _yes_no(label, kind=FieldKind.SINGLE_SELECT):
+    options = _options("Yes", "No") if kind == FieldKind.SINGLE_SELECT else []
+    return FormField(key="g", label=label, kind=kind, options=options, field_class=FieldClass.SCREENING)
+
+
+def _grad(label, memory, kind=FieldKind.SINGLE_SELECT):
+    from app.autofill.binder import _graduation_by_date_answer
+    return _graduation_by_date_answer(_yes_no(label, kind), memory)
+
+
+BS_MAY_2028 = {"graduation_date": "May 2028", "degree": "BS Computer Science"}
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("Will you be graduating in 2028?", "Yes"),                                        # Lendable (Ashby)
+    ("Will you be graduating in 2027?", "No"),
+    ("Are you graduating in December 2027 or May 2028?", "Yes"),
+    ("Are you graduating in December 2027 or June 2028?", "No"),
+    ("Are you expecting to graduate in 2028 or 2029?", "Yes"),
+    ("If you are in a Bachelor's program, do you graduate by June 2027?", "No"),       # Enova
+    ("If you are in a Bachelor's program, do you graduate by June 2028?", "Yes"),
+    ("Do you graduate before May 2028?", "No"),                                        # strict bound
+    ("Will you graduate after January 2028?", "Yes"),
+    ("Will you graduate no earlier than 2028?", "Yes"),
+    ("Will you graduate between December 2027 and August 2028?", "Yes"),
+    ("Will you graduate between June 2028 and December 2028?", "No"),
+])
+def test_a_graduation_yes_no_that_names_a_date_is_computed_from_the_stored_date(label, expected):
+    """Three live boards asked a calendar comparison the model gate was left
+    to make. A year, a month-year, a set of them, or a bound: compared with
+    the stored graduation date at the granularity the question uses."""
+    from app.autofill.memory import Memory
+
+    memory = Memory(education=BS_MAY_2028)
+    for kind in (FieldKind.SINGLE_SELECT, FieldKind.BOOLEAN):
+        resolution = _grad(label, memory, kind)
+        assert resolution is not None and not resolution.needs_review, label
+        assert resolution.value == expected, (label, kind)
+        assert resolution.reason == "computed: you graduate May 2028"
+
+
+@pytest.mark.parametrize("label,education,why", [
+    # A date the question refers to but never states.
+    ("Will you have graduated before the start date?", BS_MAY_2028, "does not state"),
+    ("Will you have graduated by the time the internship begins?", BS_MAY_2028, "does not state"),
+    # A bare stored year cannot settle a month-level comparison in that year.
+    ("Are you graduating in December 2027 or May 2028?", {"graduation_date": "2028"}, "does not settle"),
+    ("Do you graduate by June 2028?", {"graduation_date": "2028"}, "does not settle"),
+    # Conditional on a degree level the applicant is not in.
+    ("If you are in a Bachelor's program, do you graduate by June 2027?",
+     {"graduation_date": "May 2028", "degree": "MS Computer Science"}, "bachelor's programme"),
+    ("Are you graduating with a Master's degree by 2028?", BS_MAY_2028, "graduate programme"),
+    # "before X or after Y": two bounds that do not compose into one test.
+    ("Will you graduate before May 2027 or after May 2029?", BS_MAY_2028, "does not settle"),
+])
+def test_a_graduation_question_the_stored_date_does_not_settle_goes_to_review(label, education, why):
+    from app.autofill.memory import Memory
+
+    resolution = _grad(label, Memory(education=education))
+    assert resolution is not None and resolution.needs_review and resolution.value is None, label
+    assert why in resolution.reason, (label, resolution.reason)
+
+
+@pytest.mark.parametrize("label", [
+    "Have you graduated?",                                      # no date named: the existing paths
+    "Did you graduate from high school before 2020?",           # another graduation
+    "Did you graduate from a coding bootcamp in 2024?",
+    "Will you attend the 2028 graduation ceremony?",
+    "Are you enrolled in a graduate program through 2028?",     # the graduate-programme theme's question
+])
+def test_a_graduation_question_outside_the_rule_is_left_to_the_existing_paths(label):
+    from app.autofill.memory import Memory
+
+    assert _grad(label, Memory(education=BS_MAY_2028)) is None, label
+    assert _grad(label, Memory(education=BS_MAY_2028), FieldKind.BOOLEAN) is None, label
+
+
+def test_a_graduation_question_with_no_stored_date_or_no_yes_no_control_is_untouched():
+    from app.autofill.binder import _graduation_by_date_answer
+    from app.autofill.memory import Memory
+
+    assert _grad("Will you be graduating in 2028?", Memory()) is None
+    # Not a yes/no control: a date menu, a three-way select, a text field.
+    years = FormField(key="g", label="Will you be graduating in 2028?", kind=FieldKind.SINGLE_SELECT,
+                      options=_options("2027", "2028", "2029"), field_class=FieldClass.SCREENING)
+    three = FormField(key="g", label="Will you be graduating in 2028?", kind=FieldKind.SINGLE_SELECT,
+                      options=_options("Yes", "No", "Not sure"), field_class=FieldClass.SCREENING)
+    text = FormField(key="g", label="Graduation Date", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING)
+    memory = Memory(education=BS_MAY_2028)
+    for field in (years, three, text):
+        assert _graduation_by_date_answer(field, memory) is None, field.label
+
+
+def test_graduation_yes_no_end_to_end_leaves_the_date_fill_alone():
+    """The whole plan: the Lendable and Enova shapes fill, "expected graduation
+    date" keeps the existing date fill, "Graduation Date" on a text field is
+    unchanged, and the unstated-date question is a review, not a date typed
+    into a yes/no."""
+    from app.autofill.binder import resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    fields = [
+        _yes_no("Will you be graduating in 2028?"),
+        FormField(key="e", label="If you are in a Bachelor's program, do you graduate by June 2027?",
+                  kind=FieldKind.SINGLE_SELECT, options=_options("Yes", "No"), field_class=FieldClass.SCREENING),
+        FormField(key="d", label="What is your expected graduation date?", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING),
+        FormField(key="t", label="Graduation Date", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING),
+        _yes_no("Will you have graduated before the start date?"),
+    ]
+    for i, f in enumerate(fields):
+        f.key = "q{}".format(i)
+    plan = resolve_form(FormSchema(source="t", ats="ashby", posting_id="1", fields=fields),
+                        Memory(education=BS_MAY_2028), binder=DeterministicBinder())
+    by_label = {e.label: e for e in plan.entries}
+    assert by_label["Will you be graduating in 2028?"].value == "Yes"
+    assert by_label["If you are in a Bachelor's program, do you graduate by June 2027?"].value == "No"
+    assert by_label["What is your expected graduation date?"].value == "May 2028"
+    assert by_label["Graduation Date"].value == "May 2028"
+    unstated = by_label["Will you have graduated before the start date?"]
+    assert unstated.needs_review and unstated.value is None and "does not state" in unstated.reason
+
+
+# --- R50 live round, item 4: dial codes go on the country select only ---------
+
+def test_a_country_named_inside_another_question_never_acquires_a_dial_code():
+    """"Country of citizenship" and "Are you authorized to work in the United
+    States?" mention a country; neither is the country select, and the
+    extension must not match a localised option on them by "+1"."""
+    from app.autofill.binder import resolve_form
+    from app.autofill.classify import classify
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    def field(key, label, kind=FieldKind.TEXT, options=()):
+        opts = _options(*options)
+        return FormField(key=key, label=label, kind=kind, options=opts,
+                         field_class=classify(key, label, kind, option_count=len(opts)))
+
+    fields = [
+        field("country", "Country", FieldKind.SINGLE_SELECT),                       # the Greenhouse select
+        field("q1", "Country of citizenship"),
+        field("q2", "Are you legally authorized to work in the United States?", FieldKind.SINGLE_SELECT, ("Yes", "No")),
+        field("q3", "Country of residence"),                                        # alias -> country_of_residence
+        field("q4", "Current Location"),
+        field("q5", "Country where you currently live"),                            # the residence theme
+    ]
+    memory = Memory(facts={"current_location": "Ithaca, NY", "country": "United States"},
+                    legal_status={"work_authorization": "Yes", "citizenship": "US citizen"})
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    by_key = {e.field_key: e for e in plan.entries}
+    assert (by_key["country"].iso2, by_key["country"].dial_code) == ("US", "+1")
+    assert (by_key["q3"].iso2, by_key["q3"].dial_code) == ("US", "+1")
+    assert (by_key["q5"].iso2, by_key["q5"].dial_code) == ("US", "+1") and by_key["q5"].theme == "country_of_residence"
+    for key in ("q1", "q2", "q4"):
+        assert by_key[key].iso2 is None and by_key[key].dial_code is None, key

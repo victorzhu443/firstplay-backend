@@ -242,6 +242,12 @@ def _country_field() -> List[FormField]:
     Not in any API block; the form marks it required (measured on Mill,
     Coinbase, Gallup, Chicago Trading: "Country: Select a country" after a
     dry-run submit). Answered from the applicant's country of residence.
+
+    Its plan entry also carries `iso2` and `dial_code` ("US", "+1"), set by
+    `binder._mark_country_codes`: a localised board renders the option as
+    "États-Unis +1" (Haven Interactive, French; R50 live round) and the dial
+    code is the one token the extension can match across locales. `value`
+    stays the stored country name.
     """
     key, label, kind = "country", "Country", FieldKind.SINGLE_SELECT
     return [FormField(key=key, label=label, kind=kind,
