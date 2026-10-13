@@ -58,6 +58,7 @@ NOTES: Dict[str, str] = {
     "marketing_communications": "'Yes' or 'No' to marketing / talent-community emails",
     "interview_recording": "'Yes' or 'No' to recorded interviews; empty to decide each time",
     "background_check": "'Yes' to authorise background checks every time; empty to decide each time",
+    "demographic_data_consent": "'Agree' to let employers process your EEO answers (Greenhouse's GDPR box); empty to decide each time",
 }
 
 #: Suggested answers for the protected questions. Any phrasing works — the

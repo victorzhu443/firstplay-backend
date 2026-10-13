@@ -397,6 +397,11 @@ NARRATIVE_LABEL = re.compile(
 #: Order matters: an SMS opt-in that mentions the privacy policy is an SMS
 #: opt-in.
 CONSENT_BUCKETS = (
+    # Greenhouse's GDPR demographic-data box ("processing my responses to the
+    # demographic questions"): its own decision, not the privacy notice —
+    # agreeing to be considered is not agreeing to have EEO answers processed.
+    (re.compile(r"\b(demographic (data|questions|information|responses)|responses to the demographic)\b", re.I),
+     "demographic_data_consent"),
     (re.compile(r"\b(sms|text messag|texting|text message|whatsapp|recruiting (sms|texts))\b", re.I),
      "sms_messages"),
     (re.compile(r"\b(marketing|talent (community|network|pool)|future (career )?opportunit|"
@@ -429,6 +434,7 @@ CONSENT_BUCKETS = (
 _GRANT_BUCKETS = frozenset({
     "sms_messages", "marketing_communications", "interview_recording",
     "background_check", "privacy_notice", "terms_and_conditions",
+    "demographic_data_consent",
 })
 
 #: The words that make a label an *ask* for consent rather than a mention of
