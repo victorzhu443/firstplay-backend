@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.autofill.classify import FOLLOW_UP_ON_OTHER, is_follow_up, normalize_label
+from app.autofill.classify import FOLLOW_UP_ON_OTHER, is_follow_up, memory_key_for, normalize_label
 from app.autofill.format import OPTION_MISMATCH, _as_bool, match_option, option_for_bool
 from app.autofill.memory import Memory, Resolution
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField, FormSchema
@@ -1178,19 +1178,56 @@ _SECOND_PASS_SECTIONS = ("facts", "education", "preferences", "legal_status", "l
 _SECOND_PASS_EXCLUDE = {"resume_file", "cover_letter", "transcript_file", "personal_preferences"}
 
 
+#: Contact details the second pass must know *exist*, and under which key,
+#: without seeing the value: the model's Choice returns a key, and the binder
+#: writes the stored value itself. A "university email" field is answered from
+#: `email` either way; the address itself never reaches the provider (audit
+#: 2026-10-12, F8). Non-contact facts are still sent as values, because "Do
+#: you hold a clearance?" is answered by what the value says.
+_CONTACT_SHAPES: Dict[str, str] = {
+    "first_name": "the applicant's first name",
+    "last_name": "the applicant's last name",
+    "full_name": "the applicant's full name",
+    "preferred_first_name": "the applicant's preferred first name",
+    "preferred_last_name": "the applicant's preferred last name",
+    "email": "an email address",
+    "alternate_email": "a second email address",
+    "phone": "a phone number",
+    "linkedin": "a LinkedIn profile URL",
+    "github": "a GitHub profile URL",
+    "website": "a personal website URL",
+    "website_other": "another profile or portfolio URL",
+    "links_combined": "the applicant's profile links",
+    "street_address": "a street address",
+    "street_address_2": "a second street-address line",
+    "postal_code": "a postal code",
+}
+
+
+def _catalog_value(memory: Memory, key: str) -> Optional[str]:
+    """The value the second pass writes for a catalog key, formatted as the
+    first pass would format it."""
+    value = memory.lookup(key)
+    if key == "phone":
+        from app.autofill.format import format_phone
+
+        value = format_phone(value)
+    return str(value) if value else None
+
+
 def _profile_catalog(memory: Memory) -> Dict[str, str]:
+    """What the second pass may choose from: key -> value, or key -> shape
+    for a contact detail. Every key here has a stored, non-blank value."""
     catalog: Dict[str, str] = {}
     for section in _SECOND_PASS_SECTIONS:
         for key, value in (getattr(memory, section, None) or {}).items():
             if key in _SECOND_PASS_EXCLUDE or not value or memory.is_blank(str(value)):
                 continue
-            shown = memory.lookup(key) if key == "phone" else str(value)
-            if shown:
-                catalog[key] = str(shown)[:120]
+            catalog[key] = _CONTACT_SHAPES.get(key) or str(value)[:120]
     for key in ("full_name", "country_of_residence", "state_of_residence", "city_of_residence"):
         value = memory.lookup(key)
         if value:
-            catalog[key] = str(value)[:120]
+            catalog[key] = _CONTACT_SHAPES.get(key) or str(value)[:120]
     return catalog
 
 
@@ -1230,12 +1267,7 @@ def _second_pass(entries: List[FillPlanEntry], form: FormSchema, memory: Memory,
     catalog = _profile_catalog(memory)
     if not catalog:
         return
-    earlier = [
-        {"question": (e.label or "")[:120], "answer": e.values or e.value}
-        for e in entries
-        if (e.value or e.values) and not e.needs_review and not e.skipped and not e.satisfied_by
-    ]
-    state = _answer_state(form, memory, earlier)
+    state = _answer_state(form, memory, _earlier_answers(form, {e.field_key: e for e in entries}))
     state["profile"] = catalog
     requests = [("sp_{}".format(index), fields[entry.field_key], catalog) for index, entry in candidates]
     decided = binder.second_pass(state, requests)
@@ -1255,13 +1287,66 @@ def _second_pass(entries: List[FillPlanEntry], form: FormSchema, memory: Memory,
         if p_ok < SECOND_PASS_VERIFY:
             entry.reason = "second pass: {} looked like the answer but did not verify ({:.0%})".format(key, p_ok)
             continue
-        entry.value = catalog[key]
+        # The stored value, never the catalog text: for a contact key the
+        # catalog holds a shape description, not the value.
+        written = _catalog_value(memory, key)
+        if not written:
+            entry.reason = "second pass: {} was chosen but nothing is stored under it".format(key)
+            continue
+        entry.value = written
         entry.values = []
         entry.source = FillSource.MODEL_DECISION
         entry.confidence = min(p_cov, p_key, p_ok)
         entry.needs_review = False
         entry.theme = "profile.{}".format(key)
         entry.reason = "second pass: your {} answers this ({:.0%} covered, {:.0%} verified)".format(key, p_cov, p_ok)
+
+
+#: The only classes whose settled answers may be shown to the model as
+#: "earlier answers on this form". LEGAL (EEOC, veteran, disability) and
+#: CONSENT answers are the applicant's own and never leave the deterministic
+#: path; DOCUMENT values are file paths; NARRATIVE is prose. Before this
+#: filter every Greenhouse form with a compliance block sent the race, gender,
+#: veteran and disability answers to the answer gate and the second pass
+#: (audit 2026-10-12, F1).
+_EARLIER_ANSWER_CLASSES = frozenset({FieldClass.CORE, FieldClass.SCREENING})
+
+
+def _earlier_answers(form: FormSchema, answered: Dict[str, object]) -> List[Dict[str, object]]:
+    """The answers already settled on this form, as the model may see them.
+
+    `answered` maps a field key to a Resolution or FillPlanEntry. An answer
+    counts only when it is a confident fill (not review, not skipped, not
+    satisfied by a sibling, not an attachment) on a CORE or SCREENING field
+    that is not a file. One builder for the three gates, so the class filter
+    cannot drift between them.
+    """
+    earlier: List[Dict[str, object]] = []
+    for field in form.fields:
+        if field.field_class not in _EARLIER_ANSWER_CLASSES or field.kind == FieldKind.FILE:
+            continue
+        item = answered.get(field.key)
+        if item is None:
+            continue
+        value = getattr(item, "values", None) or getattr(item, "value", None)
+        if not value:
+            continue
+        if (getattr(item, "needs_review", False) or getattr(item, "skipped", None)
+                or getattr(item, "satisfied_by", None) or getattr(item, "attach", None)):
+            continue
+        # A contact detail is shown as its shape, as in the second-pass
+        # catalog: "Email: an email address" tells the gate the question was
+        # answered, which is all it needs (F8). Core fields are answered on
+        # every form, so without this the address travelled every time.
+        key = memory_key_for(field.key, field.label, field.kind)
+        if key in _CONTACT_SHAPES or (isinstance(value, str) and _CONTACT_SHAPED.search(value)):
+            value = _CONTACT_SHAPES.get(key, "a contact detail")
+        earlier.append({"question": (field.label or "")[:120], "answer": value})
+    return earlier
+
+
+#: An answer that is itself an address or a link, whatever key produced it.
+_CONTACT_SHAPED = re.compile(r"@|https?://|\bwww\.", re.I)
 
 
 def _answer_state(form: FormSchema, memory: Memory, earlier: List[Dict[str, object]]) -> Dict[str, object]:
@@ -1299,15 +1384,7 @@ def _speculative_answers(
     if not SPECULATE_ANSWERS or not (candidates or mismatches):
         return binder.classify_themes(labels), {}, {}
 
-    earlier = [
-        {"question": (f.label or "")[:120], "answer": resolved[f.key].values or resolved[f.key].value}
-        for f in form.fields
-        if f.key in resolved
-        and (resolved[f.key].value or resolved[f.key].values)
-        and not resolved[f.key].needs_review
-        and not resolved[f.key].skipped
-    ]
-    state = _answer_state(form, memory, earlier)
+    state = _answer_state(form, memory, _earlier_answers(form, resolved))
     requests = [("spec_{}".format(f.key), f) for f in candidates]
     match_requests = [("match_{}".format(f.key), value, f) for f, value in mismatches]
 
@@ -1369,11 +1446,7 @@ def _answer_from_profile(
     fresh = [(rid, f) for rid, f in requests if f is not None]
 
     if fresh:
-        earlier = [
-            {"question": (e.label or "")[:120], "answer": e.values or e.value}
-            for e in entries
-            if (e.value or e.values) and not e.needs_review and not e.skipped and not e.satisfied_by
-        ]
+        earlier = _earlier_answers(form, {e.field_key: e for e in entries})
         results.update(binder.answer_from_profile(_answer_state(form, memory, earlier), fresh))
 
     for request_id, _field in requests:
