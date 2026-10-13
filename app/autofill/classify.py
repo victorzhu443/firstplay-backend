@@ -32,6 +32,19 @@ from app.autofill.schema import FieldClass, FieldKind
 #: own convention, not ours.
 ASHBY_EEOC_MARKER = "_systemfield_eeoc"
 
+#: How much of a label the tables read. The longest label in the two frozen
+#: corpora is 1,941 characters; the patterns here and the theme patterns
+#: `_asks_a_theme` consults include lookaheads whose cost grows with the
+#: square of the length, and the plan endpoint accepts labels of any size:
+#: one 50 KB label cost ~10 s of worker time (code audit of 2026-10-12,
+#: F10). Nothing a form asks needs more than this to be recognised.
+LABEL_SCAN_LIMIT = 2000
+
+
+def _scan(label: Optional[str]) -> str:
+    """The part of a label the classifier reads."""
+    return (label or "")[:LABEL_SCAN_LIMIT]
+
 #: ATS field names that identify a core fact, mapped to the canonical memory
 #: key. These are stable across postings — unlike custom question names, which
 #: are allocated per posting and carry no meaning.
@@ -460,7 +473,7 @@ def is_consent_asked(label: str, option_count: int = 0) -> bool:
     (review of 2026-10-12, finding 2). So a second question, a label a local
     theme pattern recognises, or a non-compete is never a consent ask.
     """
-    text = label or ""
+    text = _scan(label)
     if consent_key_for(text) not in _GRANT_BUCKETS:
         return False
     if option_count == 1:
@@ -475,7 +488,7 @@ def is_consent_asked(label: str, option_count: int = 0) -> bool:
 
 def consent_key_for(label: str) -> Optional[str]:
     """Which standing consent, if any, a consent-class field asks for."""
-    text = label or ""
+    text = _scan(label)
     if _AI_POLICY.search(normalize_label(text)) or re.search(r"\barbitrat", text, re.I):
         return None
     for pattern, key in CONSENT_BUCKETS:
@@ -664,14 +677,16 @@ SENSITIVE_TOPIC_PATTERNS = (
     # has no memory-only key either. Between the two it fell to SCREENING and
     # the model gate (review of 2026-10-12, finding 1). Keyless LEGAL instead.
     # Checked after `memory_only_key_for` in `memory_key_for`, so a genuine
-    # accommodation request still reaches `accommodation_needs`.
-    re.compile(r"(?=.*\bdisabilit)(?=.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))", re.I | re.S),
+    # accommodation request still reaches `accommodation_needs`. Anchored:
+    # unanchored, each lookahead re-scanned to the end from every start
+    # position, 10 s on a 50 KB label (F10).
+    re.compile(r"^(?=.*\bdisabilit)(?=.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))", re.I | re.S),
 )
 
 
 def is_sensitive_topic(label: str) -> bool:
     """Whether a label asks about a protected or sensitive topic no key answers."""
-    normalized = normalize_label(label)
+    normalized = normalize_label(_scan(label))
     return bool(normalized) and any(p.search(normalized) for p in SENSITIVE_TOPIC_PATTERNS)
 
 
@@ -739,6 +754,7 @@ def custom_protected_key_for(label: str) -> Optional[str]:
 
 def protected_key_for(key: str, label: str = "") -> Optional[str]:
     """Canonical memory key for a protected-characteristic field, if it is one."""
+    label = _scan(label)
     return vendor_protected_key_for(key, label) or custom_protected_key_for(label)
 
 
@@ -902,6 +918,7 @@ def classify(
     Returns:
         The field's class
     """
+    label = _scan(label)
     normalized = normalize_label(label)
 
     # Structure first, and it is the only sensitive-field rule there is.
@@ -1020,6 +1037,7 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
     Returns:
         A memory key, or None
     """
+    label = _scan(label)
     if key in CORE_FIELD_NAMES:
         return CORE_FIELD_NAMES[key]
 

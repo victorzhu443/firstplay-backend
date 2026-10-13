@@ -556,3 +556,32 @@ def test_a_consent_rider_on_a_theme_question_is_the_theme_question():
 ])
 def test_the_decisions_not_facts_table_still_catches_a_plain_consent(label, options):
     assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=options) == FieldClass.CONSENT
+
+
+# --- code audit of 2026-10-12, F10: a long label costs linear time ------------
+
+def test_a_fifty_kilobyte_label_is_classified_in_well_under_a_second():
+    """One 50 KB label cost ~10 s (quadratic lookaheads, no size bound).
+    The tables read the first 2,000 characters — longer than any label in
+    the corpora — and the one unanchored double lookahead is anchored."""
+    import time
+    from app.autofill.classify import LABEL_SCAN_LIMIT, SENSITIVE_TOPIC_PATTERNS, is_sensitive_topic
+
+    seed = "Do you have a disability that we should know about and do you sponsor "
+    label = (seed * (50_000 // len(seed) + 1))[:50_000] + " authorized to work"
+    started = time.perf_counter()
+    for _ in range(3):
+        klass = classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2)
+        key = memory_key_for("question_1", label, FieldKind.SINGLE_SELECT)
+        is_sensitive_topic(label)
+    elapsed = (time.perf_counter() - started) / 3
+    assert elapsed < 0.5, elapsed
+    # The same decision as for the label's readable prefix.
+    assert klass == classify("question_1", label[:LABEL_SCAN_LIMIT], FieldKind.SINGLE_SELECT, option_count=2)
+    assert key == memory_key_for("question_1", label[:LABEL_SCAN_LIMIT], FieldKind.SINGLE_SELECT)
+    # The paired disability+accommodation pattern itself, unbounded by the cap.
+    pattern = [p for p in SENSITIVE_TOPIC_PATTERNS if "accommodat" in p.pattern and "disabilit" in p.pattern][0]
+    started = time.perf_counter()
+    assert not pattern.search(("disability and " * 4000) + "x")
+    assert pattern.search(("disability and " * 4000) + "accommodation")
+    assert time.perf_counter() - started < 0.2
