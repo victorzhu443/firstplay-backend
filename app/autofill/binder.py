@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.autofill.classify import CORE_FIELD_NAMES, FOLLOW_UP_ON_OTHER, is_follow_up, memory_key_for, normalize_label
+from app.autofill.classify import CORE_FIELD_NAMES, FOLLOW_UP_ON_OTHER, LABEL_SCAN_LIMIT, is_follow_up, memory_key_for, normalize_label
 from app.autofill.format import OPTION_MISMATCH, _as_bool, match_option, option_for_bool
 from app.autofill.memory import Memory, Resolution
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField, FormSchema
@@ -363,8 +363,12 @@ class DeterministicBinder:
 
         for label in labels:
             out[label] = (QuestionTheme.UNKNOWN, 0.0)
+            # The two history patterns are double lookaheads and quadratic in
+            # the label's length (a 50 KB label cost seconds, audit F10); no
+            # corpus label exceeds 1,941 chars, so the scan stops at 2,000.
+            text = (label or "")[:LABEL_SCAN_LIMIT]
             for theme, pattern in _THEME_PATTERNS:
-                if pattern.search(label or ""):
+                if pattern.search(text):
                     # 1.0 because a pattern either matched or did not; there is
                     # no calibrated belief here, and pretending otherwise would
                     # make the threshold meaningless.

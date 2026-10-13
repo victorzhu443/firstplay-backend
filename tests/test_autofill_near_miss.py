@@ -326,3 +326,20 @@ def test_a_gap_between_buckets_and_the_other_scales_are_left_alone():
     assert match_numeric_bucket("1,495", SAT_WITH_COMMAS) is None
     assert match_numeric_bucket("3.8", _options("3.6 or above", "3.0 - 3.5")).label == "3.6 or above"
     assert match_numeric_bucket("85", _options("80% or above", "70-79%", "3.6 or above")).label == "80% or above"
+
+
+def test_theme_matching_is_bounded_in_label_length():
+    """A 50 KB label is scanned like its first 2,000 characters (audit F10): the
+    two history patterns are double lookaheads and were quadratic in length."""
+    import time
+    from app.autofill.binder import DeterministicBinder
+    from app.autofill.jev_binder import _local_theme
+    head = "Have you previously interviewed with us? "
+    label = head + ("lorem ipsum " * 5000)
+    started = time.perf_counter()
+    themed = DeterministicBinder().classify_themes([label])[label]
+    local = _local_theme(label)
+    elapsed = time.perf_counter() - started
+    assert themed == DeterministicBinder().classify_themes([head])[head]
+    assert local == _local_theme(head)
+    assert elapsed < 2.0

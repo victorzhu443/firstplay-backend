@@ -324,8 +324,10 @@ class OptionCache:
 def _local_theme(label: str):
     """The deterministic binder's high-precision pattern for a label, if any."""
     from app.autofill.binder import _THEME_PATTERNS  # local: binder is the caller's module
+    from app.autofill.classify import LABEL_SCAN_LIMIT
+    text = (label or "")[:LABEL_SCAN_LIMIT]  # bounded like classify(): audit F10
     for theme, pattern in _THEME_PATTERNS:
-        if pattern.search(label or ""):
+        if pattern.search(text):
             return theme
     return None
 
