@@ -850,3 +850,83 @@ def test_a_bare_company_label_is_an_employment_block_column_not_the_current_empl
 @pytest.mark.parametrize("label", ["Current Company", "Current company", "Current Employer"])   # "Who is your current employer?" is the theme
 def test_the_current_employer_question_still_keys(label):
     assert memory_key_for("question_1", label, FieldKind.TEXT) == "current_employer"
+
+
+# --- the 23 further sensitive topics (code audit of 2026-10-12, §4 trailing paragraph)
+
+MORE_SENSITIVE = [
+    "Do you hold dual citizenship?", "Dual nationality",
+    "Are you pregnant or planning to be in the next year?",
+    "Do you have children or dependents?", "Do you have caregiver responsibilities?", "Number of dependents",
+    "Political party affiliation", "What are your political views?",
+    "Are you a union member?", "Are you a member of a trade union?",
+    "Height and weight", "What is your height?",
+    "Family medical history (genetic conditions)", "Do you have a medical condition we should know about?",
+    "Mental health history",
+    "Native language / mother tongue", "What is your first language?",
+    "Do you observe the Sabbath?",
+    "Were you born in the US?", "Year you were born", "Birth year",
+    "Which generation are you (Gen Z, Millennial, Gen X)?",
+    "Have you ever been charged with a crime?", "Any pending criminal charges?",
+    "Have you ever filed for bankruptcy?",
+    "Credit score range", "Credit history",
+    "Have you ever been dishonorably discharged?", "Character of service / type of discharge",
+    "Is your spouse employed at Acme?", "Spouse's employer",
+    "Sex", "Sex assigned at birth", "What is your sex?",
+]
+
+
+@pytest.mark.parametrize("label", MORE_SENSITIVE)
+def test_a_further_sensitive_topic_is_legal_keyless_and_review_only(label):
+    """These were SCREENING: model-eligible, second-pass-eligible, learnable.
+    The same treatment as M2's ten: LEGAL, no key, nothing fills them."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    field = _field(label, options=("Yes", "No", "Prefer not to say"))
+    assert field.field_class == FieldClass.LEGAL, label
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) is None
+    assert memory_key_for("question_1", label, FieldKind.TEXT) is None
+    assert not field.allows_model_judgement()
+    full = Memory(facts={"first_name": "Ada", "country_of_residence": "United States", "current_employer": "Acme"},
+                  legal_status={"citizenship": "US citizen", "age_18_plus": "Yes", "work_authorization": "Yes"},
+                  protected={"veteran_status": "No", "gender": "Male", "race_ethnicity": "Asian"},
+                  preferences={"earliest_start": "June 2027", "timeline_notes": "None"})
+    entry = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", company="Acme", fields=[field]),
+                         full, binder=DeterministicBinder()).entries[0]
+    assert entry.needs_review and entry.value is None and not entry.values and entry.needs_fact is None, label
+
+
+@pytest.mark.parametrize("label,expected_class", [
+    # Language *skills*, not a native language.
+    ("Which programming languages are you proficient in?", FieldClass.SCREENING),
+    ("Please indicate which languages you speak in addition to English:", FieldClass.SCREENING),   # x11
+    ("What was your first programming language?", FieldClass.SCREENING),
+    # Work authorisation, sponsorship, citizenship-as-authorisation, age, the sanctions disclosure.
+    ("Are you legally authorized to work in the United States?", FieldClass.SCREENING),
+    ("Will you now or in the future require sponsorship for employment visa status?", FieldClass.SCREENING),
+    ("Are you a U.S. citizen or permanent resident?", FieldClass.SCREENING),
+    ("Are you 18 years of age or older?", FieldClass.SCREENING),
+    ("Please select the country where you hold citizenship / permanent residence. If you have dual citizenship, "
+     "select the country you reside in.", FieldClass.SCREENING),                                        # x5
+    ("If yes, please provide your visa type and expiration date.", FieldClass.SCREENING),               # x11
+    # The background-check notice that mentions credit checks (a one-option
+    # select in the corpus, x2: CONSENT by shape, and never LEGAL).
+    ("Offers of employment are contingent upon passing pre-employment background checks. Drug and/or credit "
+     "check screenings may be required for specific positions.", FieldClass.CONSENT),
+    ("Do you consent to a criminal background check?", FieldClass.CONSENT),
+    # The words in another sense.
+    ("Are you a native speaker of Canadian French", FieldClass.SCREENING),                              # x1
+    ("Are you pursuing a degree in Political Science, Economics or a related field?", FieldClass.SCREENING),
+    ("Do you hold a European Union work permit?", FieldClass.SCREENING),
+    ("What weight do you give to compensation versus learning?", FieldClass.SCREENING),
+    ("Experience with medical device software (years)", FieldClass.SCREENING),
+    ("Have you worked on a next-generation payments platform?", FieldClass.SCREENING),
+    ("Current Company", FieldClass.CORE),
+])
+def test_the_neighbours_of_the_further_sensitive_topics_keep_their_class(label, expected_class):
+    kind = FieldKind.TEXT if expected_class == FieldClass.CORE or "years" in label else FieldKind.SINGLE_SELECT
+    options = 0 if kind == FieldKind.TEXT else (1 if label.startswith("Offers of employment") else 2)
+    assert classify("question_1", label, kind, option_count=options) == expected_class, label
+    assert memory_key_for("question_1", label, kind) != None or expected_class != FieldClass.CORE

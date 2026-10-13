@@ -711,6 +711,37 @@ SENSITIVE_TOPIC_PATTERNS = (
     # unanchored, each lookahead re-scanned to the end from every start
     # position, 10 s on a 50 KB label (F10).
     re.compile(r"^(?=.*\bdisabilit)(?=.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))", re.I | re.S),
+    # The further topics the code audit of 2026-10-12 found SCREENING, and
+    # so model-eligible: 23 of 26 tried. Written with M2's care. Still out:
+    # the sanctions citizenship-residence disclosure (its "dual citizenship"
+    # sentence sits beside "permanent residence"), "Are you a US citizen?"
+    # and "visa type / status" (work-authorisation-shaped, deterministic),
+    # the background-check consent's "credit check screenings", and language
+    # *skills* ("Which programming languages…", "languages you speak in
+    # addition to English").
+    re.compile(r"^(?!.*\b(permanent residen|sanction|export control))(?=.*\bdual (citizenship|nationality|citizen|national)\b)", re.I | re.S),
+    re.compile(r"\bpregnan(t|cy)\b|\bmaternity\b|\bexpecting a (child|baby)\b", re.I),
+    re.compile(r"\bcaregiv(er|ing)\b|\bcare ?giver\b|\bchildcare\b|\bdependents\b|\bdependent children\b"
+               r"|\b(do you have|number of|how many) (any )?(children|kids)\b", re.I),
+    re.compile(r"\bpolitical (party|affiliation|views?|opinions?|beliefs?|membership|activit)|\bparty affiliation\b", re.I),
+    re.compile(r"\b(trade |labou?r )?union (member|membership|affiliation)\b|\bmember of a (trade |labou?r )?union\b", re.I),
+    re.compile(r"\bheight and weight\b|\byour (height|weight)\b|^(height|weight)$|\bbody (mass|weight)\b|\bbmi\b", re.I),
+    re.compile(r"\bmedical (condition|history|information|records?|diagnos)|\bgenetic (condition|information|test)"
+               r"|\bfamily medical\b|\bhealth (condition|status|history)\b|\bmental (health|illness)\b", re.I),
+    # Not "native speaker": "Are you a native speaker of Canadian French" is
+    # a language-skill question on a bilingual posting (corpus, x1).
+    re.compile(r"\bnative (language|tongue)\b|\bmother tongue\b|\bfirst language\b", re.I),
+    re.compile(r"\bsabbath\b|\bplace of worship\b", re.I),
+    re.compile(r"\b(were|was) you born\b|\byear (you were |of )?born\b|\bborn in\b|\bbirth year\b|\byear born\b", re.I),
+    re.compile(r"\b(gen z|gen x|gen y|millennial|baby boomer|generation (z|x|y|alpha))\b|\bwhich generation\b", re.I),
+    re.compile(r"\b(charged with|committed|convicted of|accused of) (a |an |any )?(crime|offen[cs]e|felony)"
+               r"|\bpending (criminal )?charges\b", re.I),
+    re.compile(r"\b(filed?|declared?|filing) (for )?bankruptcy\b|\bbeen bankrupt\b|^bankruptcy$|\binsolvenc", re.I),
+    re.compile(r"\bcredit (score|history|rating)\b|^credit check$", re.I),
+    re.compile(r"\bdishonou?rabl[ey] discharg|\bdischarged? from the (military|armed|service)"
+               r"|\btype of (military )?discharge\b|\bcharacter of (service|discharge)\b", re.I),
+    re.compile(r"\byour spouse\b|\bspouse('|’| )?s (name|employer|occupation)\b", re.I),
+    re.compile(r"^(what is your |your )?sex$|\bsex (assigned )?at birth\b|\bbiological sex\b", re.I),
 )
 
 
