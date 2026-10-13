@@ -758,6 +758,52 @@ _EEOC_DISABILITY_ASK = re.compile(
 _CHOICE_KINDS = (FieldKind.SINGLE_SELECT, FieldKind.MULTI_SELECT, FieldKind.BOOLEAN)
 
 
+#: The shape of a question that asks the applicant to identify themselves,
+#: on the normalised label. A protected word alone is a topic, not that
+#: question: "Are you a veteran of the Linux kernel community?" was answered
+#: "No" from the stored veteran status (the stored sentence has polarity),
+#: and "Race condition debugging experience (years)" received the stored
+#: decline (code audit of 2026-10-12, F35). Without the shape the label is
+#: still LEGAL — no model sees it — but it has no key, so it is reviewed.
+_IDENTIFICATION_SHAPE = re.compile(
+    r"\b(identif(y|ies|ied|ication)|identity|self[- ]?identif\w*"
+    r"|(veteran|disability|protected|military|ethnic|racial|gender|transgender) status(?! of (your|the|a)\b)"
+    r"|are you (a |an |currently )?(protected |disabled )?(veteran|hispanic|latin[oax]|transgender)"
+    r"|do you (have|consider yourself|live with)|which (of the following )?(most closely |best )?(describes|applies)"
+    r"|describes? your|what (is|are) your|please (select|indicate|specify|choose|state|check)|select your"
+    r"|your (gender|race|ethnicity|ethnic|racial|veteran|disability|sexual orientation|transgender))\b", re.I)
+
+#: A label that *is* the topic — "Gender", "Race/Ethnicity (Hispanic or
+#: Latino, White, …)", "Veteran Status (check only one)", "Ethnic
+#: background" — read on the raw label: the topic, then punctuation or the
+#: end. "Gender pay gap research experience?" continues with a word.
+_BARE_TOPIC = re.compile(
+    r"^\W*(your )?(race|ethnicity|ethnic(ity)?|ethnic background|racial background|gender( identity)?"
+    r"|(protected )?veteran( status)?|disabilit(y|ies)( status)?|sexual orientation|transgender( status)?"
+    r"|hispanic( or | ?/ ?)latin[oax]|hispanic|latin[oax])\s*([:(\-–—/?*]|$)", re.I)
+
+#: The protected words in another sense, which no shape rescues: a veteran of
+#: the startup scene, a veteran user, a race condition, a 5k race.
+_ANOTHER_SENSE = re.compile(
+    r"\bveteran (of|in|at) (?!(the |any |our |a )?(armed|military|u\.?s\b|united states|uniformed|navy|army"
+    r"|air force|marines?|coast guard|war|active|service|forces))"
+    r"|\bveteran[- ](owned|discount|user|developer|engineer|programmer|coder|employee|customer|python)"
+    r"|\brace[- ]?(condition|car|track|to the bottom|day|for charity|you ran)|\b(5k|10k|hackathon|data|relay|drag|boat|horse|foot) race\b"
+    r"|\bgender[- ](pay|neutral|balance|selection|inclusive|gap)|\bdisability (insurance|benefits|advocacy|plan|claims|inclusive)"
+    r"|\b(latino|hispanic|latinx) (communit|market|heritage|student|consumer|user)", re.I)
+
+
+def _protected_topic_for(label: str) -> Optional[str]:
+    """The protected characteristic a custom label *mentions*, if any."""
+    text = label or ""
+    if text and not re.search(r"\bpronoun", text, re.I):
+        for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
+            if pattern.search(text):
+                return memory_key
+
+    return None
+
+
 def custom_protected_key_for(label: str) -> Optional[str]:
     """Memory key for a protected characteristic asked as a custom question.
 
@@ -766,14 +812,20 @@ def custom_protected_key_for(label: str) -> Optional[str]:
     gender do you identify as?" and "Please indicate your race or ethnicity"
     as ordinary custom questions were SCREENING, and the gate inferred both
     from the profile. Pronouns are not a protected characteristic and keep
-    their own alias; "race" as in a race car does not occur on an application
-    form.
+    their own alias.
+
+    The key is assigned only to a label shaped as that question
+    (`_IDENTIFICATION_SHAPE`, or the bare topic), never to one that uses the
+    word in another sense; the vendor's own marker needs no shape
+    (`vendor_protected_key_for`). A mention without the shape is LEGAL and
+    keyless: reviewed, never judged, never replayed.
     """
     text = label or ""
-    if text and not re.search(r"\bpronoun", text, re.I):
-        for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
-            if pattern.search(text):
-                return memory_key
+    memory_key = _protected_topic_for(text)
+    if memory_key is None or _ANOTHER_SENSE.search(text):
+        return None
+    if _BARE_TOPIC.search(text) or _IDENTIFICATION_SHAPE.search(normalize_label(text)):
+        return memory_key
 
     return None
 
@@ -987,9 +1039,10 @@ def classify(
     # A protected characteristic asked as a custom question (Canonical: "Which
     # gender do you identify as?", "Please indicate your race or ethnicity")
     # is LEGAL wherever it sits: the stored answer replays, no model touches it.
-    # A sensitive topic with no key is LEGAL too, and review-only.
+    # A sensitive topic with no key is LEGAL too, and review-only — as is a
+    # protected word without the question's shape (F35).
     if normalized not in CORE_LABEL_ALIASES and (
-            protected_key_for(key, label) or is_sensitive_topic(label)):
+            protected_key_for(key, label) or _protected_topic_for(label) or is_sensitive_topic(label)):
         return FieldClass.LEGAL
 
     # Under the same guard as `is_consent_asked`: a consent rider on a

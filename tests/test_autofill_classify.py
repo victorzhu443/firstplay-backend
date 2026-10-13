@@ -708,3 +708,129 @@ def test_recording_an_interview_as_job_content_is_not_the_recording_consent(labe
 def test_the_recording_notice_is_still_a_consent(label):
     assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2) == FieldClass.CONSENT
     assert consent_key_for(label) == "interview_recording"
+
+
+# --- code audit of 2026-10-12, F35: a protected word is a topic; the key needs the question's shape
+
+#: memory key -> (labels using the word in another sense: LEGAL, no key;
+#:                labels asking the question: LEGAL with the key)
+PROTECTED_NEAR_MISSES = {
+    "veteran_status": (
+        ["Are you a veteran of the Linux kernel community?",                        # p20: filled "No"
+         "Veteran Python developer (5+ years)?",
+         "Are you a veteran of any hackathons?",
+         "Veteran status of your spouse",
+         "Have you worked at a veteran-owned business?",
+         "Which veteran engineer on our team would you like to meet?",
+         "Are you a veteran of the startup scene?",
+         "Describe your experience as a veteran user of our API",
+         "Veteran discount code (if any)"],
+        ["Are you a protected Veteran?",
+         "Veteran Status (check only one)",
+         "US candidates only: Are you a veteran/have you served in the military?",
+         "If you are a veteran of the armed forces in your country and would like to identify this fact to our recruiting team, please do so here",  # x3
+         "What is your veteran status?",
+         "Are you a veteran or active member of the United States Armed Forces?"],
+    ),
+    "race_ethnicity": (
+        ["Race condition debugging experience (years)",                            # received the stored decline
+         "Race car engineering experience (Formula SAE)?",
+         "Have you competed in a hackathon race?",
+         "Have you run a 5k race for charity?",
+         "Ethnic cuisine preference for the team lunch",
+         "Data race detection tools you have used",
+         "Describe a race you ran",
+         "Experience with ethnic-minority outreach programmes (volunteer)?"],
+        ["Please indicate your race or ethnicity",                                  # Canonical, §55
+         "What is your ethnicity?",                                                 # x5
+         "Ethnicity", "Race/Ethnicity (Hispanic or Latino, White, Asian, ...)", "Ethnic background",
+         "What race and/or ethnic identities do you identify with? (please select all that apply)",
+         "I identify my race as (check all that apply):"],
+    ),
+    "gender": (
+        ["Gender pay gap research experience?",
+         "Gender of your mentor (for our mentorship matching)",
+         "Have you worked on gender-neutral language tooling?",
+         "Gender balance of the team you led (ratio)",
+         "Experience building gender selection UI (inclusive forms)?"],
+        ["Which gender do you identify as?",                                        # Canonical, §55
+         "Gender", "Gender Identity", "What is your gender?",
+         "Which most closely describes your gender?",                               # x5
+         "How would you describe your gender?",                                     # x5
+         "I identify my gender as (check all that apply):"],
+    ),
+    "disability_status": (
+        ["Disability insurance product experience?",
+         "Have you built accessibility features for users with a disability?",
+         "Disability benefits claims processing experience (years)",
+         "Which disability advocacy groups have you volunteered with?",
+         "Short-term disability plan administration experience?"],
+        ["Do you have a disability?", "Disability Status", "Please indicate your disability status",
+         "Do you consider yourself to have a disability?",                           # x4
+         "US candidates only: Do you live with a disability (as outlined in the Americans with Disabilities Act)?"],
+    ),
+    "hispanic_latino": (
+        ["Experience marketing to Latino communities?",
+         "Hispanic Heritage Month event you helped organise",
+         "Name of the Hispanic student association you were a member of",
+         "Do you speak Spanish or have you worked with Latinx user groups?"],
+        ["Do you identify as Hispanic or Latino?", "Are you Hispanic/Latino?", "Hispanic or Latino"],
+    ),
+    "sexual_orientation": (
+        ["Sexual orientation training facilitator experience?"],
+        ["I identify my sexual orientation as (check all that apply):", "Sexual Orientation"],
+    ),
+    "transgender": (
+        ["Transgender healthcare product experience?"],
+        ["Do you identify as transgender?", "Transgender status"],
+    ),
+}
+
+
+@pytest.mark.parametrize("memory_key,label", [
+    (k, label) for k, (misses, _asks) in PROTECTED_NEAR_MISSES.items() for label in misses
+])
+def test_a_protected_word_in_another_sense_is_legal_and_keyless(memory_key, label):
+    """F35: `\\bveteran\\b`, `\\bgender\\b`, race/ethnic and disabilit keyed with
+    no question shape. The topic still keeps a model out (LEGAL); the key,
+    and so the replay, needs the question."""
+    assert protected_key_for("question_1", label) is None, label
+    for kind in (FieldKind.SINGLE_SELECT, FieldKind.TEXT):
+        assert memory_key_for("question_1", label, kind) != memory_key, label
+        assert classify("question_1", label, kind, option_count=2 if kind == FieldKind.SINGLE_SELECT else 0) == FieldClass.LEGAL, label
+
+
+@pytest.mark.parametrize("memory_key,label", [
+    (k, label) for k, (_misses, asks) in PROTECTED_NEAR_MISSES.items() for label in asks
+])
+def test_the_identification_question_still_keys_its_protected_answer(memory_key, label):
+    assert protected_key_for("question_1", label) == memory_key, label
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) == memory_key, label
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=3) == FieldClass.LEGAL
+
+
+def test_the_vendor_marker_needs_no_shape():
+    """Greenhouse's names and Ashby's suffix are exact; the label's wording
+    is irrelevant there, as before."""
+    assert protected_key_for("veteran_status", "Veteran") == "veteran_status"
+    assert protected_key_for("abc__systemfield_eeoc_gender", "") == "gender"
+    assert protected_key_for("demographic_answers.3", "Veteran") == "veteran_status"
+
+
+def test_a_protected_word_in_another_sense_is_never_filled_from_the_stored_answer():
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    memory = Memory(protected={"veteran_status": "I am not a protected veteran", "race_ethnicity": "Decline to self-identify",
+                               "gender": "Decline to self-identify", "disability_status": "I do not want to answer",
+                               "hispanic_latino": "Decline to self-identify", "sexual_orientation": "I don't wish to answer",
+                               "transgender": "I don't wish to answer"})
+    labels = [label for _k, (misses, _asks) in PROTECTED_NEAR_MISSES.items() for label in misses]
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(labels)]
+    fields += [_field(label, kind=FieldKind.TEXT, options=(), key="t{}".format(i)) for i, label in enumerate(labels)]
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    for entry in plan.entries:
+        assert entry.value is None and not entry.values and entry.needs_review, entry.label
+        assert entry.needs_fact is None, entry.label
