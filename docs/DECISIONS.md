@@ -2629,7 +2629,9 @@ world, cache hit and check mode, and the popup exports it.
 by an unrelated earlier answer, 15 self-contained "if so" questions hidden the
 same way, 14 unlisted-country reviews, 2 typed "None"s). Corpus class and key
 movement across the whole classifier stream: 2 labels / 5 instances, all F2.
-With-model coverage is recorded below once the run finishes.
+With the model, same corpora and profile ($0.30): **84.3% / 84.7%**, against
+85.0% / 85.5% after §55 — the gate recovers most of what the deterministic
+layer gave up, and the rest is the same wrong fills, not recovered.
 
 **Live, the same evening, on 0.4.52 against the hosted backend** (window
 on screen; read back from each page's record and its network log):
@@ -2717,6 +2719,23 @@ round `R50`, with `version`; draw in `survey/draws/draw_r50.json`.
   agreeing to have EEO answers processed), and the extension ticks them by
   name. The `-labeled-checkbox` mapping shipped too but was not the cause
   here; Greenhouse's multi-select checkboxes are named `question_N[]`.
+- *Rugged Robotics, closed the next day (2026-10-13), measured on the live
+  control:* the plan was wrong and the fill was wrong. The flexible-term rule
+  selected "Spring 2027 Co-Op", "Summer 2027 Internship" *and* "Both"; a
+  menu that says it in one option now takes that option alone, and the
+  local term pattern reads the "Co-Op, Internship, or Both" wording. And
+  react-select's pick toggles on a multi-select: the first value was picked
+  in the picks loop and again in the multi-value pass, so it came off while
+  the read-back said filled (picking the same option twice by hand removed
+  it; three different ones with pauses stuck). A held option is now left
+  alone and counts as chosen (0.4.55).
+- *The start date was never asked.* Victor, 2026-10-13: "still doesn't fill
+  out start date month and start date year for college." The two education
+  fields resolve through derived keys (`education_start_month` / `_year`)
+  that no registry row has, so `_mark_missing_facts` attached no question —
+  the 26 review rows above were a question the popup never showed.
+  `DERIVED_SOURCES` maps each derived key to its stored fact and the ask is
+  for that fact, once (the extension collapses the month and year asks).
 - *Live re-check on 0.4.54 the same night:* TensorWave's and Harvey's
   graduation dates filled through the picker (green, popper closed, one drift
   re-apply, 0 failures); Haven's Country selected and Phone filled with no
@@ -2769,7 +2788,7 @@ target met".
 | | |
 |---|---|
 | **Coverage, deterministic** | Greenhouse **75.6%** (10,697 / 14,147 in-scope fields over 578 frozen forms), Ashby **73.9%** (2,629 / 3,558 over 413) — after §57, 2026-10-12, real profile, `coverage.py`. "Blank by choice" fields (267 / 90) count as filled; essays and files are outside the denominator |
-| **Coverage, with the model** | Greenhouse **85.0%** (12,030 / 14,147), Ashby **85.5%** (3,044 / 3,558) — run 2026-10-12 after §55 (`coverage.py --model`, $0.32; 278 / 78 blank by choice counted). The audit's run that morning, before §55 and on the smaller denominator: 86.3% / 85.6% |
+| **Coverage, with the model** | Greenhouse **84.3%** (11,930 / 14,147), Ashby **84.7%** (3,012 / 3,558) — run 2026-10-12 after §57 (`coverage.py --model`, $0.30; 267 / 82 blank by choice counted). After §55: 85.0% / 85.5%; the audit's morning run before either: 86.3% / 85.6% |
 | **Precision of model decisions** | **98.0%** over 289 hand-judged decisions from 168 forms (§52): 283 correct, 5 wrong, 1 unsure. Target 99% **not met**. Second pass 43 / 43 |
 | **Live, Greenhouse** | 117 live boards, 1,866 filled, 21 "known but could not be entered", all 21 before 0.4.19 by round order (`survey/`); the hundred of R48-2 has 1 of 100 recorded |
 | **Live, Ashby** | A1: 100 organisations, 702 filled, 246 review; R48-2: 100 organisations, 719 / 250 / 1 could-not-enter, median fill 110 ms |
