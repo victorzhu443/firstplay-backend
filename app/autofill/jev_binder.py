@@ -38,7 +38,7 @@ from app.autofill.private_json import write_private_json
 from app.autofill.themes import THEME_CRITERIA, QuestionTheme
 from app.autofill.schema import FieldKind, FormField
 from app.exceptions import JevServiceError
-from app.jev_client import JevClient, choice, get_jev_client, noul
+from app.jev_client import JevClient, choice, get_jev_client, noul, summarise_error
 
 logger = logging.getLogger(__name__)
 
@@ -354,6 +354,12 @@ class JevBinder:
         self.questions_asked = 0
 
         self.tripped = False
+        #: Set by the first call that raised, whether or not the caller went
+        #: on to swallow it: the speculative gate does, and the response
+        #: then said `jev_calls=0, cost_usd=0` as if nothing had been tried
+        #: (audit 2026-10-12, F21). `last_error` is the sanitised category.
+        self.failed = False
+        self.last_error: Optional[str] = None
         self._options = option_cache if option_cache is not None else OptionCache(
             (cache.path.replace("themes.json", "options.json")
              if cache is not None and cache.path else None)
@@ -779,7 +785,18 @@ class JevBinder:
         except JevServiceError as e:
             if "timed out" in str(e) or "transport" in str(e):
                 self.tripped = True
+            self._record_failure(description, e)
             raise
+        except Exception as e:  # noqa: BLE001 — recorded, then re-raised unchanged
+            self._record_failure(description, e)
+            raise
+
+    def _record_failure(self, description: str, error: Exception) -> None:
+        """Logged here, once, at the boundary: the speculative pool swallows
+        what it gets back, and nothing else would say a call failed."""
+        self.failed = True
+        self.last_error = summarise_error(error)
+        logger.warning("%s failed: %s", description, self.last_error)
 
     @staticmethod
     def _option_signature(value: str, field) -> str:

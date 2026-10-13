@@ -29,7 +29,6 @@ holds its own profile, and adding sync later is additive where un-storing
 data is not. But the backend sees the profile in transit; it does not keep it.
 """
 import logging
-import re
 import threading
 import time
 from collections import OrderedDict
@@ -48,7 +47,7 @@ from app.autofill.learn import LearnResult, Observation, accept, learn
 from app.autofill.memory import Memory
 from app.autofill.schema import FormSchema
 from app.exceptions import JevConfigurationError, JevError
-from app.jev_client import get_jev_client
+from app.jev_client import get_jev_client, summarise_error
 from app.rate_limit import autofill_limit, client_key
 
 logger = logging.getLogger(__name__)
@@ -118,6 +117,34 @@ class AutofillResponse(BaseModel):
     #: cached its plans for six hours (audit 2026-10-12, M6). A caller that
     #: caches plans must not cache one with this false.
     model_available: bool = True
+    #: True when a model call was attempted on this plan and raised — in a
+    #: sequential gate (the plan was then finished deterministically) or in
+    #: the speculative pool, which swallows what it gets back. Before this,
+    #: a plan after a failed model path reported `jev_calls=0, cost_usd=0,
+    #: model_skipped=False`, indistinguishable from one that never tried
+    #: (audit 2026-10-12, F21).
+    model_failed: bool = False
+    #: The sanitised category of that failure ("422 from upstream",
+    #: "upstream timed out"); never the upstream text.
+    model_error: Optional[str] = None
+
+
+def _profile_error_detail(error: Exception) -> str:
+    """A 422 detail that names the field paths, never the values.
+
+    pydantic's own message carries `input_value=<the profile value>`, which
+    the extension prints in the page console (audit 2026-10-12, F22).
+    """
+    errors = getattr(error, "errors", None)
+    try:
+        rows = errors() if callable(errors) else []
+    except Exception:  # noqa: BLE001
+        rows = []
+    if not rows:
+        return "Profile could not be read: {}".format(type(error).__name__)
+    paths = sorted({".".join(str(part) for part in (row.get("loc") or ())) or "(root)" for row in rows})
+    shown = ", ".join(paths[:10]) + (" and {} more".format(len(paths) - 10) if len(paths) > 10 else "")
+    return "Profile could not be read: {} validation error(s) at {}".format(len(rows), shown)
 
 
 def _parse_form(ats: str, payload: Dict[str, Any]) -> FormSchema:
@@ -165,9 +192,7 @@ def build_plan(request: AutofillRequest, http_request: Request):
     try:
         memory = Memory(**request.profile)
     except Exception as e:
-        raise HTTPException(
-            status_code=422, detail="Profile could not be read: {}".format(e)
-        )
+        raise HTTPException(status_code=422, detail=_profile_error_detail(e))
     # Company-shaped episodes (a referral, an office choice) replay only on
     # this company's forms; `resolve_form` has no way to hand it to Memory.
     memory.for_company(request.company or form.company)
@@ -189,6 +214,7 @@ def build_plan(request: AutofillRequest, http_request: Request):
     elif request.use_model:
         logger.warning("No model key configured; building a deterministic plan")
 
+    model_error: Optional[str] = None
     try:
         plan = resolve_form(form, memory, company=request.company, binder=binder)
         if jev is not None and getattr(jev, "calls", 0):
@@ -199,11 +225,18 @@ def build_plan(request: AutofillRequest, http_request: Request):
         # an error page.
         # The summary, not the upstream body: /health was sanitised (M5) and
         # the log line carried the same text (review of 2026-10-12).
-        logger.warning("Jev failed mid-plan, retrying deterministically: %s", _summarise_error(e))
+        model_error = _summarise_error(e)
+        logger.warning("Jev failed mid-plan, retrying deterministically: %s", model_error)
         _note_model_error(e, caller)
         plan = resolve_form(form, memory, company=request.company,
                             binder=DeterministicBinder())
         jev = None
+
+    if model_error is None and jev is not None and getattr(jev, "failed", False):
+        # A call raised and was swallowed (the speculative gate) or tripped
+        # the breaker; the plan is complete but not the one the model would
+        # have made.
+        model_error = getattr(jev, "last_error", None) or "model call failed"
 
     return AutofillResponse(
         model_available=available,
@@ -214,6 +247,8 @@ def build_plan(request: AutofillRequest, http_request: Request):
         cost_usd=jev.cost_usd if jev else 0.0,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
         model_skipped=bool(jev is not None and getattr(jev, "tripped", False)),
+        model_failed=model_error is not None,
+        model_error=model_error,
         engine=ENGINE,
     )
 
@@ -237,6 +272,10 @@ class LearnResponse(BaseModel):
     jev_calls: int = 0
     cost_usd: float = 0.0
     engine: str = ""
+    #: True when the judge was called and raised; the episodes were still
+    #: saved, the proposals are the ones no model saw (audit 2026-10-12, F21).
+    model_failed: bool = False
+    model_error: Optional[str] = None
 
 
 @router.post("/learn", response_model=LearnResponse,
@@ -251,7 +290,7 @@ def learn_from_form(request: LearnRequest):
     try:
         memory = Memory(**request.profile)
     except Exception as e:
-        raise HTTPException(status_code=422, detail="Profile could not be read: {}".format(e))
+        raise HTTPException(status_code=422, detail=_profile_error_detail(e))
 
     accepted = [key for key in request.accept if accept(memory, key)]
 
@@ -262,16 +301,24 @@ def learn_from_form(request: LearnRequest):
         else:
             logger.warning("No model key configured; learning episodes only")
 
+    model_error: Optional[str] = None
     try:
         result: LearnResult = learn(memory, request.observations, binder=binder)
     except JevError as e:
-        logger.warning("Jev failed while judging corrections; episodes only: %s", e)
+        # The summary, never `e` itself: a 4xx that echoed the judge's
+        # questions put the applicant's answers in the log (audit
+        # 2026-10-12, F9; probe p08).
+        model_error = _summarise_error(e)
+        logger.warning("Jev failed while judging corrections; episodes only: %s", model_error)
         result = learn(memory, request.observations, binder=None)
+    if model_error is None and binder is not None and getattr(binder, "failed", False):
+        model_error = getattr(binder, "last_error", None) or "model call failed"
 
     return LearnResponse(
         profile=result.profile, learned=result.learned, accepted=accepted,
         proposals=[p.model_dump() for p in result.proposals], ignored=result.ignored,
         jev_calls=result.jev_calls, cost_usd=result.cost_usd, engine=ENGINE,
+        model_failed=model_error is not None, model_error=model_error,
     )
 
 
@@ -293,24 +340,10 @@ _CALLER_STATUS_MAX = 1000
 _MODEL_SEQ = {"n": 0}
 
 
-def _summarise_error(error: Exception) -> str:
-    """A short, sanitised account of a model failure for /health.
-
-    Upstream error bodies are not republished: the previous field carried up
-    to 200 characters of whatever OpenRouter returned, to anyone who asked.
-    """
-    if isinstance(error, JevConfigurationError):
-        return "model not configured"
-    text = str(error)
-    status = re.search(r"\b([45]\d\d)\b", text)
-    if status:
-        return "{} from upstream".format(status.group(1))
-    lowered = text.lower()
-    if "timed out" in lowered or "timeout" in lowered:
-        return "upstream timed out"
-    if "transport" in lowered or "connect" in lowered or "unreachable" in lowered:
-        return "upstream unreachable"
-    return type(error).__name__[:80]
+#: The sanitised category of a model failure, for /health, the response and
+#: every log line. Defined in `app.jev_client` beside the error classes so the
+#: binder can use it too; kept under this name here for its callers.
+_summarise_error = summarise_error
 
 
 def _stamp() -> str:

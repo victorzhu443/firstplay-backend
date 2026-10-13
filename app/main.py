@@ -1,13 +1,16 @@
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.routers import resume, job, analysis, pipeline, autofill
 from app.db import engine, Base, SQLALCHEMY_DATABASE_URL
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, request_id_var
 from app.models import Resume, JobDescription, GapAnalysis, ProjectPlan, ImprovedResume
 
 logger = logging.getLogger(__name__)
@@ -135,6 +138,63 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+class RequestIdMiddleware:
+    """One UUID4 per request: set in the logging context for every line the
+    request produces, and returned as `X-Request-Id` so a report from the
+    extension can be matched to the hosted log (audit 2026-10-12, F21).
+
+    Pure ASGI rather than BaseHTTPMiddleware, which buffers bodies and runs
+    the handler in a separate task where the context variable would not be
+    visible. The id is always ours — an incoming header is not honoured, so
+    a caller cannot forge a line into someone else's trace.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_id = uuid.uuid4().hex
+        token = request_id_var.set(request_id)
+
+        async def send_with_id(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                headers.append((b"x-request-id", request_id.encode("ascii")))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_id)
+        finally:
+            request_id_var.reset(token)
+
+
+app.add_middleware(RequestIdMiddleware)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_without_values(request: Request, error: RequestValidationError):
+    """422s name the field path and the problem, never the value.
+
+    FastAPI's default detail includes each error's `input`, which for the
+    autofill endpoints is a profile value or the applicant's typed answer
+    (audit 2026-10-12, F22). Location, message and type are enough to fix
+    a payload.
+    """
+    rows = []
+    for row in error.errors():
+        rows.append({
+            "loc": list(row.get("loc") or ()),
+            "msg": str(row.get("msg") or ""),
+            "type": str(row.get("type") or ""),
+        })
+    return JSONResponse(status_code=422, content={"detail": rows})
 
 # CORS middleware.
 # `allow_origins` is matched by exact string comparison, so the previous
