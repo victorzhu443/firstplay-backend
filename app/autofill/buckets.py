@@ -80,6 +80,54 @@ _DATED = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 
 
+#: A month name, full or three-letter, with an optional trailing period.
+_MONTH_NAME = r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
+_NAMED_MONTH_YEAR = re.compile(r"\b" + _MONTH_NAME + r",?\s+(?:\d{1,2}(?:st|nd|rd|th)?,?\s+)?((?:19|20)\d{2})\b", re.I)
+_NUMERIC_MONTH_YEAR = re.compile(r"^\s*(\d{1,2})\s*[/.-]\s*((?:19|20)\d{2})\s*$|^\s*((?:19|20)\d{2})-(\d{1,2})(?:-\d{1,2})?\s*$")
+_BARE_MONTH = re.compile(r"^\s*" + _MONTH_NAME + r"\s*$", re.I)
+_MONTH_RANGE = re.compile(r"^\s*" + _MONTH_NAME + r"\s*(?:[-–—/]|to|through|thru|until)\s*" + _MONTH_NAME + r"\s*$", re.I)
+
+
+def _month_index(name: str) -> int:
+    return _MONTHS[name.lower()[:3]]
+
+
+def parse_month_year(text: str) -> Optional[Tuple[int, int]]:
+    """(month 1-12, year) for a stored month-and-year, or None.
+
+    "August 2027", "Aug 2027", "August 1, 2027", "08/2027", "2027-08" all
+    parse; "Summer 2027" and a bare "2027" do not — a season is not a month,
+    and a year names no month at all.
+    """
+    if not text:
+        return None
+    named = _NAMED_MONTH_YEAR.search(text)
+    if named:
+        return _month_index(named.group(1)), int(named.group(2))
+    numeric = _NUMERIC_MONTH_YEAR.match(text)
+    if numeric:
+        month = int(numeric.group(1) or numeric.group(4))
+        year = int(numeric.group(2) or numeric.group(3))
+        return (month, year) if 1 <= month <= 12 else None
+    return None
+
+
+def month_span(label: str) -> Optional[Tuple[int, int]]:
+    """(first, last) month index for an option that is a bare month or a
+    month range ("January", "Jan", "January–March", "Nov to Feb"), else None.
+
+    An option with a year or any other words is not a month option.
+    """
+    bare = _BARE_MONTH.match(label or "")
+    if bare:
+        index = _month_index(bare.group(1))
+        return index, index
+    span = _MONTH_RANGE.match(label or "")
+    if span:
+        return _month_index(span.group(1)), _month_index(span.group(2))
+    return None
+
+
 def looks_like_date(text: str) -> bool:
     """Whether a stored answer is a month-and-year date rather than a number."""
     return bool(_DATED.search(text or ""))
