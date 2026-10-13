@@ -465,3 +465,32 @@ def test_imc_facts_fill_once_stored():
     plan = resolve_form(form, memory, binder=None)
     values = {e.field_key: e.value for e in plan.entries}
     assert values["hs"] == "2024" and values["tt"] == "SAT" and values["sat"] == "1400 - 1490"
+
+
+
+def test_an_unset_start_date_is_asked_for_as_the_fact_not_the_derived_key():
+    """R50: "Start date month" and "Start date year" went to review on 26 boards
+    and the popup never asked, because the entries named the derived keys
+    education_start_month / education_start_year, which no registry row has."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField, FormSchema
+    months = [FieldOption(label=m, value=str(i + 1)) for i, m in enumerate(["January", "August", "September"])]
+    fields = [
+        FormField(key="educations[0].start_date.month", label="Start date month", kind=FieldKind.SINGLE_SELECT,
+                  field_class=FieldClass.CORE, required=True, options=months),
+        FormField(key="educations[0].start_date.year", label="Start date year", kind=FieldKind.TEXT,
+                  field_class=FieldClass.CORE, required=True, options=[]),
+    ]
+    memory = Memory(education={"school": "Cornell University", "degree": "Bachelor's", "graduation_date": "May 2028"})
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields), memory,
+                        binder=DeterministicBinder())
+    asks = {(e.needs_fact or {}).get("key") for e in plan.entries}
+    assert asks == {"start_date"}, asks
+    assert all((e.needs_fact or {}).get("section") == "education" for e in plan.entries)
+    assert "August 2024" in plan.entries[0].needs_fact["example"]
+    memory = Memory(education={"school": "Cornell University", "degree": "Bachelor's", "graduation_date": "May 2028",
+                               "start_date": "August 2024"})
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields), memory,
+                        binder=DeterministicBinder())
+    assert [e.value for e in plan.entries] == ["August", "2024"]
