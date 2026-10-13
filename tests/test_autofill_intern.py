@@ -948,3 +948,29 @@ def test_a_stored_pronoun_fills_a_multi_select():
 
     assert plan.entries[0].values == ["He / Him"]
     assert not plan.entries[0].needs_review
+
+
+def test_a_menu_that_offers_both_takes_both_alone():
+    """Rugged Robotics (R50, 2026-10-12): "Spring 2027 Co-Op / Summer 2027
+    Internship / Both" had all three selected. "Both" says it in one option;
+    ticking it beside the cohorts it stands for is incoherent."""
+    from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField
+    memory = Memory(preferences={"term_flexible": "Yes"})
+
+    def multi(label, *opts):
+        return FormField(key="q", label=label, kind=FieldKind.MULTI_SELECT, field_class=FieldClass.SCREENING,
+                         required=True, options=[FieldOption(label=o, value=o) for o in opts])
+
+    both = resolve_form(FormSchema(source="t", ats="t", posting_id="1", fields=[
+        multi("Are you interested in a Spring Co-Op, Summer Internship, or Both?",
+              "Spring 2027 Co-Op", "Summer 2027 Internship", "Both")]), memory, binder=DeterministicBinder())
+    assert both.entries[0].values == ["Both"]
+    either = resolve_form(FormSchema(source="t", ats="t", posting_id="1", fields=[
+        multi("Which internship term(s) are you applying for?", "Fall 2027", "Spring 2028", "Either term works for me")]),
+        memory, binder=DeterministicBinder())
+    assert either.entries[0].values == ["Either term works for me"]
+    # Near misses: "Other" and "Not sure" are not umbrellas; a menu with no umbrella still takes every cohort.
+    plain = resolve_form(FormSchema(source="t", ats="t", posting_id="1", fields=[
+        multi("Which internship cohort(s) work for you?", "Summer 2027", "Fall 2027", "None of these options work for me")]),
+        memory, binder=DeterministicBinder())
+    assert plain.entries[0].values == ["Summer 2027", "Fall 2027"], "no umbrella: every real cohort, never the opt-out"
