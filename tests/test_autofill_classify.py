@@ -585,3 +585,126 @@ def test_a_fifty_kilobyte_label_is_classified_in_well_under_a_second():
     assert not pattern.search(("disability and " * 4000) + "x")
     assert pattern.search(("disability and " * 4000) + "accommodation")
     assert time.perf_counter() - started < 0.2
+
+
+# --- code audit of 2026-10-12, F34: a consent verb grants only with the grant as its object
+
+#: bucket -> (labels that name the bucket's subject but ask something else,
+#:            labels that ask for the consent and must stay CONSENT)
+CONSENT_NEAR_MISSES = {
+    "sms_messages": (
+        ["Are you willing to be on-call for SMS alerts?",
+         "Do you understand WhatsApp's Business API?",
+         "Are you happy to support text message campaigns as part of this role?",
+         "Can you accept pager duty via text message?",
+         "I confirm I have experience with SMS gateways"],
+        ["Do you consent to receiving follow-up communication via text message about your application?",   # x7
+         "If you wish to receive information via text/SMS, please indicate the cell number below.",        # x2
+         "Do you opt-in to receive WhatsApp messages from our recruiting team?"],
+    ),
+    "marketing_communications": (
+        ["Are you willing to do marketing work as part of the role?",
+         "I understand this is a marketing role",
+         "Would you accept a role on the newsletter editorial team?",
+         "Would you like to run our engineering newsletter?",
+         "Do you agree that marketing and engineering should work closely?",
+         "Are you willing to join the talent pool for our hackathon judges?"],
+        ["Would you like to join our talent community for future opportunities?",
+         "Do you want to join our talent community?",
+         "Would you like to receive our engineering newsletter?"],
+    ),
+    "background_check": (
+        ["Would you be willing to build background check integrations?",
+         "Do you understand our background screening takes two weeks?",
+         "Are you happy to verify the accuracy of data pipelines as part of the role?"],
+        ["Are you willing to undergo a background check?",                                            # x3
+         "Are you willing to submit to a background screening if offered the position?",
+         "Subject to receiving an offer, please confirm you are happy to complete the mandatory background check",  # x2
+         "If an offer is extended and accepted, would you be willing to participate in and successfully complete "
+         "any background check and/or drug screening required for this position and location?"],
+    ),
+    "privacy_notice": (
+        ["Are you willing to work on data processing pipelines?",
+         "I confirm I have experience with data privacy engineering",
+         "Would you accept a data protection officer role in future?",
+         "Do you understand GDPR well enough to advise the product team?"],
+        ["Privacy Policy Acknowledgment",
+         "I agree with the Privacy Notice for Recruitment",
+         "I have read and agree to the Privacy notice and Terms of use.",       # x5; privacy is the first bucket named
+         "By applying you agree to the processing of your personal data as described in our privacy notice."],
+    ),
+    "terms_and_conditions": (
+        ["Are you willing to sign a confidentiality agreement?",                                      # p20
+         "Do you understand the terms and conditions of our bug bounty programme?",
+         "Would you like a copy of the candidate agreement by email?",
+         "I understand the pre-employment requirements include a drug test",
+         "Are you happy to enforce the code of conduct as a community moderator?"],
+        ["I accept the terms and conditions",
+         "Do you agree to our terms of use?",
+         "Please confirm that you have read and accept our candidate agreement."],
+    ),
+}
+
+
+@pytest.mark.parametrize("bucket,label", [
+    (bucket, label) for bucket, (misses, _asks) in CONSENT_NEAR_MISSES.items() for label in misses
+])
+def test_a_consent_verb_without_the_grant_as_its_object_is_not_a_consent(bucket, label):
+    """F34: `willing`, `understand`, `accept`, `confirm`, `happy to` and
+    `would you like` counted on their own, so these filled the standing
+    decision for the bucket they merely mention (38 of 73 such labels)."""
+    from app.autofill.classify import is_consent_asked
+    assert consent_key_for(label) == bucket, "the near miss must still name the bucket"
+    assert not is_consent_asked(label, 2), label
+    kind = FieldKind.BOOLEAN if label.startswith("I ") else FieldKind.SINGLE_SELECT
+    assert classify("question_1", label, kind, option_count=0 if kind == FieldKind.BOOLEAN else 2) != FieldClass.CONSENT, label
+
+
+@pytest.mark.parametrize("bucket,label", [
+    (bucket, label) for bucket, (_misses, asks) in CONSENT_NEAR_MISSES.items() for label in asks
+])
+def test_a_consent_asked_for_is_still_a_consent(bucket, label):
+    assert consent_key_for(label) == bucket
+    kind = FieldKind.TEXT if "cell number" in label else FieldKind.SINGLE_SELECT
+    assert classify("question_1", label, kind, option_count=0 if kind == FieldKind.TEXT else 2) == FieldClass.CONSENT, label
+
+
+def test_a_near_miss_never_replays_the_standing_decision_end_to_end():
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    every_bucket = Memory(consents={"sms_messages": "No", "marketing_communications": "No", "background_check": "Yes",
+                                    "privacy_notice": "Agree", "terms_and_conditions": "Agree", "interview_recording": "Yes"})
+    labels = [label for _bucket, (misses, _asks) in CONSENT_NEAR_MISSES.items() for label in misses]
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(labels)]
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        every_bucket, binder=DeterministicBinder())
+    for entry in plan.entries:
+        assert "standing consent" not in (entry.reason or ""), entry.label
+
+
+@pytest.mark.parametrize("label", [
+    "Are you willing to record the interview sessions you run as a hiring manager?",
+    "Would you like to record the conversation with your mentor for notes?",
+    "Are you willing to record the interview of customers for research?",
+    "Do you have experience recording interviews for a podcast?",
+])
+def test_recording_an_interview_as_job_content_is_not_the_recording_consent(label):
+    """The recording entry of `_DECISIONS_NOT_FACTS` carried no verb at all;
+    the generic phrase now needs a consent ask beside it."""
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2) != FieldClass.CONSENT
+
+
+@pytest.mark.parametrize("label", [
+    "To ensure we can focus fully on our conversation, we use BrightHire to record and transcribe interviews. "
+    "Please confirm if you consent to BrightHire being enabled for this interview",                      # x4
+    "We use Metaview, an AI notetaking tool, to streamline interviews by recording and summarizing discussions. "
+    "With your approval, it silently records notes during interviews. Can Metaview transcribe all your interviews?",  # x2
+    "I consent to my interview being recorded via BrightHire, Inc. to assist in our recruiting efforts.",
+    "Would you agree to recording the interview for training purposes?",
+    "Are you happy to be recorded the interview?",
+])
+def test_the_recording_notice_is_still_a_consent(label):
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2) == FieldClass.CONSENT
+    assert consent_key_for(label) == "interview_recording"

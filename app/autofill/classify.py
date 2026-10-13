@@ -416,9 +416,35 @@ _GRANT_BUCKETS = frozenset({
 #: the bucket regexes alone turned a non-compete disclosure ("any agreement
 #: with your current employer … confidentiality agreement", x5) and "experience
 #: coding in Python for data processing" into consents.
+#:
+#: A verb grants only when the grant is its object. The first cut counted
+#: `willing`, `understand`, `accept`, `confirm`, `happy to` and `would you
+#: like` on their own, so "Are you willing to sign a confidentiality
+#: agreement?", "Do you understand the terms and conditions of our bug
+#: bounty programme?", "Can you accept pager duty via text message?" and
+#: "Would you like to run our engineering newsletter?" each replayed a
+#: standing decision (code audit of 2026-10-12, F34: 38 of 73 such labels).
+#: `understand` is gone; the others carry their object. The corpus consents
+#: these must keep: "willing to undergo a background check" (x3), "confirm
+#: you are happy to complete the mandatory … background check" (x2),
+#: "willing to participate in and successfully complete any background
+#: check", "wish to receive information via text/SMS" (x2), "Would you like
+#: to join our talent community for future opportunities?".
 _CONSENT_ASKED = re.compile(
-    r"\b(consent|agree|acknowledg\w*|willing|authoriz\w*|authoris\w*|permission|opt[- ]?in"
-    r"|accept|understand|confirm|certify|attest|happy to|wish to receive|would you like)\b", re.I)
+    r"\b(consent|acknowledg\w*|authoriz\w*|authoris\w*|permission|opt[- ]?in|certify|attest"
+    r"|agree(s|d|ment)? (to|with)|i agree"
+    r"|willing to (undergo|submit to|complete|participate in|take|consent|receive|comply"
+    r"|be (contacted|recorded|subject)|authori[sz]e)"
+    r"|(would you like|do you want|do you wish|want|wish|like) to (join|receive|opt|hear|stay|get|subscribe"
+    r"|remain|continue|be (contacted|added|considered|included|notified|kept|part|recorded))"
+    r"|wish to receive"
+    r"|happy to (be |receive|undergo|complete|consent|opt|take)"
+    r"|accept(s|ed|ance)? (of )?(the |our |these |this |all |any |my )?(terms|conditions|polic(y|ies)|notice"
+    r"|statement|agreement|code of conduct|requirements|background)"
+    r"|i accept"
+    r"|confirm (that )?(i|you) (are |have |will )?(read|agree|consent|accept|acknowledge|happy|willing"
+    r"|underst(and|ood)|comply)"
+    r"|confirm (your |my )?(consent|agreement|acceptance|acknowledg\w*))\b", re.I)
 
 
 #: Sentence boundaries, for reading a consent ask one sentence at a time.
@@ -813,9 +839,17 @@ _ATTESTATION = (
 #: bucket and human while unrecorded.
 _DECISIONS_NOT_FACTS = (
     # "To ensure we can focus fully on our conversation, we use Brighthire to
-    # record interviews" (x4). Consent to being recorded.
-    re.compile(r"\b(record(ing|ed)?\s+(the\s+)?(interview|conversation)|brighthire"
-               r"|metaview|otter\.ai)\b", re.I),
+    # record interviews" (x4). Consent to being recorded. A recording vendor
+    # named on an application form is that notice (7 of 7 corpus labels);
+    # the generic phrase needs a consent verb beside it ("consent",
+    # "opt-in", "with your approval" are the corpus wordings), else "Are you
+    # willing to record the interview sessions you run as a hiring manager?"
+    # replayed the recording consent (code audit of 2026-10-12, F34).
+    # Anchored lookaheads: linear time.
+    re.compile(r"^(?:(?=.*\b(brighthire|metaview|otter\.ai)\b)"
+               r"|(?=.*\b(consent|opt[- ]?in|approv\w*|agree|acknowledg\w*|permission|authori[sz]\w*"
+               r"|(happy|willing) to be recorded)\b)"
+               r"(?=.*\brecord(ing|ed)?\s+(the\s+)?(interview|conversation)\b))", re.I | re.S),
     # "Do you opt-in to receive WhatsApp messages from Stripe Recruiting" (x2).
     re.compile(r"\bopt[-\s]?in\b|\b(receive|consent to).{0,20}\b(messages|texts|sms"
                r"|whatsapp|marketing)\b", re.I),
