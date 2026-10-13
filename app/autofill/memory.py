@@ -918,6 +918,7 @@ PROFILE_FIELDS = {
         ("marketing_communications", "No", 16),
         ("interview_recording", "", 4),
         ("background_check", "", 5),
+        ("demographic_data_consent", "", 3),
     ],
 }
 

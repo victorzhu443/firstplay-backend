@@ -813,3 +813,55 @@ def test_country_codes_know_every_country_the_theme_table_names():
     for code, _pattern in _COUNTRY_PATTERNS:
         assert country_codes(names[code]) is not None, code
     assert country_codes(None) is None and country_codes("") is None and country_codes("Narnia") is None
+
+
+# R50 (2026-10-12): Greenhouse's GDPR consent boxes are page-only controls
+# synthesised from the job's `data_compliance` block (Signifyd, Attentive,
+# InternshipList reported them as "not in plan").
+
+def _gdpr_payload(**block):
+    base = {"type": "gdpr", "requires_consent": True, "requires_processing_consent": True,
+            "requires_retention_consent": False, "retention_period": 365, "demographic_data_consent_applies": True}
+    base.update(block)
+    return {"id": 1, "title": "Intern", "company_name": "Acme", "questions": [], "data_compliance": [base]}
+
+
+def test_gdpr_consent_boxes_are_synthesised_from_the_compliance_block():
+    from app.autofill.greenhouse import parse_greenhouse_job
+    from app.autofill.schema import FieldClass, FieldKind
+    form = parse_greenhouse_job(_gdpr_payload())
+    by_key = {f.key: f for f in form.fields}
+    processing = by_key["gdpr_processing_consent_given"]
+    demographic = by_key["gdpr_demographic_data_consent_given"]
+    assert processing.kind == FieldKind.BOOLEAN and processing.required is True
+    assert processing.field_class == FieldClass.CONSENT and "Acme" in processing.label
+    assert demographic.kind == FieldKind.BOOLEAN and demographic.required is False
+    assert demographic.field_class == FieldClass.CONSENT
+
+
+def test_no_gdpr_boxes_when_the_board_does_not_require_consent():
+    from app.autofill.greenhouse import parse_greenhouse_job
+    form = parse_greenhouse_job(_gdpr_payload(requires_processing_consent=False, demographic_data_consent_applies=False))
+    assert not [f for f in form.fields if f.key.startswith("gdpr_")]
+    form = parse_greenhouse_job({"id": 1, "title": "Intern", "company_name": "Acme", "questions": []})
+    assert not [f for f in form.fields if f.key.startswith("gdpr_")]
+
+
+def test_the_two_gdpr_boxes_are_separate_standing_decisions():
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.classify import consent_key_for
+    from app.autofill.greenhouse import parse_greenhouse_job
+    from app.autofill.memory import Memory
+    form = parse_greenhouse_job(_gdpr_payload())
+    keys = {f.key: consent_key_for(f.label) for f in form.fields if f.key.startswith("gdpr_")}
+    assert keys == {"gdpr_processing_consent_given": "privacy_notice",
+                    "gdpr_demographic_data_consent_given": "demographic_data_consent"}
+    memory = Memory(consents={"privacy_notice": "Agree"})
+    plan = resolve_form(form, memory, binder=DeterministicBinder())
+    by_key = {e.field_key: e for e in plan.entries}
+    assert by_key["gdpr_processing_consent_given"].value == "Yes"
+    assert by_key["gdpr_demographic_data_consent_given"].needs_review, "the EEO-data consent is its own decision"
+    memory = Memory(consents={"privacy_notice": "Agree", "demographic_data_consent": "Agree"})
+    plan = resolve_form(form, memory, binder=DeterministicBinder())
+    assert {e.field_key: e.value for e in plan.entries if e.field_key.startswith("gdpr_")} == {
+        "gdpr_processing_consent_given": "Yes", "gdpr_demographic_data_consent_given": "Yes"}

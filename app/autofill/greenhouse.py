@@ -236,6 +236,40 @@ def _education_fields(payload: Dict[str, Any]) -> List[FormField]:
     ]
 
 
+def _gdpr_fields(payload: Dict[str, Any]) -> List[FormField]:
+    """Greenhouse's GDPR consent boxes, from the job's `data_compliance` block.
+
+    Not in `questions`: the page renders `gdpr_processing_consent_given` ("By
+    checking this box, I agree to allow <company> to store and process my
+    data…", required) and, when the demographic block applies,
+    `gdpr_demographic_data_consent_given`. R50 (2026-10-12): Signifyd,
+    Attentive and InternshipList reported both as "not in plan" because the
+    plan had no entry for them. Keyed by the page's own input names; the
+    extension locates them by name and ticks the box from the standing
+    consent (privacy for the first, its own bucket for the second).
+    """
+    fields: List[FormField] = []
+    company = (payload.get("company_name") or "the company").strip()
+    for block in payload.get("data_compliance") or []:
+        if not isinstance(block, dict) or block.get("type") != "gdpr":
+            continue
+        if block.get("requires_processing_consent"):
+            key, label = "gdpr_processing_consent_given", (
+                "By checking this box, I agree to allow {} to store and process my data for the "
+                "purpose of considering me for employment.".format(company))
+            fields.append(FormField(key=key, label=label, kind=FieldKind.BOOLEAN,
+                                    field_class=classify(key, label, FieldKind.BOOLEAN),
+                                    required=bool(block.get("requires_consent", True)), options=[]))
+        if block.get("demographic_data_consent_applies"):
+            key, label = "gdpr_demographic_data_consent_given", (
+                "By checking this box, I consent to {} collecting, storing, and processing my "
+                "responses to the demographic questions above.".format(company))
+            fields.append(FormField(key=key, label=label, kind=FieldKind.BOOLEAN,
+                                    field_class=classify(key, label, FieldKind.BOOLEAN),
+                                    required=False, options=[]))
+    return fields
+
+
 def _country_field() -> List[FormField]:
     """The `country` select every standard Greenhouse form renders beside Phone.
 
@@ -345,6 +379,7 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
     fields.extend(_demographic_fields(payload))
     fields.extend(_location_fields(payload))
     fields.extend(_country_field())
+    fields.extend(_gdpr_fields(payload))
 
     return FormSchema(
         source="greenhouse_api",

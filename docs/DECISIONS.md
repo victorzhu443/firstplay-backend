@@ -2705,10 +2705,25 @@ round `R50`, with `version`; draw in `survey/draws/draw_r50.json`.
   differ (several countries share +1, so the ISO code decides).
 - *67 "INPUT · not in plan" rows* were react-select's hidden required decoy
   — the 0.4.53 fix, not yet reloaded. Excluded from the counts above.
-- *Four consent checkboxes reported "not in plan"* although the plan knew
-  them: Greenhouse renders a one-box question as `question_N-labeled-
-  checkbox-0` while the plan key is `question_N`; the DOM check did not map
-  the id back. Fixed with the above.
+- *Four consent checkboxes reported "not in plan"* — and the plan did not
+  know them. Read live on Signifyd after the first fix missed: they are
+  Greenhouse's **GDPR boxes** (`gdpr_processing_consent_given`,
+  `gdpr_demographic_data_consent_given`), page-only controls the board API
+  never lists as questions but announces in the job's `data_compliance`
+  block (`requires_processing_consent`, `demographic_data_consent_applies`).
+  The backend now synthesises both (like Country), the first as the privacy
+  consent, the second as its own standing decision
+  (`consents.demographic_data_consent` — agreeing to be considered is not
+  agreeing to have EEO answers processed), and the extension ticks them by
+  name. The `-labeled-checkbox` mapping shipped too but was not the cause
+  here; Greenhouse's multi-select checkboxes are named `question_N[]`.
+- *Live re-check on 0.4.54 the same night:* TensorWave's and Harvey's
+  graduation dates filled through the picker (green, popper closed, one drift
+  re-apply, 0 failures); Haven's Country selected and Phone filled with no
+  failure. Still open: Rugged Robotics' multi-select ("Spring Co-Op, Summer
+  Internship…") is reported wanted after a fill the record calls `ok` — the
+  window kept losing focus before the control could be read, so whether the
+  pick committed or the check misreads a multi react-select is unmeasured.
 - *26 "Start date month/year" rows, 4 "Street Address" rows, salary and
   how-did-you-hear rows are not engine gaps.* Replanning the same boards with
   the profile file on disk fills all of them; the extension's copy of the
