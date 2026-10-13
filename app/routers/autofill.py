@@ -29,26 +29,25 @@ holds its own profile, and adding sync later is additive where un-storing
 data is not. But the backend sees the profile in transit; it does not keep it.
 """
 import logging
-import re
 import threading
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.autofill.ashby import parse_ashby_dom
 from app.autofill.ashby_api import looks_like_posting, parse_ashby_posting
 from app.autofill import ENGINE
 from app.autofill.binder import DeterministicBinder, FillPlan, resolve_form
-from app.autofill.greenhouse import parse_greenhouse_job
+from app.autofill.greenhouse import MalformedPayload, parse_greenhouse_job
 from app.autofill.jev_binder import JevBinder, OptionCache, ThemeCache
 from app.autofill.learn import LearnResult, Observation, accept, learn
 from app.autofill.memory import Memory
 from app.autofill.schema import FormSchema
 from app.exceptions import JevConfigurationError, JevError
-from app.jev_client import get_jev_client
+from app.jev_client import get_jev_client, summarise_error
 from app.rate_limit import autofill_limit, client_key
 
 logger = logging.getLogger(__name__)
@@ -67,6 +66,68 @@ router = APIRouter(prefix="/api/autofill", tags=["autofill"])
 _THEME_CACHE = ThemeCache()
 _OPTION_CACHE = OptionCache()
 
+# --- request caps (audit 2026-10-12, F10) ------------------------------------
+#
+# A stranger on the public endpoint used to be bounded by nothing: a 50 KB
+# label cost 9.6 s of worker CPU in the theme regexes (quadratic in label
+# length, probe p05b), 100,000 `answers` and a 200 KB label both returned
+# 200 (probe p14). Each cap below is set from the frozen corpora with
+# headroom (1,269 Greenhouse postings, 413 Ashby):
+#
+#   fields per form      max 59 (p99 48) Greenhouse, 31 Ashby      -> 500
+#   label length         max 1,941 chars (Greenhouse)              -> 2,000, truncated
+#   options per field    max 2,464 (a university list), 928 Ashby  -> 5,000
+#   option label length  max 222 chars                             -> 2,000, truncated (same walk)
+#   profile `answers`    one per distinct question ever answered    -> 5,000
+#   profile string       a stored answer, an essay at most         -> 20,000, refused
+#   observations/learn   one per field on the form                 -> 500
+#
+# Labels and option texts are *truncated*, not refused: they are the page's
+# text, hostile or not, and a plan over the first 2,000 characters is still
+# a plan. Profile values are the applicant's own and are *refused* with the
+# path, never silently shortened. The 300-option cap the audit proposed
+# would have broken 44 real corpus fields.
+MAX_FIELDS = 500
+MAX_LABEL_CHARS = 2000
+MAX_OPTIONS_PER_FIELD = 5000
+MAX_ANSWERS = 5000
+MAX_PROFILE_STRING_CHARS = 20000
+MAX_OBSERVATIONS = 500
+MAX_USER_VALUE_ITEMS = MAX_OPTIONS_PER_FIELD
+
+
+def _truncate_strings(value: Any, limit: int) -> Any:
+    """A copy of a JSON value with every string cut to `limit` characters."""
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit]
+    if isinstance(value, list):
+        return [_truncate_strings(item, limit) for item in value]
+    if isinstance(value, dict):
+        return {key: _truncate_strings(item, limit) for key, item in value.items()}
+    return value
+
+
+def _check_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Refuse an oversized profile, naming the path. Values are never altered."""
+    answers = profile.get("answers")
+    if isinstance(answers, dict) and len(answers) > MAX_ANSWERS:
+        raise ValueError("answers: {} entries exceeds the limit of {}".format(len(answers), MAX_ANSWERS))
+
+    def walk(value: Any, path: str) -> None:
+        if isinstance(value, str):
+            if len(value) > MAX_PROFILE_STRING_CHARS:
+                raise ValueError("{}: {} characters exceeds the limit of {}".format(
+                    path, len(value), MAX_PROFILE_STRING_CHARS))
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, "{}.{}".format(path, key) if path else str(key))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, "{}[{}]".format(path, index))
+
+    walk(profile, "")
+    return profile
+
 
 class AutofillRequest(BaseModel):
     """A form to fill and the profile to fill it from."""
@@ -83,6 +144,17 @@ class AutofillRequest(BaseModel):
     #: memory for this request only; stored nowhere, logged nowhere.
     profile: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("form")
+    @classmethod
+    def _bound_form_text(cls, form: Dict[str, Any]) -> Dict[str, Any]:
+        # Before parsing, because parsing is where the label regexes run.
+        return _truncate_strings(form, MAX_LABEL_CHARS)
+
+    @field_validator("profile")
+    @classmethod
+    def _bound_profile(cls, profile: Dict[str, Any]) -> Dict[str, Any]:
+        return _check_profile(profile)
+
     #: Company being applied to, for the parameterised themes. Falls back to
     #: whatever the form itself names.
     company: Optional[str] = None
@@ -96,8 +168,17 @@ class AutofillResponse(BaseModel):
     plan: FillPlan
     #: Wall-clock time the backend spent, so a slow fill is blamed correctly.
     elapsed_ms: int = 0
-    #: True when a model call timed out and the rest of the plan was finished
-    #: deterministically — the fill is still complete, just with more review.
+    #: True when the breaker tripped — a call timed out or could not connect
+    #: — in any gate, speculative or sequential, and the rest of the plan was
+    #: finished deterministically: the fill is still complete, just with
+    #: more review. Until 2026-10-12 a trip in a sequential gate propagated
+    #: out of `resolve_form`, the router rebuilt the plan without the model
+    #: and this stayed false (tests stream, F19). The three model flags:
+    #: `model_skipped` = the breaker tripped (a timeout); `model_failed` =
+    #: any model call raised on this plan, trips included, with
+    #: `model_error` naming the category; `model_degraded` = the key is
+    #: present and the last thing the model did for this caller was fail,
+    #: with no success since.
     model_skipped: bool = False
     summary: Dict[str, int]
     jev_calls: int = 0
@@ -118,24 +199,82 @@ class AutofillResponse(BaseModel):
     #: cached its plans for six hours (audit 2026-10-12, M6). A caller that
     #: caches plans must not cache one with this false.
     model_available: bool = True
+    #: True when a model call was attempted on this plan and raised — in a
+    #: sequential gate (the plan was then finished deterministically) or in
+    #: the speculative pool, which swallows what it gets back. Before this,
+    #: a plan after a failed model path reported `jev_calls=0, cost_usd=0,
+    #: model_skipped=False`, indistinguishable from one that never tried
+    #: (audit 2026-10-12, F21).
+    model_failed: bool = False
+    #: The sanitised category of that failure ("422 from upstream",
+    #: "upstream timed out"); never the upstream text.
+    model_error: Optional[str] = None
+
+
+def _profile_error_detail(error: Exception) -> str:
+    """A 422 detail that names the field paths, never the values.
+
+    pydantic's own message carries `input_value=<the profile value>`, which
+    the extension prints in the page console (audit 2026-10-12, F22).
+    """
+    errors = getattr(error, "errors", None)
+    try:
+        rows = errors() if callable(errors) else []
+    except Exception:  # noqa: BLE001
+        rows = []
+    if not rows:
+        return "Profile could not be read: {}".format(type(error).__name__)
+    paths = sorted({".".join(str(part) for part in (row.get("loc") or ())) or "(root)" for row in rows})
+    shown = ", ".join(paths[:10]) + (" and {} more".format(len(paths) - 10) if len(paths) > 10 else "")
+    return "Profile could not be read: {} validation error(s) at {}".format(len(rows), shown)
 
 
 def _parse_form(ats: str, payload: Dict[str, Any]) -> FormSchema:
-    if ats == "greenhouse":
-        return parse_greenhouse_job(payload)
+    """The normalised form, or 400 naming what was wrong with the payload.
 
-    if ats == "ashby":
-        # The GraphQL `jobPosting` (with its applicationForm) when the
-        # extension fetched it; the DOM extract otherwise (older clients,
-        # or a page whose operation failed).
-        if looks_like_posting(payload):
-            return parse_ashby_posting(payload, org=payload.get("_org"))
-        return parse_ashby_dom(payload)
+    JSON of the wrong shape (a string where the adapter reads a list) used
+    to reach `.get` on a string and come back as a 500 with a traceback in
+    the log (audit 2026-10-12, F11; probe p14). The adapters raise
+    `MalformedPayload` with the path; anything else they trip over is
+    still the payload's fault and is answered the same way, logged by type.
+    """
+    try:
+        if ats == "greenhouse":
+            form = parse_greenhouse_job(payload)
+        elif ats == "ashby":
+            # The GraphQL `jobPosting` (with its applicationForm) when the
+            # extension fetched it; the DOM extract otherwise (older clients,
+            # or a page whose operation failed).
+            if looks_like_posting(payload):
+                org = payload.get("_org")
+                form = parse_ashby_posting(payload, org=str(org) if org is not None else None)
+            else:
+                controls = payload.get("controls")
+                if controls is not None and not isinstance(controls, list):
+                    raise MalformedPayload("form.controls: expected a list, got {}".format(type(controls).__name__))
+                form = parse_ashby_dom(payload)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported ats {!r}; expected 'greenhouse' or 'ashby'".format(ats),
+            )
+    except MalformedPayload as e:
+        raise HTTPException(status_code=400, detail="Malformed form payload: {}".format(e))
+    except (AttributeError, TypeError, KeyError, ValueError) as e:
+        logger.warning("Malformed %s payload rejected: %s", ats, type(e).__name__)
+        raise HTTPException(status_code=400, detail="Malformed form payload ({})".format(type(e).__name__))
 
-    raise HTTPException(
-        status_code=400,
-        detail="Unsupported ats {!r}; expected 'greenhouse' or 'ashby'".format(ats),
-    )
+    # Counts are checked on the parsed form, which is ATS-neutral.
+    if len(form.fields) > MAX_FIELDS:
+        raise HTTPException(status_code=422, detail=[{
+            "loc": ["body", "form"], "type": "value_error.too_many",
+            "msg": "{} fields exceeds the limit of {}".format(len(form.fields), MAX_FIELDS)}])
+    for field in form.fields:
+        if len(field.options) > MAX_OPTIONS_PER_FIELD:
+            raise HTTPException(status_code=422, detail=[{
+                "loc": ["body", "form", field.key, "options"], "type": "value_error.too_many",
+                "msg": "{} options exceeds the limit of {}".format(len(field.options), MAX_OPTIONS_PER_FIELD)}])
+    return form
 
 
 # Sync by design, like the other handlers here: this makes a blocking HTTP call
@@ -165,9 +304,7 @@ def build_plan(request: AutofillRequest, http_request: Request):
     try:
         memory = Memory(**request.profile)
     except Exception as e:
-        raise HTTPException(
-            status_code=422, detail="Profile could not be read: {}".format(e)
-        )
+        raise HTTPException(status_code=422, detail=_profile_error_detail(e))
     # Company-shaped episodes (a referral, an office choice) replay only on
     # this company's forms; `resolve_form` has no way to hand it to Memory.
     memory.for_company(request.company or form.company)
@@ -189,6 +326,11 @@ def build_plan(request: AutofillRequest, http_request: Request):
     elif request.use_model:
         logger.warning("No model key configured; building a deterministic plan")
 
+    model_error: Optional[str] = None
+    #: The binder that made the calls, kept through a deterministic rebuild
+    #: so the response reports what was actually spent and whether the
+    #: breaker tripped.
+    attempted = jev
     try:
         plan = resolve_form(form, memory, company=request.company, binder=binder)
         if jev is not None and getattr(jev, "calls", 0):
@@ -199,21 +341,30 @@ def build_plan(request: AutofillRequest, http_request: Request):
         # an error page.
         # The summary, not the upstream body: /health was sanitised (M5) and
         # the log line carried the same text (review of 2026-10-12).
-        logger.warning("Jev failed mid-plan, retrying deterministically: %s", _summarise_error(e))
+        model_error = _summarise_error(e)
+        logger.warning("Jev failed mid-plan, retrying deterministically: %s", model_error)
         _note_model_error(e, caller)
         plan = resolve_form(form, memory, company=request.company,
                             binder=DeterministicBinder())
         jev = None
+
+    if model_error is None and attempted is not None and getattr(attempted, "failed", False):
+        # A call raised and was swallowed (the speculative gate) or tripped
+        # the breaker; the plan is complete but not the one the model would
+        # have made.
+        model_error = getattr(attempted, "last_error", None) or "model call failed"
 
     return AutofillResponse(
         model_available=available,
         model_degraded=bool(available and _model_degraded(caller)),
         plan=plan,
         summary=plan.summary(),
-        jev_calls=jev.calls if jev else 0,
-        cost_usd=jev.cost_usd if jev else 0.0,
+        jev_calls=attempted.calls if attempted else 0,
+        cost_usd=attempted.cost_usd if attempted else 0.0,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
-        model_skipped=bool(jev is not None and getattr(jev, "tripped", False)),
+        model_skipped=bool(attempted is not None and getattr(attempted, "tripped", False)),
+        model_failed=model_error is not None,
+        model_error=model_error,
         engine=ENGINE,
     )
 
@@ -222,10 +373,44 @@ class LearnRequest(BaseModel):
     """What the applicant did on a form, and the profile to fold it into."""
 
     profile: Dict[str, Any] = Field(default_factory=dict)
-    observations: List[Observation] = Field(default_factory=list)
+    observations: List[Observation] = Field(default_factory=list, max_length=MAX_OBSERVATIONS)
     #: Keys of pending proposals the applicant accepted in the popup.
-    accept: List[str] = Field(default_factory=list)
+    accept: List[str] = Field(default_factory=list, max_length=MAX_ANSWERS)
     use_model: bool = True
+
+    @field_validator("profile")
+    @classmethod
+    def _bound_profile(cls, profile: Dict[str, Any]) -> Dict[str, Any]:
+        return _check_profile(profile)
+
+    @field_validator("observations", mode="before")
+    @classmethod
+    def _bound_observations(cls, observations: Any) -> Any:
+        """Page text (label, options) truncated; the applicant's own value
+        refused when oversized, with the path. A 200 KB label cost 90 s in
+        the classifier before this (probe p14)."""
+        if not isinstance(observations, list):
+            return observations
+        bounded = []
+        for index, raw in enumerate(observations):
+            if not isinstance(raw, dict):
+                bounded.append(raw)
+                continue
+            item = dict(raw)
+            if isinstance(item.get("label"), str):
+                item["label"] = item["label"][:MAX_LABEL_CHARS]
+            if isinstance(item.get("options"), list):
+                item["options"] = _truncate_strings(item["options"][:MAX_OPTIONS_PER_FIELD], MAX_LABEL_CHARS)
+            for name in ("user_value", "plan_value"):
+                value = item.get(name)
+                if isinstance(value, list) and len(value) > MAX_USER_VALUE_ITEMS:
+                    raise ValueError("{}[{}].{}: {} items exceeds the limit of {}".format(
+                        "observations", index, name, len(value), MAX_USER_VALUE_ITEMS))
+                if isinstance(value, str) and len(value) > MAX_PROFILE_STRING_CHARS:
+                    raise ValueError("{}[{}].{}: {} characters exceeds the limit of {}".format(
+                        "observations", index, name, len(value), MAX_PROFILE_STRING_CHARS))
+            bounded.append(item)
+        return bounded
 
 
 class LearnResponse(BaseModel):
@@ -237,6 +422,10 @@ class LearnResponse(BaseModel):
     jev_calls: int = 0
     cost_usd: float = 0.0
     engine: str = ""
+    #: True when the judge was called and raised; the episodes were still
+    #: saved, the proposals are the ones no model saw (audit 2026-10-12, F21).
+    model_failed: bool = False
+    model_error: Optional[str] = None
 
 
 @router.post("/learn", response_model=LearnResponse,
@@ -248,10 +437,23 @@ def learn_from_form(request: LearnRequest):
     to store. Exact answers are saved for replay; generalisations are only
     proposed, and applied here only for keys listed in `accept`.
     """
+    def fresh_memory() -> Memory:
+        """The profile as sent, with the accepted proposals applied.
+
+        Built twice when the judge fails: `learn` saves the episodes into
+        the Memory it is given *before* the judge runs, so a fallback over
+        the same object found them already stored and reported
+        `learned: 0` for an episode it had kept (tests stream, F19).
+        """
+        fresh = Memory(**request.profile)
+        for key in request.accept:
+            accept(fresh, key)
+        return fresh
+
     try:
         memory = Memory(**request.profile)
     except Exception as e:
-        raise HTTPException(status_code=422, detail="Profile could not be read: {}".format(e))
+        raise HTTPException(status_code=422, detail=_profile_error_detail(e))
 
     accepted = [key for key in request.accept if accept(memory, key)]
 
@@ -262,16 +464,24 @@ def learn_from_form(request: LearnRequest):
         else:
             logger.warning("No model key configured; learning episodes only")
 
+    model_error: Optional[str] = None
     try:
         result: LearnResult = learn(memory, request.observations, binder=binder)
     except JevError as e:
-        logger.warning("Jev failed while judging corrections; episodes only: %s", e)
-        result = learn(memory, request.observations, binder=None)
+        # The summary, never `e` itself: a 4xx that echoed the judge's
+        # questions put the applicant's answers in the log (audit
+        # 2026-10-12, F9; probe p08).
+        model_error = _summarise_error(e)
+        logger.warning("Jev failed while judging corrections; episodes only: %s", model_error)
+        result = learn(fresh_memory(), request.observations, binder=None)
+    if model_error is None and binder is not None and getattr(binder, "failed", False):
+        model_error = getattr(binder, "last_error", None) or "model call failed"
 
     return LearnResponse(
         profile=result.profile, learned=result.learned, accepted=accepted,
         proposals=[p.model_dump() for p in result.proposals], ignored=result.ignored,
         jev_calls=result.jev_calls, cost_usd=result.cost_usd, engine=ENGINE,
+        model_failed=model_error is not None, model_error=model_error,
     )
 
 
@@ -293,24 +503,10 @@ _CALLER_STATUS_MAX = 1000
 _MODEL_SEQ = {"n": 0}
 
 
-def _summarise_error(error: Exception) -> str:
-    """A short, sanitised account of a model failure for /health.
-
-    Upstream error bodies are not republished: the previous field carried up
-    to 200 characters of whatever OpenRouter returned, to anyone who asked.
-    """
-    if isinstance(error, JevConfigurationError):
-        return "model not configured"
-    text = str(error)
-    status = re.search(r"\b([45]\d\d)\b", text)
-    if status:
-        return "{} from upstream".format(status.group(1))
-    lowered = text.lower()
-    if "timed out" in lowered or "timeout" in lowered:
-        return "upstream timed out"
-    if "transport" in lowered or "connect" in lowered or "unreachable" in lowered:
-        return "upstream unreachable"
-    return type(error).__name__[:80]
+#: The sanitised category of a model failure, for /health, the response and
+#: every log line. Defined in `app.jev_client` beside the error classes so the
+#: binder can use it too; kept under this name here for its callers.
+_summarise_error = summarise_error
 
 
 def _stamp() -> str:

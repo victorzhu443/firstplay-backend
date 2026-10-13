@@ -403,3 +403,60 @@ def test_option_cache_hits_and_is_bounded_with_lru_eviction(tmp_path):
     path.write_text(json.dumps({"optmatch::Label::Jane Doe::Yes|No": ["Yes", 0.9], keys[0]: ["A", 0.8]}))
     loaded = OptionCache(str(path))
     assert loaded.size == 1 and loaded.get(keys[0]) == ("A", 0.8)
+    # ...and the file itself no longer holds them, and is owner-only (F5):
+    # dropping on load left 969 plaintext keys on disk at 0644.
+    import os
+    rewritten = json.loads(path.read_text())
+    assert set(rewritten) == {keys[0]}
+    assert oct(os.stat(str(path)).st_mode & 0o777) == "0o600"
+
+
+# --- F12: the option cache survives concurrent get/put under eviction -------
+
+def test_option_cache_get_and_put_are_safe_under_concurrent_eviction():
+    """`get` did `dict.get` then `move_to_end`, `put` assigned then
+    `move_to_end`, while another thread's `popitem` evicted that same key:
+    KeyError, a 500 on a plan once the hosted cache is near its cap (audit
+    2026-10-12, F12; probe p09 raised within 3 s at 4 writers, 4 readers,
+    cap 50). Bounded iterations rather than a timer so the test's length is
+    fixed; every exception from either side is a failure."""
+    import sys
+    import threading
+    from app.autofill.jev_binder import OptionCache
+
+    cache = OptionCache(max_entries=50)
+    errors = []
+    done = threading.Event()
+    # A short switch interval makes the interleaving the race needs common
+    # rather than rare: without it the unlocked cache passed this test too.
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+
+    def writer(offset):
+        try:
+            for i in range(6000):
+                cache.put("optmatch:%032x" % (offset + i), "Yes", 0.9)
+        except Exception as e:  # noqa: BLE001
+            errors.append(("put", repr(e)))
+
+    def reader():
+        try:
+            while not done.is_set():
+                for i in range(0, 400):
+                    cache.get("optmatch:%032x" % i)
+        except Exception as e:  # noqa: BLE001
+            errors.append(("get", repr(e)))
+
+    writers = [threading.Thread(target=writer, args=(w * 100,)) for w in range(4)]
+    readers = [threading.Thread(target=reader) for _ in range(4)]
+    for t in readers + writers:
+        t.start()
+    for t in writers:
+        t.join()
+    done.set()
+    for t in readers:
+        t.join()
+    sys.setswitchinterval(interval)
+
+    assert errors == []
+    assert cache.size <= 50

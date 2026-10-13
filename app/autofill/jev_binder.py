@@ -29,14 +29,16 @@ import re
 import json
 import logging
 import os
+import threading
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
 from app.autofill.classify import normalize_label
+from app.autofill.private_json import write_private_json
 from app.autofill.themes import THEME_CRITERIA, QuestionTheme
 from app.autofill.schema import FieldKind, FormField
 from app.exceptions import JevServiceError
-from app.jev_client import JevClient, choice, get_jev_client, noul
+from app.jev_client import JevClient, choice, get_jev_client, noul, summarise_error
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +124,9 @@ class ThemeCache:
         payload = {k: [v[0], v[1]] for k, v in self._entries.items()}
         payload["__taxonomy__"] = taxonomy_fingerprint()
 
-        with open(self.path, "w") as handle:
-            json.dump(payload, handle, indent=1)
+        # Form facts only, but it lives beside the profile: owner-only like
+        # every other file under ~/.config/firstplay (audit 2026-10-12, F5).
+        write_private_json(self.path, payload, indent=1)
 
     @property
     def size(self) -> int:
@@ -260,42 +263,62 @@ class OptionCache:
         self.hits = 0
         self.misses = 0
         self.evicted = 0
+        #: Handlers run in FastAPI's threadpool and the speculative gate runs
+        #: in a pool of its own, so one thread's `get` + `move_to_end` can
+        #: straddle another's eviction of that same key and raise KeyError
+        #: (audit 2026-10-12, F12; the same defect §56 fixed for
+        #: `_CALLER_STATUS`). One lock around every touch of `_entries`.
+        self._lock = threading.Lock()
 
         if path and os.path.exists(path):
+            dropped = 0
             try:
                 with open(path) as handle:
                     raw = json.load(handle)
                 for key, value in raw.items():
                     if _SIGNATURE_SHAPE.match(key):
                         self.put(key, value[0], float(value[1]))
+                    else:
+                        dropped += 1
             except Exception:
                 logger.warning("Could not read option cache at %s; starting empty", path)
+            if dropped:
+                # The pre-§55 format keyed on `label::stored value::options`
+                # in clear. Dropping those on load was not enough: the file
+                # stayed on disk, 0644, 969 keys of it (audit 2026-10-12,
+                # F5). Rewritten owner-only with the hashed entries only.
+                logger.info("Dropped %d plaintext option-cache keys at %s and rewrote it", dropped, path)
+                self.save()
 
     def get(self, signature: str) -> Optional[Tuple[Optional[str], float]]:
-        entry = self._entries.get(signature)
-        if entry is None:
-            self.misses += 1
-            return None
-        self.hits += 1
-        self._entries.move_to_end(signature)
-        return entry
+        with self._lock:
+            entry = self._entries.get(signature)
+            if entry is None:
+                self.misses += 1
+                return None
+            self.hits += 1
+            self._entries.move_to_end(signature)
+            return entry
 
     def put(self, signature: str, label: Optional[str], confidence: float) -> None:
-        self._entries[signature] = (label, confidence)
-        self._entries.move_to_end(signature)
-        while len(self._entries) > self.max_entries:
-            self._entries.popitem(last=False)
-            self.evicted += 1
+        with self._lock:
+            self._entries[signature] = (label, confidence)
+            self._entries.move_to_end(signature)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+                self.evicted += 1
 
     def save(self) -> None:
         if not self.path:
             return
-        with open(self.path, "w") as handle:
-            json.dump({k: [v[0], v[1]] for k, v in self._entries.items()}, handle, indent=1)
+        with self._lock:
+            snapshot = {k: [v[0], v[1]] for k, v in self._entries.items()}
+        write_private_json(self.path, snapshot, indent=1)
 
     @property
     def size(self) -> int:
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
 
 
 def _local_theme(label: str):
@@ -331,6 +354,12 @@ class JevBinder:
         self.questions_asked = 0
 
         self.tripped = False
+        #: Set by the first call that raised, whether or not the caller went
+        #: on to swallow it: the speculative gate does, and the response
+        #: then said `jev_calls=0, cost_usd=0` as if nothing had been tried
+        #: (audit 2026-10-12, F21). `last_error` is the sanitised category.
+        self.failed = False
+        self.last_error: Optional[str] = None
         self._options = option_cache if option_cache is not None else OptionCache(
             (cache.path.replace("themes.json", "options.json")
              if cache is not None and cache.path else None)
@@ -756,7 +785,18 @@ class JevBinder:
         except JevServiceError as e:
             if "timed out" in str(e) or "transport" in str(e):
                 self.tripped = True
+            self._record_failure(description, e)
             raise
+        except Exception as e:  # noqa: BLE001 — recorded, then re-raised unchanged
+            self._record_failure(description, e)
+            raise
+
+    def _record_failure(self, description: str, error: Exception) -> None:
+        """Logged here, once, at the boundary: the speculative pool swallows
+        what it gets back, and nothing else would say a call failed."""
+        self.failed = True
+        self.last_error = summarise_error(error)
+        logger.warning("%s failed: %s", description, self.last_error)
 
     @staticmethod
     def _option_signature(value: str, field) -> str:

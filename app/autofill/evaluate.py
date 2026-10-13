@@ -25,13 +25,16 @@ hides which one is failing:
                 over labelled *filled* fields only. A field left for review
                 cannot be wrong; it can only be a coverage miss.
 """
+import hashlib
 import json
 import os
+import re
 from typing import Dict, List, Optional, Tuple
 
 from app.autofill.binder import resolve_form
 from app.autofill.greenhouse import parse_greenhouse_job
 from app.autofill.memory import Memory
+from app.autofill.private_json import write_private_json
 from app.autofill.schema import FieldClass, FormSchema
 
 #: Classes excluded from the coverage denominator. Not failures — they are
@@ -60,8 +63,7 @@ def freeze_corpus(payloads: List[dict], directory: str = CORPUS_DIR) -> int:
         posting_id = str(payload.get("id") or "")
         if not posting_id:
             continue
-        with open(os.path.join(directory, "gh_{}.json".format(posting_id)), "w") as handle:
-            json.dump(payload, handle)
+        write_private_json(os.path.join(directory, "gh_{}.json".format(posting_id)), payload)
         written += 1
 
     return written
@@ -110,20 +112,59 @@ def load_corpus(directory: str = CORPUS_DIR, *, deduplicate: bool = True) -> Lis
     return unique
 
 
+#: A resolution key is ``label||<value digest>||reason``; the digest is 16
+#: hex characters, which is how a legacy key with the value in clear is told
+#: apart from a hashed one.
+_VALUE_DIGEST = re.compile(r"^[0-9a-f]{16}$")
+
+
+def _value_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _rekey(key: str) -> str:
+    """A legacy ``label||value||reason`` key with its value segment hashed.
+
+    Exact, because the legacy segment is the same ``str(value)[:50]`` the
+    digest is taken over, so a label recorded in clear still applies.
+    """
+    parts = key.split("||")
+    if len(parts) != 3 or _VALUE_DIGEST.match(parts[1]):
+        return key
+    return "||".join((parts[0], _value_digest(parts[1]), parts[2]))
+
+
 def load_labels(path: str = LABELS_PATH) -> Dict[str, str]:
+    """The verdicts, with any legacy value-in-clear keys hashed.
+
+    Until 2026-10-12 every key carried the applicant's value — an email, the
+    answer to a veteran-status question — in a 0644 file (audit F5). Legacy
+    keys are converted on read, and when any were, the file is rewritten
+    owner-only without them.
+    """
     if not os.path.exists(path):
         return {}
 
     with open(path) as handle:
-        return json.load(handle)
+        raw = json.load(handle)
+
+    labels: Dict[str, str] = {}
+    migrated = 0
+    for key, verdict in raw.items():
+        hashed = _rekey(key)
+        migrated += hashed != key
+        labels.setdefault(hashed, verdict)
+
+    if migrated:
+        save_labels(labels, path)
+
+    return labels
 
 
 def save_labels(labels: Dict[str, str], path: str = LABELS_PATH) -> str:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as handle:
-        json.dump(labels, handle, indent=1, sort_keys=True)
-
-    return path
+    """Owner-only (0600) and atomic: a verdict names the question and the
+    reason, and the reason can name a protected key."""
+    return write_private_json(path, labels, indent=1, sort_keys=True)
 
 
 def label_key(posting_id: str, field_key: str, entry=None) -> str:
@@ -140,6 +181,11 @@ def label_key(posting_id: str, field_key: str, entry=None) -> str:
     and so is the same value arrived at differently — "Yes" for US work
     authorisation and "Yes" for UK are the same words and not the same claim.
 
+    The value goes in as a digest, the way ``cache_signature`` keys the
+    option cache: the label and the reason are facts about the form and the
+    engine, the value is the applicant's answer, and this file sits on disk
+    beside a 0600 profile (audit 2026-10-12, F5).
+
     Falls back to the old per-instance key when no entry is supplied, so
     existing labels can be migrated rather than discarded.
     """
@@ -150,7 +196,7 @@ def label_key(posting_id: str, field_key: str, entry=None) -> str:
 
     return "{}||{}||{}".format(
         normalize_label(entry.label)[:70],
-        str(entry.value)[:50],
+        _value_digest(str(entry.value)[:50]),
         (entry.reason or "")[:50],
     )
 

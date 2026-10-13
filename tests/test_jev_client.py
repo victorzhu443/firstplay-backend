@@ -59,6 +59,8 @@ def test_a_key_of_the_wrong_shape_is_rejected_before_sending():
         JevClient(api_key="grep -c OPENROUTER_API_KEY .env")
 
     assert "sk-or-" in str(excinfo.value)
+    # The length is reported; no fragment of the value is (F22).
+    assert "grep" not in str(excinfo.value)
 
 
 def test_the_key_is_never_included_in_an_error_message():
@@ -196,13 +198,29 @@ def test_rejected_credentials_are_not_retryable(status, restore_httpx):
         JevClient(api_key=KEY).decide({}, {"q": noul("yes?")})
 
 
-def test_a_422_names_the_question_set(restore_httpx):
-    httpx.post = lambda url, **kw: httpx.Response(422, text="criteria too long")
+def test_a_422_names_the_status_and_never_the_body(restore_httpx):
+    """The questions carry the applicant's answers, so an upstream body
+    that echoes the request must not reach the exception text, which the
+    handlers log (audit 2026-10-12, F9; probe p08)."""
+    body = '{"error":"bad criteria near: The applicant\'s answer: SECRET-ANSWER-TEXT"}'
+    httpx.post = lambda url, **kw: httpx.Response(422, text=body)
 
     with pytest.raises(JevConfigurationError) as excinfo:
         JevClient(api_key=KEY).decide({}, {"q": noul("yes?")})
 
-    assert "criteria too long" in str(excinfo.value)
+    assert "HTTP 422" in str(excinfo.value)
+    assert "SECRET-ANSWER-TEXT" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("status", [400, 404, 418])
+def test_an_unexpected_4xx_names_the_status_and_never_the_body(status, restore_httpx):
+    httpx.post = lambda url, **kw: httpx.Response(status, text="echo: SECRET-ANSWER-TEXT")
+
+    with pytest.raises(JevError) as excinfo:
+        JevClient(api_key=KEY).decide({}, {"q": noul("yes?")})
+
+    assert "HTTP {}".format(status) in str(excinfo.value)
+    assert "SECRET-ANSWER-TEXT" not in str(excinfo.value)
 
 
 @pytest.mark.parametrize("status", [429, 500, 502, 503, 504, 529])

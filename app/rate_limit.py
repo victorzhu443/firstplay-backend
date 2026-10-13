@@ -13,8 +13,8 @@ limits need Redis; this app runs a single instance.
 import os
 import threading
 import time
-from collections import deque
-from typing import Callable, Deque, Dict, Optional
+from collections import OrderedDict, deque
+from typing import Callable, Deque, Optional
 
 from fastapi import HTTPException, Request
 
@@ -24,10 +24,37 @@ from fastapi import HTTPException, Request
 # low is not the failure — too *high* trusts a spoofed entry).
 TRUSTED_PROXY_HOPS = int(os.getenv("TRUSTED_PROXY_HOPS", "1"))
 
+#: The per-address allowance is this many times the per-install one. An
+#: install token is client-chosen, so a caller who mints a fresh token per
+#: request used to get a fresh allowance per request (audit 2026-10-12, F10;
+#: probe p06). Addresses are shared — a campus NAT puts a dorm behind one —
+#: so the address cap is a multiple, not the same number: 5 × 600 plans an
+#: hour from one address before anyone there is refused.
+IP_LIMIT_MULTIPLIER = int(os.getenv("RATE_LIMIT_IP_MULTIPLIER", "5"))
 
-def client_key(request: Request) -> str:
+#: Distinct keys one limiter remembers. Idle keys are swept every window;
+#: this is the hard bound underneath, least recently seen dropped first,
+#: so a flood of fresh tokens (50,000 retained in the probe) costs memory
+#: proportional to this and not to the flood.
+MAX_TRACKED_KEYS = int(os.getenv("RATE_LIMIT_MAX_KEYS", "10000"))
+
+
+def install_token(request: Request) -> Optional[str]:
+    """The extension's install token, when the header carries a well-formed one.
+
+    A random token generated on first run (X-FirstPlay-Install): an opaque
+    UUID, never tied to a person, used only as a limiter key and as the key
+    of the per-caller model-status record.
     """
-    Identify the caller for rate-limiting purposes.
+    install = (request.headers.get("x-firstplay-install") or "").strip()
+    if install and len(install) <= 64 and install.replace("-", "").isalnum():
+        return install
+    return None
+
+
+def client_ip(request: Request) -> str:
+    """
+    The caller's network address as the trusted proxy observed it.
 
     Behind a proxy every request appears to come from the proxy, so one
     client's limit would block everyone. X-Forwarded-For carries the real
@@ -35,21 +62,7 @@ def client_key(request: Request) -> str:
     appends rather than replaces — so the leftmost entry is attacker
     controlled and the trustworthy one is counted from the right, by however
     many proxies actually sit in front of us.
-
-    Args:
-        request: The incoming request
-
-    Returns:
-        A stable key for the caller
     """
-    # The autofill extension identifies each install with a random token it
-    # generated on first run (X-FirstPlay-Install). Behind Render's proxy many
-    # installs share an address; the token keeps one applicant's limit theirs.
-    # It is an opaque UUID, never tied to a person, and only used as this key.
-    install = (request.headers.get("x-firstplay-install") or "").strip()
-    if install and len(install) <= 64 and install.replace("-", "").isalnum():
-        return "install:" + install
-
     forwarded = request.headers.get("x-forwarded-for")
 
     if forwarded and TRUSTED_PROXY_HOPS > 0:
@@ -60,6 +73,43 @@ def client_key(request: Request) -> str:
             return hops[index]
 
     return request.client.host if request.client else "unknown"
+
+
+def client_key(request: Request) -> str:
+    """
+    Identify the caller: the install token when there is one, else the address.
+
+    Behind Render's proxy many installs share an address; the token keeps
+    one applicant's record theirs. Used for the per-caller model-status
+    record; the limiter keys on `limit_key`, which binds the token to the
+    address it arrived from.
+
+    Args:
+        request: The incoming request
+
+    Returns:
+        A stable key for the caller
+    """
+    install = install_token(request)
+    if install:
+        return "install:" + install
+    return client_ip(request)
+
+
+def limit_key(request: Request) -> str:
+    """The per-caller limiter key: (install token, address), or the address.
+
+    The token alone was the whole key, and the token is whatever the caller
+    sends. Bound to the address, a rotated token from one address still
+    lands under that address's own cap (`IP_LIMIT_MULTIPLIER`); a laptop
+    that changes networks gets a fresh per-install bucket, which costs
+    nothing.
+    """
+    install = install_token(request)
+    address = client_ip(request)
+    if install:
+        return "install:{}@{}".format(install, address)
+    return "ip:" + address
 
 
 class SlidingWindowLimiter:
@@ -76,11 +126,15 @@ class SlidingWindowLimiter:
         max_requests: int,
         window_seconds: float,
         clock: Callable[[], float] = time.monotonic,
+        max_keys: int = MAX_TRACKED_KEYS,
     ):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.max_keys = max(1, int(max_keys))
         self._clock = clock
-        self._hits: Dict[str, Deque[float]] = {}
+        # Least recently seen first, so the bound below evicts the right key.
+        self._hits: "OrderedDict[str, Deque[float]]" = OrderedDict()
+        self._last_sweep = clock()
         # Handlers run in FastAPI's threadpool, so this is touched concurrently.
         self._lock = threading.Lock()
 
@@ -98,7 +152,15 @@ class SlidingWindowLimiter:
         cutoff = now - self.window_seconds
 
         with self._lock:
-            hits = self._hits.setdefault(key, deque())
+            self._sweep(cutoff, now)
+
+            hits = self._hits.get(key)
+            if hits is None:
+                hits = self._hits[key] = deque()
+                while len(self._hits) > self.max_keys:
+                    self._hits.popitem(last=False)
+            else:
+                self._hits.move_to_end(key)
 
             while hits and hits[0] <= cutoff:
                 hits.popleft()
@@ -108,13 +170,27 @@ class SlidingWindowLimiter:
                 return max(0.0, hits[0] + self.window_seconds - now)
 
             hits.append(now)
-
-            # Keys are never revisited once idle, so drop empty ones rather
-            # than growing the map by one entry per client seen, forever.
-            if not hits:
-                del self._hits[key]
-
             return None
+
+    def _sweep(self, cutoff: float, now: float) -> None:
+        """Drop keys whose every hit has aged out. Call under the lock.
+
+        The previous version had this as a dead branch after `append` (a
+        deque that was just appended to is never empty), so the map grew by
+        one entry per client seen, forever (audit 2026-10-12, F10). Once a
+        window: amortised to nothing, and a key is never kept idle longer
+        than two windows.
+        """
+        if now - self._last_sweep < self.window_seconds:
+            return
+        self._last_sweep = now
+        for key in [k for k, hits in self._hits.items() if not hits or hits[-1] <= cutoff]:
+            del self._hits[key]
+
+    @property
+    def tracked_keys(self) -> int:
+        with self._lock:
+            return len(self._hits)
 
     def reset(self) -> None:
         """Drop all counters. For tests."""
@@ -135,16 +211,24 @@ def rate_limit(max_requests: int, window_seconds: float, name: str):
         A dependency raising 429 when the limit is exceeded
     """
     limiter = SlidingWindowLimiter(max_requests, window_seconds)
+    # Every request also counts against the address it came from, token or
+    # not, so minting tokens buys nothing past the address's own allowance.
+    ip_limiter = SlidingWindowLimiter(max_requests * IP_LIMIT_MULTIPLIER, window_seconds)
 
     def dependency(request: Request) -> None:
-        retry_after = limiter.check(client_key(request))
+        retry_after = limiter.check(limit_key(request))
+        scope = ""
+
+        if retry_after is None:
+            retry_after = ip_limiter.check(client_ip(request))
+            scope = " from this network address"
 
         if retry_after is not None:
             raise HTTPException(
                 status_code=429,
                 detail=(
-                    f"Rate limit exceeded for {name}: "
-                    f"{max_requests} requests per "
+                    f"Rate limit exceeded for {name}{scope}: "
+                    f"{max_requests if not scope else max_requests * IP_LIMIT_MULTIPLIER} requests per "
                     f"{int(window_seconds // 60)} minutes."
                 ),
                 # Standard, and it tells a well-behaved client when to come
@@ -153,6 +237,7 @@ def rate_limit(max_requests: int, window_seconds: float, name: str):
             )
 
     dependency.limiter = limiter
+    dependency.ip_limiter = ip_limiter
     return dependency
 
 
