@@ -132,11 +132,20 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down")
 
 
+#: The OpenAPI UI is off unless asked for. The hosted one was public and
+#: enumerated every legacy endpoint to anyone who looked (audit 2026-10-12,
+#: F23); the extension never reads it, and a developer sets FIRSTPLAY_DOCS=1
+#: locally when they want it.
+DOCS_ENABLED = os.getenv("FIRSTPLAY_DOCS", "").strip().lower() in ("1", "true", "yes")
+
 app = FastAPI(
     title="FirstPlay Coach API",
     description="Resume analysis and project planning for early-career CS students",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if DOCS_ENABLED else None,
+    redoc_url="/redoc" if DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if DOCS_ENABLED else None,
 )
 
 
@@ -257,6 +266,16 @@ app.add_middleware(
     # the FirstPlay Autofill extension's service worker (chrome-extension://<id>),
     # which sends the applicant's profile with each plan request and stores
     # nothing here — the backend stays stateless for it.
+    #
+    # Pinning plan (audit 2026-10-12, F23): any `chrome-extension://` id is
+    # admitted today because an unpacked extension gets a new id per machine
+    # and the store id does not exist until the first upload. Once published,
+    # replace the `chrome-extension://[a-z]+` alternative with the store id
+    # literally (`chrome-extension://<32 lowercase letters>`), read from
+    # FIRSTPLAY_EXTENSION_ID so a dev id can still be added locally. Until
+    # then the exposure is bounded: there are no cookies, so the credentials
+    # flag is inert, and a plan request carries whatever profile the caller
+    # chose to send — another extension learns nothing it did not already hold.
     allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app|chrome-extension://[a-z]+",
     allow_credentials=True,
     allow_methods=["*"],
@@ -274,7 +293,7 @@ app.include_router(autofill.router)
 def read_root():
     return {
         "message": "Welcome to FirstPlay Coach API",
-        "docs": "/docs",
+        "docs": "/docs" if DOCS_ENABLED else None,
         "health": "/health",
         "ready": "/ready"
     }

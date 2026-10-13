@@ -122,14 +122,64 @@ def slug_for(label: str) -> str:
     return "_".join(words)[:40] or "learned_fact"
 
 
+#: Profile keys whose value is a contact detail. The judge needs to know the
+#: key exists and what kind of thing it holds, to decide where an answer
+#: belongs; it does not need the applicant's actual email, number, street
+#: or name (audit 2026-10-12, F8: these travelled to the provider in every
+#: learn call, against `PRIVACY.md`). Exact keys first, then substrings for
+#: learned slugs such as `university_email_address`.
+_CONTACT_SHAPES = (
+    (("first_name", "last_name", "middle_name", "full_name", "preferred_first_name",
+      "preferred_last_name", "preferred_name", "legal_name", "name"), "a name"),
+    (("email",), "an email address"),
+    (("phone", "mobile"), "a phone number"),
+    (("linkedin",), "a LinkedIn profile URL"),
+    (("github",), "a GitHub profile URL"),
+    (("website", "portfolio", "personal_website", "url"), "a website URL"),
+    (("street_address", "address", "address_line_1", "address_line_2", "address_2", "street"),
+     "a street address"),
+)
+_CONTACT_SUBSTRINGS = (
+    ("email", "an email address"),
+    ("phone", "a phone number"),
+    ("mobile", "a phone number"),
+    ("linkedin", "a LinkedIn profile URL"),
+    ("github", "a GitHub profile URL"),
+    ("website", "a website URL"),
+    ("portfolio", "a website URL"),
+    ("address", "a street address"),
+)
+
+
+def contact_shape(key: str) -> Optional[str]:
+    """A one-phrase description of what a contact-detail key holds, or None
+    when the key is not a contact detail and its value may be shown."""
+    lowered = (key or "").lower()
+    for names, shape in _CONTACT_SHAPES:
+        if lowered in names:
+            return shape
+    for needle, shape in _CONTACT_SUBSTRINGS:
+        if needle in lowered:
+            return shape
+    return None
+
+
 def _catalog(memory: Memory) -> Dict[str, str]:
-    """Every non-protected profile key, empty ones included, for the key choice."""
+    """Every non-protected profile key, empty ones included, for the key choice.
+
+    Contact details are described by shape ("an email address"), never by
+    value; every other fact keeps its value, which is what lets the judge
+    tell a university from a T-shirt size. An empty contact key stays
+    empty, so the judge still sees that nothing is recorded there.
+    """
     out: Dict[str, str] = {}
     for section in _PROPOSABLE_SECTIONS:
         for key, value in (getattr(memory, section, None) or {}).items():
             if key in _NEVER_PROPOSE:
                 continue
-            out[key] = str(value or "")
+            text = str(value or "")
+            shape = contact_shape(key) if text else None
+            out[key] = shape or text
     return out
 
 

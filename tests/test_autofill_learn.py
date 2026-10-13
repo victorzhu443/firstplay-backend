@@ -322,3 +322,42 @@ def test_the_plan_endpoint_scopes_a_referral_to_the_request_company():
 
     assert entry()["value"] is None                      # the form says Beta
     assert entry(company="Acme")["value"] == "Jane Doe"  # the caller says Acme
+
+
+# --- F8: the judge's catalog carries contact shapes, never contact values ---------
+
+def test_the_catalog_describes_contact_details_by_shape_and_keeps_other_values():
+    """Probe p12(b): email, phone, street address, LinkedIn and names reached
+    the provider in every learn call. The judge needs to know the key and
+    its kind, not the value; other facts keep theirs."""
+    from app.autofill.learn import _catalog, contact_shape
+
+    memory = Memory(
+        facts={"first_name": "Ada", "last_name": "Lovelace", "email": "ada@example.com",
+               "phone": "3015550100", "street_address": "12 Analytical Way",
+               "linkedin": "https://linkedin.com/in/ada", "github": "https://github.com/ada",
+               "website": "https://ada.example", "pronouns": "she/her", "preferred_first_name": ""},
+        education={"university": "Cornell", "gpa": "3.8"},
+        legal_status={"work_authorization": "Yes"},
+        learned={"university_email_address": "al123@cornell.edu", "t_shirt_size": "M"},
+    )
+
+    catalog = _catalog(memory)
+
+    assert catalog["email"] == "an email address"
+    assert catalog["phone"] == "a phone number"
+    assert catalog["street_address"] == "a street address"
+    assert catalog["linkedin"] == "a LinkedIn profile URL"
+    assert catalog["github"] == "a GitHub profile URL"
+    assert catalog["website"] == "a website URL"
+    assert catalog["first_name"] == "a name" and catalog["last_name"] == "a name"
+    assert catalog["university_email_address"] == "an email address"   # a learned slug
+    assert catalog["preferred_first_name"] == ""                        # empty stays empty
+    # Other facts keep their values: that is what the key choice runs on.
+    assert catalog["university"] == "Cornell" and catalog["gpa"] == "3.8"
+    assert catalog["pronouns"] == "she/her" and catalog["t_shirt_size"] == "M"
+    assert catalog["work_authorization"] == "Yes"
+    blob = " ".join(catalog.values())
+    for leaked in ("Ada", "Lovelace", "ada@example.com", "3015550100", "Analytical", "linkedin.com", "github.com", "cornell.edu"):
+        assert leaked not in blob, leaked
+    assert contact_shape("university") is None and contact_shape("school_name") is None

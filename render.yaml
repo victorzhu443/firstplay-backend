@@ -64,3 +64,7 @@ services:
 
       - key: LOG_LEVEL
         value: INFO
+
+      # The OpenAPI UI (/docs, /redoc, /openapi.json) stays off in
+      # production; set FIRSTPLAY_DOCS=1 in a dashboard override to browse
+      # it temporarily (audit 2026-10-12, F23).

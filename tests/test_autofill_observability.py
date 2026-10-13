@@ -279,3 +279,31 @@ def test_learn_counts_the_episode_it_kept_when_the_judge_fails(monkeypatch, mode
     assert body["learned"] == 1
     assert Memory(**body["profile"]).recall_answer("What is your T-shirt size?") == "M"
     assert body["model_failed"] is True and body["jev_calls"] == 0
+
+
+def test_a_breaker_trip_the_binder_absorbs_reports_model_skipped_without_degrading(monkeypatch, model_configured):
+    """The binder stream's `resolve_form` catches the trip inside the gate
+    and returns a complete plan with `tripped` set. The router then reports
+    `model_skipped` from that flag, keeps the run's own jev_calls/cost, says
+    a call failed, and does not mark the caller degraded: nothing escaped."""
+    from app.autofill import jev_binder
+    from app.autofill.themes import QuestionTheme
+    from app.jev_client import Decision
+
+    def absorbed(self, labels):
+        self.tripped = True
+        self._record_failure("classify 2 label(s)", JevServiceError("classify: decisions call timed out after 4.0s"))
+        return {label: (QuestionTheme.UNKNOWN, 0.0) for label in labels}
+    monkeypatch.setattr(jev_binder.JevBinder, "classify_themes", absorbed)
+    # On this branch a tripped `_decide` re-raises out of the later gates;
+    # the merged binder catches that inside the gate and finishes. Stand in
+    # for the merged behaviour: later calls return nothing rather than raise.
+    monkeypatch.setattr(jev_binder.JevBinder, "_decide",
+                        lambda self, state, questions, description: Decision(answers={}))
+
+    body = client.post("/api/autofill/plan", json={"ats": "greenhouse", "form": FORM, "profile": PROFILE}).json()
+
+    assert body["model_skipped"] is True
+    assert body["model_failed"] is True and body["model_error"] == "upstream timed out"
+    assert body["model_degraded"] is False
+    assert body["summary"]["filled"] >= 1
