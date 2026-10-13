@@ -343,3 +343,53 @@ def test_theme_matching_is_bounded_in_label_length():
     assert themed == DeterministicBinder().classify_themes([head])[head]
     assert local == _local_theme(head)
     assert elapsed < 2.0
+
+
+# --- R50 live round, item 1: the legal name is the stored name ----------------
+
+def _core_key(label, kind=FieldKind.TEXT):
+    from app.autofill.classify import classify, memory_key_for
+    return classify("question_1", label, kind).value, memory_key_for("question_1", label, kind)
+
+
+@pytest.mark.parametrize("label", [
+    "Full Legal Name",                                        # xAI, Greenhouse custom question
+    "Legal Name",
+    "Legal Full Name",
+    "Full Name (as it appears on your passport)",
+    "Full name as shown on your government ID",
+    "Your full legal name",
+])
+def test_the_legal_name_is_the_stored_full_name(label):
+    """xAI asked "Full Legal Name" and the plan went to review at p=0.50 with
+    the whole name on file. The stored name *is* the legal one, composed from
+    first and last (`Memory.full_name`)."""
+    from app.autofill.memory import Memory
+
+    assert _core_key(label) == ("core", "full_name"), label
+    assert Memory(facts={"first_name": "Ada", "last_name": "Lovelace"}).lookup("full_name") == "Ada Lovelace"
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("Preferred Name", ("core", "preferred_first_name")),     # not the legal name
+    ("Legal First Name", ("core", "first_name")),             # the existing DRW alias
+    ("Legal Last Name", ("core", "last_name")),
+])
+def test_the_other_name_fields_keep_their_own_keys(label, expected):
+    assert _core_key(label) == expected, label
+
+
+@pytest.mark.parametrize("label", [
+    "Full Legal Name in Native Language",                     # a different string, not the English name
+    "Name of your reference",
+    "Reference's full name",
+    "Legal Name of Employer",
+    "Name of the person who referred you",
+])
+def test_a_name_that_is_not_the_applicants_is_never_the_stored_name(label):
+    """Neither alias nor pattern may reach `full_name` for someone else's name
+    or for the name in another script. These go to review or to the model
+    gate, which costs one glance; the alternative is the applicant's English
+    name typed into a native-language box or a reference slot."""
+    assert _core_key(label)[1] != "full_name", label
+    assert _core_key(label)[0] != "core", label
