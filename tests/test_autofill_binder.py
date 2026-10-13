@@ -256,15 +256,85 @@ def test_no_field_is_ever_silently_blank(anthropic, figma, notion, memory):
             assert entry.reason, entry.label
 
 
+def _answers_everything():
+    """A client that decides everything it is asked, with certainty: the first
+    option of every Choice, 1.0 for every Noul. The most pressure a model can
+    put on the fill policy."""
+    from tests.jev_fakes import ScriptedClient, answer_everything
+    return ScriptedClient(theme=answer_everything, answer=answer_everything, applies=1.0,
+                          match=answer_everything, covered=1.0, key=answer_everything, verify=1.0)
+
+
+def _with_protected_answers(memory):
+    memory.protected.update({"veteran_status": "I am not a protected veteran",
+                             "race_ethnicity": "Decline to self-identify",
+                             "gender": "Decline to self-identify",
+                             "hispanic_latino": "Decline To Self Identify",
+                             "disability_status": "No, I do not have a disability"})
+    memory.consents.update({"sms_messages": "Yes", "privacy_notice": "Yes"})
+    return memory
+
+
 def test_the_invariant_holds_across_the_whole_plan(anthropic, figma, notion, memory):
     """No model judgement ever produces a value for a protected or consent
-    field — the rule the entire safety argument rests on."""
+    field — the rule the entire safety argument rests on.
+
+    Run against the real JevBinder behind a client that answers everything
+    (audit 2026-10-12, F19: the deterministic binder this used to run could
+    never produce a model decision, so the test could not fail). A LEGAL or
+    CONSENT entry is filled from memory or left to the applicant; whatever
+    it holds, no model source and no value memory did not hold.
+    """
+    from app.autofill.jev_binder import JevBinder, OptionCache, ThemeCache
+    from app.autofill.schema import MODEL_SOURCES
+
+    memory = _with_protected_answers(memory)
+    stored = {v.lower() for v in memory.protected.values()} | {"yes", "no"}
+    decided_by_model = 0
     for form in (anthropic, figma, notion):
-        classes = {f.key: f.field_class for f in form.fields}
-        for entry in resolve_form(form, memory, binder=DeterministicBinder()).entries:
-            if classes.get(entry.field_key) in (FieldClass.LEGAL, FieldClass.CONSENT):
-                assert entry.source != FillSource.MODEL_DECISION
-                assert entry.source != FillSource.MODEL_DRAFT
+        client = _answers_everything()
+        binder = JevBinder(client=client, cache=ThemeCache(), option_cache=OptionCache())
+        plan = resolve_form(form, memory, binder=binder)
+        assert client.calls, form.company                      # the model was in the loop
+        classes = {f.key: f for f in form.fields}
+        for entry in plan.entries:
+            field = classes.get(entry.field_key)
+            if field is None or field.field_class not in (FieldClass.LEGAL, FieldClass.CONSENT):
+                decided_by_model += entry.source in MODEL_SOURCES
+                continue
+            assert entry.source not in MODEL_SOURCES, (form.company, entry.label, entry.source)
+            if entry.value is None and not entry.values:
+                continue
+            assert entry.source == FillSource.MEMORY, (form.company, entry.label)
+            if field.field_class == FieldClass.LEGAL:
+                option = next((o for o in field.options if o.label == entry.value), None)
+                # The stored answer itself, or the form's option it was matched to
+                # by the deterministic matcher (same text, a synonym, or a decline).
+                assert entry.value.lower() in stored or option is not None, (form.company, entry.label, entry.value)
+    assert decided_by_model > 0                                # the pressure was real
+
+
+def test_no_protected_or_consent_answer_is_shown_to_the_model_across_the_whole_plan(anthropic, figma, notion, memory):
+    """The other half of the invariant: a protected or consent answer is not
+    only never *decided* by the model, it is never *shown* to it. Checked on
+    every call's serialised state and questions, labels and values alike."""
+    from app.autofill.jev_binder import JevBinder, OptionCache, ThemeCache
+
+    from tests.jev_fakes import call_blob, earlier_answers_in, letters
+
+    memory = _with_protected_answers(memory)
+    values = {letters(v) for v in memory.protected.values()}
+    for form in (anthropic, figma, notion):
+        client = _answers_everything()
+        resolve_form(form, memory, binder=JevBinder(client=client, cache=ThemeCache(), option_cache=OptionCache()))
+        labels = {f.label for f in form.fields
+                  if f.field_class in (FieldClass.LEGAL, FieldClass.CONSENT) and f.label}
+        for call in client.calls:
+            blob = letters(call_blob(call))
+            for value in values:
+                assert value not in blob, (form.company, call["description"], value)
+            for earlier in earlier_answers_in(call):
+                assert earlier["question"] not in labels, (form.company, call["description"], earlier)
 
 
 def test_consent_is_always_left_for_the_applicant(anthropic, memory):

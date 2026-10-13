@@ -10,14 +10,33 @@ Render captures stdout, so a stream handler is all that is needed. Format is
 deliberately flat rather than JSON: these logs are read by a person scrolling
 Render's log tail, not shipped to an aggregator.
 """
+import contextvars
 import logging
 import os
 import sys
 
 DEFAULT_LEVEL = "INFO"
 
-LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+#: The id of the request being served, set by the middleware in `app.main`
+#: and read by every log line through `RequestIdFilter`. A context variable
+#: rather than a thread-local because sync handlers run in a threadpool and
+#: anyio copies the context into the worker thread; a thread-local would be
+#: empty there. "-" outside a request (startup, tools).
+request_id_var: "contextvars.ContextVar[str]" = contextvars.ContextVar("firstplay_request_id", default="-")
+
+LOG_FORMAT = "%(asctime)s %(levelname)-8s [%(request_id)s] %(name)s: %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+class RequestIdFilter(logging.Filter):
+    """Stamp each record with the current request id so the three lines a
+    failing plan produces (the gate's warning, the router's retry, uvicorn's
+    access line) can be tied together in Render's tail (audit 2026-10-12,
+    F21). A filter rather than a LoggerAdapter so no module has to opt in."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = request_id_var.get()
+        return True
 
 
 def configure_logging(level: str = None) -> None:
@@ -43,6 +62,7 @@ def configure_logging(level: str = None) -> None:
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
+    handler.addFilter(RequestIdFilter())
     handler._firstplay = True
     root.addHandler(handler)
 

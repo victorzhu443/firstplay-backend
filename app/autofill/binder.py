@@ -15,6 +15,7 @@ gate 2 with high-precision patterns and no model at all; it exists so that the
 Jev binder added later has a measured baseline to beat, rather than being
 adopted on the assumption that it helps.
 """
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
@@ -22,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
-from app.autofill.classify import FOLLOW_UP_ON_OTHER, is_follow_up, normalize_label
+from app.autofill.classify import CORE_FIELD_NAMES, FOLLOW_UP_ON_OTHER, LABEL_SCAN_LIMIT, is_follow_up, memory_key_for, normalize_label
 from app.autofill.format import OPTION_MISMATCH, _as_bool, match_option, option_for_bool
 from app.autofill.memory import Memory, Resolution
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField, FormSchema
@@ -32,7 +33,10 @@ from app.autofill.themes import (
     THEME_MEMORY_KEYS,
     THEME_RESOLVERS,
     country_in_label,
+    unlisted_place,
 )
+
+logger = logging.getLogger(__name__)
 
 #: Confidence at or above which a theme classification may fill without asking.
 #: Chosen by cost asymmetry rather than convention: a misclassified theme is a
@@ -67,6 +71,13 @@ class FillPlanEntry(BaseModel):
 
     #: Option labels to select, for a multi-select field.
     values: List[str] = Field(default_factory=list)
+
+    #: The field's class (core | screening | narrative | legal | consent |
+    #: document | unknown), so a client can refuse to capture a LEGAL or
+    #: CONSENT entry by class rather than by the wording of `reason` (audit
+    #: 2026-10-12, F7). A plain string with a default, so older clients
+    #: ignore it.
+    field_class: str = FieldClass.UNKNOWN.value
 
     source: FillSource
     confidence: float = 1.0
@@ -222,8 +233,28 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
      re.compile(r"^(?!.*\b(text|texts|sms|whatsapp|messag\w*|phone call)\b)"
                r"(?=.*(\bmay we contact (?!you\b)|\bcontact your (current|previous|present|former)\b"
                r"|\bpermission to contact (?!you\b)))", re.I | re.S)),
+    # "Do you currently require employer-sponsored work authorization" is a
+    # sponsorship question, not "who is your current employer".
     (QuestionTheme.CURRENT_EMPLOYER,
-     re.compile(r"\b(who is your )?(current|previous).{0,12}\bemployer\b", re.I)),
+     re.compile(r"^(?!.*\bemployer[- ]sponsor)(?=.*\b(who is your )?(current|previous).{0,12}\bemployer\b)",
+                re.I | re.S)),
+    # "Are you legally authorized to work in the US without (requiring)
+    # sponsorship?" is an authorisation question qualified by sponsorship:
+    # yes only when the applicant is authorised *and* needs no sponsorship.
+    # 24 corpus instances were filled with the sponsorship answer "No" for a
+    # citizen whose true answer is "Yes" (audit 2026-10-12, F15a). Two shapes
+    # outrank the bare sponsorship pattern below: the qualifier "without …
+    # sponsor", and an authorisation question whose own sentence (up to its
+    # "?") mentions neither sponsorship nor requiring anything — "Are you
+    # authorized to work in the US? We DO assist with visa sponsorship".
+    # `_resolve_computed` reads the qualifier and combines both stored
+    # answers.
+    (QuestionTheme.WORK_AUTHORIZATION,
+     re.compile(r"\b(authoriz\w*|eligible|entitled|right)\b[^?]{0,40}\bwork\b[^?]{0,80}"
+                r"\bwithout\b[^?]{0,60}\bsponsor", re.I)),
+    (QuestionTheme.WORK_AUTHORIZATION,
+     re.compile(r"^(?![^?]*\b(sponsor\w*|requir\w*|need\w*|stem|opt|cpt|extension|extended)\b)"
+                r"[^?]*\b(authoriz\w*|eligible|entitled)\b[^?]{0,40}\bwork\b[^?]*\?", re.I | re.S)),
     (QuestionTheme.VISA_SPONSORSHIP, re.compile(r"\bsponsor", re.I)),
     # Not a visa-programme question: "Do you have a STEM degree that would
     # make you eligible for extended work authorization?" was answered "Yes"
@@ -332,8 +363,12 @@ class DeterministicBinder:
 
         for label in labels:
             out[label] = (QuestionTheme.UNKNOWN, 0.0)
+            # The two history patterns are double lookaheads and quadratic in
+            # the label's length (a 50 KB label cost seconds, audit F10); no
+            # corpus label exceeds 1,941 chars, so the scan stops at 2,000.
+            text = (label or "")[:LABEL_SCAN_LIMIT]
             for theme, pattern in _THEME_PATTERNS:
-                if pattern.search(label or ""):
+                if pattern.search(text):
                     # 1.0 because a pattern either matched or did not; there is
                     # no calibrated belief here, and pretending otherwise would
                     # make the threshold meaningless.
@@ -521,7 +556,23 @@ def _resolve_computed(
         # guaranteed: Greenhouse locations often name only a city, and 28
         # postings ask about "the country for which you applied" without saying
         # which. So an undeterminable country is normal, not exceptional.
-        country = country_in_label(field.label) or default_country
+        # A country the table does not know is different from no country:
+        # "authorized to work in Japan?" must not take the general answer
+        # (audit 2026-10-12, F37).
+        country = country_in_label(field.label)
+        if country is None:
+            place = unlisted_place(field.label, company)
+            if place:
+                return Resolution(
+                    field_key=field.key,
+                    source=FillSource.MEMORY,
+                    needs_review=True,
+                    reason="asks about working in {}, which your profile has no answer for".format(place),
+                )
+            country = default_country
+
+        if theme == QuestionTheme.WORK_AUTHORIZATION and _WITHOUT_SPONSORSHIP.search(field.label or ""):
+            return _authorised_without_sponsorship(field, memory, country)
 
         # Per-country first, then the general answer. Most applicants have one
         # status ("US citizen", so authorised everywhere they will apply) and
@@ -577,6 +628,57 @@ def _resolve_computed(
     return None
 
 
+#: "… authorized to work in the US without (requiring | the need for | employer)
+#: sponsorship": the sponsorship clause qualifies the authorisation question.
+_WITHOUT_SPONSORSHIP = re.compile(r"\bwithout\b[^?]{0,60}\bsponsor", re.I)
+
+
+def _is_us_citizen(memory: Memory) -> bool:
+    citizenship = str((memory.legal_status or {}).get("citizenship") or "").lower()
+    return ("citizen" in citizenship and "non" not in citizenship
+            and "u.s" in citizenship.replace("us", "u.s"))
+
+
+def _authorised_without_sponsorship(field: FormField, memory: Memory, country: Optional[str]) -> Resolution:
+    """Yes only when authorised to work there *and* needing no sponsorship.
+
+    Either stored answer alone misreads the question: the sponsorship answer
+    "No" was written for a citizen (true answer "Yes"), and the authorisation
+    answer alone would say "Yes" for a student on OPT who needs sponsorship
+    later. A label that also demands citizenship ("requires candidates be
+    U.S. citizens who are legally authorized …") is answered only for a US
+    citizen; anyone else sees it.
+    """
+    auth_stored = (memory.authorization_for(country) if country else None) or memory.legal_status.get("work_authorization")
+    sponsor_stored = (memory.sponsorship_for(country) if country else None) or memory.legal_status.get("needs_sponsorship")
+    auth = _as_bool(auth_stored) if auth_stored else None
+    sponsor = _as_bool(sponsor_stored) if sponsor_stored else None
+    where = country or "this country"
+
+    if re.search(r"\bcitizen", field.label or "", re.I) and country in (None, "US") and not _is_us_citizen(memory):
+        return Resolution(field_key=field.key, source=FillSource.MEMORY, needs_review=True,
+                          reason="asks for US citizenship as well as work authorisation; your profile does not settle it")
+    if auth is False or sponsor is True:
+        answer = False
+    elif auth is True and sponsor is False:
+        answer = True
+    else:
+        return Resolution(field_key=field.key, source=FillSource.MEMORY, needs_review=True,
+                          reason="needs both your work authorisation and your sponsorship answer for {}".format(where))
+    option = option_for_bool(answer, field) if field.options else None
+    return Resolution(
+        field_key=field.key,
+        value=option.label if option else ("Yes" if answer else "No"),
+        source=FillSource.MEMORY,
+        reason="computed from your work authorisation and sponsorship answers for {}".format(where),
+    )
+
+
+#: A STORED theme whose key is derived from another fact: when it is unset,
+#: the fact to ask for is the one it derives from.
+_ASK_FOR = {"state_of_residence": "current_location", "city_of_residence": "current_location"}
+
+
 def _resolve_stored(
     theme: QuestionTheme, field: FormField, memory: Memory
 ) -> Optional[Resolution]:
@@ -592,8 +694,20 @@ def _resolve_stored(
             field_key=field.key,
             source=FillSource.MEMORY,
             needs_review=True,
-            reason="recognised as {} but you have not set it".format(key),
+            reason="recognised as {} but you have not set it".format(_ASK_FOR.get(key, key)),
         )
+
+    # A stored "None" / "N/A" is a decision to leave a text control blank,
+    # exactly as memory.resolve treats it: timeline_notes "None" was typed
+    # verbatim into 54 corpus fields (audit 2026-10-12, §4). Never applied to
+    # a field with options, where "No" is a real answer to "Do you have any
+    # deadlines?"; a required blank surfaces rather than blocking submission.
+    if memory.is_blank(stored) and not field.options:
+        if field.required:
+            return Resolution(field_key=field.key, source=FillSource.MEMORY, needs_review=True,
+                              reason="you recorded no {}, but this form requires it".format(key))
+        return Resolution(field_key=field.key, source=FillSource.MEMORY,
+                          skipped="you recorded no {}".format(key))
 
     option = match_option(stored, field) if field.options else None
 
@@ -654,6 +768,44 @@ def _resolve_stored(
 #: citizenship follow-up); rare, but the ones that exist are required.
 _NOT_APPLICABLE = re.compile(r"^(n/?a|n\.a\.|not applicable|does not apply)\b", re.I)
 
+#: A parent answer that says the question did not apply: no follow-up applies.
+_NO_ANSWER_APPLIES = re.compile(r"^(n/?a|n\.a\.|not applicable|does not apply|none)\b", re.I)
+
+#: "If you selected <options>, …": the clause that names the triggering
+#: option(s), cut where the instruction begins.
+_CONDITION_CLAUSE = re.compile(
+    r"\bif (?:you )?(?:have )?(?:selected|answered|chose|responded|said|indicated|marked|checked)\s+(.+)",
+    re.I | re.S)
+_CLAUSE_END = re.compile(
+    r"(:|;|\?|,?\s+please\b|\s+above\b|\s+below\b|\s+as\b|\s+to\b|\s+for\b|\s+in\b|\s+on\b|\s+at\b"
+    r"|,?\s+(what|which|how|where|who|when)\b)", re.I)
+_CLAUSE_SPLIT = re.compile(r",|/|\bor\b|\band\b", re.I)
+_QUOTES = re.compile(r"[\"'“”‘’]")
+#: Named options that carry no identity of their own; the polarity path
+#: handles these.
+_NOT_A_NAMED_OPTION = frozenset({"yes", "no", "so", "the above", "any of the above", "any", "either", ""})
+
+
+def _plain(text: str) -> str:
+    return normalize_label(_QUOTES.sub("", text or ""))
+
+
+def _condition_options(label: str) -> List[str]:
+    """The option names a condition cites, normalised; empty for a yes/no condition."""
+    match = _CONDITION_CLAUSE.search(label or "")
+    if not match:
+        return []
+    clause = match.group(1)
+    end = _CLAUSE_END.search(clause)
+    if end:
+        clause = clause[:end.start()]
+    out = []
+    for part in _CLAUSE_SPLIT.split(clause):
+        plain = _plain(part)
+        if plain not in _NOT_A_NAMED_OPTION and len(plain) >= 3:
+            out.append(plain)
+    return out
+
 _CONDITIONAL = re.compile(
     r"\bif (you |your )?(answered|selected|responded|you said)\b"
     r"|\bif (yes|so|the above|any of the above)\b"
@@ -662,7 +814,11 @@ _CONDITIONAL = re.compile(
 )
 
 #: Which answer to the preceding question makes the follow-up apply.
-_CONDITION_IS_NO = re.compile(r"\bif (you )?(answered|selected)\s*[\"'“]?no\b", re.I)
+_CONDITION_IS_NO = re.compile(r"\bif (you )?(answered|selected|responded|chose)\s*[\"'“]?no\b", re.I)
+#: "If you selected 'Other' above, please specify": the trigger is the option
+#: named "Other", not a yes. Read from the condition itself, not from "please
+#: specify", which also follows "If you answered Yes, please specify your visa".
+_CONDITION_IS_OTHER = re.compile(r"\bif (you )?(answered|selected|responded|chose|said)\s*[\"'“]?other\b|\bif other\b", re.I)
 
 
 #: Reason text set by the resolvers when a stored answer exists but matches no
@@ -786,11 +942,14 @@ def _skip_untriggered_follow_up(entry, order, position, by_key, fields=None) -> 
     if wants_other:
         triggered = any(normalize_label(a).startswith("other") for a in answers)
     else:
-        triggered = any(a.strip().lower().startswith(("y", "i am ", "i do ", "i have ")) for a in answers)
+        # The shared polarity: "I am not a protected veteran" is a no (F14).
+        triggered = any(_as_bool(a) is True for a in answers)
     if triggered:
         return False
-    entry.skipped = "follow-up to {!r}, which you answered {!r}".format(
-        (previous.label or "")[:40], answers[0][:24])
+    # A protected answer is never quoted into another field's reason.
+    legal_parent = parent is not None and parent.field_class == FieldClass.LEGAL
+    entry.skipped = "follow-up to {!r}, which you answered {}".format(
+        (previous.label or "")[:40], "already" if legal_parent else repr(answers[0][:24]))
     entry.reason = entry.skipped
     entry.needs_review = False
     entry.value = None
@@ -821,41 +980,96 @@ def _resolve_conditionals(entries: List[FillPlanEntry], form: FormSchema) -> Non
         if _skip_untriggered_follow_up(entry, order, position, by_key, fields_by_key):
             continue
 
-        if not _CONDITIONAL.search(entry.label or ""):
+        condition = _CONDITIONAL.search(entry.label or "")
+        if not condition:
+            continue
+        # "Do you have a Duolingo account? If yes, what is your username?" is
+        # one question with its own condition, not a follow-up to the field
+        # before it; hanging it on an unrelated "No" hid it as answered.
+        if "?" in (entry.label or "")[:condition.start()]:
             continue
 
         index = position.get(entry.field_key)
         if not index:
             continue
 
-        # The nearest preceding field that actually has an answer.
+        # The parent is the question immediately before this one — not the
+        # nearest one that happens to hold a value, which walked past an
+        # unanswered or multi-select parent to an unrelated earlier "No"
+        # (audit 2026-10-12, F13). Skipped and satisfied entries are not
+        # questions the applicant answered here, and a follow-up before this
+        # one ("If yes, please explain" then "If yes, provide details")
+        # chains to the same parent; everything else is the parent.
         previous = None
         for offset in range(index - 1, -1, -1):
             candidate = by_key.get(order[offset])
-            if candidate is not None and candidate.value:
-                previous = candidate
-                break
+            if candidate is None or candidate.skipped or candidate.satisfied_by:
+                continue
+            if _CONDITIONAL.search(candidate.label or "") and not (candidate.value or candidate.values):
+                continue
+            previous = candidate
+            break
 
         if previous is None:
             continue
 
-        answer = str(previous.value).strip().lower()
-        triggers_on_no = bool(_CONDITION_IS_NO.search(entry.label or ""))
-        answered_yes = answer.startswith("y") or answer.startswith("i am")
-        applies = answered_yes if not triggers_on_no else not answered_yes
+        parent = fields_by_key.get(previous.field_key)
+        answers = [str(v) for v in (previous.values or ([previous.value] if previous.value else []))]
+
+        if previous.needs_review or not answers:
+            # The parent is unsettled, so the follow-up stays with it. An
+            # answer of the entry's own (a required follow-up the sponsorship
+            # theme answered) is left as it is.
+            if not entry.value and not entry.values:
+                entry.needs_review = True
+                entry.reason = "follows {!r}, which is still unanswered".format((previous.label or "")[:40])
+            continue
+
+        # A protected answer is never quoted into another field's reason (F14).
+        legal_parent = parent is not None and parent.field_class == FieldClass.LEGAL
+        said = "you answered the question above" if legal_parent else "you answered '{}' above".format(answers[0][:24])
+        after = "your answer above" if legal_parent else "your '{}' above".format(answers[0][:24])
+
+        named = _condition_options(entry.label or "")
+        if _CONDITION_IS_OTHER.search(entry.label or ""):
+            applies = any(normalize_label(a).startswith("other") for a in answers)
+        elif named:
+            # "If you selected 'A friend or relative', …" names the option
+            # that triggers it; the parent's answer either is that option
+            # or is not.
+            given = [_plain(a) for a in answers]
+            applies = any(alt in g or g in alt for g in given for alt in named)
+        else:
+            # The shared polarity (format._as_bool): "I am not a protected
+            # veteran" is a no, and "Decline to self-identify" is neither.
+            polarity = [_as_bool(a) for a in answers]
+            if any(p is not None for p in polarity):
+                answered_yes = any(p is True for p in polarity)
+                triggers_on_no = bool(_CONDITION_IS_NO.search(entry.label or ""))
+                applies = answered_yes if not triggers_on_no else not answered_yes
+            elif any(_NO_ANSWER_APPLIES.match(a.strip()) for a in answers):
+                # "NA" / "None" above is neither yes nor no: no follow-up
+                # applies in either direction.
+                applies = False
+            else:
+                # "Decline to self-identify", a URL, a name: no polarity to
+                # hang a condition on. Left with the applicant.
+                if not entry.value and not entry.values:
+                    entry.needs_review = True
+                    entry.reason = "follows the question above; could not tell from {} whether it applies".format(
+                        "your answer" if legal_parent else "'{}'".format(answers[0][:24]))
+                continue
 
         if applies:
             entry.needs_review = True
-            entry.reason = "you answered '{}' above, so this needs your detail".format(
-                str(previous.value)[:24]
-            )
+            entry.reason = "{}, so this needs your detail".format(said)
             continue
 
         # Inapplicable. If the form offers an option that says so, select it:
         # Duolingo's "If so, are you eligible for OPT?" is *required* and
         # offers Yes / No / NA, so leaving it blank blocks submission while
         # "NA" is the true answer. Without such an option, blank is right.
-        field = next((f for f in form.fields if f.key == entry.field_key), None)
+        field = fields_by_key.get(entry.field_key)
         not_applicable = next(
             (o for o in (field.options if field else []) if _NOT_APPLICABLE.match(o.label.strip())),
             None,
@@ -867,9 +1081,7 @@ def _resolve_conditionals(entries: List[FillPlanEntry], form: FormSchema) -> Non
             entry.satisfied_by = None
             entry.source = FillSource.MEMORY
             entry.confidence = 1.0
-            entry.reason = "not applicable — you answered '{}' above, and this form offers {!r}".format(
-                str(previous.value)[:24], not_applicable.label
-            )
+            entry.reason = "not applicable — {}, and this form offers {!r}".format(said, not_applicable.label)
             continue
 
         # Required, and no way to say "not applicable": the form will refuse a
@@ -882,22 +1094,19 @@ def _resolve_conditionals(entries: List[FillPlanEntry], form: FormSchema) -> Non
         # (Compeer 5404994008: a required "If yes, please explain").
         if field is not None and field.required:
             if entry.value and not entry.needs_review and not entry.skipped:
-                entry.reason = "not applicable after your '{}' above, but required — answered {!r} from your profile".format(
-                    str(previous.value)[:24], str(entry.value)[:24]
+                entry.reason = "not applicable after {}, but required — answered {!r} from your profile".format(
+                    after, str(entry.value)[:24]
                 )
                 continue
             entry.needs_review = True
             entry.satisfied_by = None
-            entry.reason = "not applicable after your '{}' above, but this form requires an answer".format(
-                str(previous.value)[:24]
-            )
+            entry.reason = "not applicable after {}, but this form requires an answer".format(after)
             continue
 
         entry.needs_review = False
         entry.satisfied_by = previous.field_key
-        entry.reason = "not applicable — you answered '{}' to the question above".format(
-            str(previous.value)[:24]
-        )
+        entry.reason = ("not applicable — you answered the question above" if legal_parent
+                        else "not applicable — you answered '{}' to the question above".format(answers[0][:24]))
 
 
 #: Facts a screening question can turn on that are neither protected nor
@@ -1178,19 +1387,61 @@ _SECOND_PASS_SECTIONS = ("facts", "education", "preferences", "legal_status", "l
 _SECOND_PASS_EXCLUDE = {"resume_file", "cover_letter", "transcript_file", "personal_preferences"}
 
 
+#: Contact details the second pass must know *exist*, and under which key,
+#: without seeing the value: the model's Choice returns a key, and the binder
+#: writes the stored value itself. A "university email" field is answered from
+#: `email` either way; the address itself never reaches the provider (audit
+#: 2026-10-12, F8). Non-contact facts are still sent as values, because "Do
+#: you hold a clearance?" is answered by what the value says.
+_CONTACT_SHAPES: Dict[str, str] = {
+    "first_name": "the applicant's first name",
+    "last_name": "the applicant's last name",
+    "full_name": "the applicant's full name",
+    "preferred_first_name": "the applicant's preferred first name",
+    "preferred_last_name": "the applicant's preferred last name",
+    "email": "an email address",
+    "alternate_email": "a second email address",
+    "phone": "a phone number",
+    "linkedin": "a LinkedIn profile URL",
+    "github": "a GitHub profile URL",
+    "website": "a personal website URL",
+    "website_other": "another profile or portfolio URL",
+    "links_combined": "the applicant's profile links",
+    "street_address": "a street address",
+    "street_address_2": "a second street-address line",
+    "postal_code": "a postal code",
+}
+
+#: Memory keys that are contact details: never in `earlier_answers`, and in
+#: the second-pass catalog only as the shapes above. City, location and
+#: country are not contact details; a screening question can turn on them.
+_CONTACT_KEYS = frozenset(_CONTACT_SHAPES) | frozenset({"twitter", "scholar", "google_scholar", "portfolio"})
+
+
+def _catalog_value(memory: Memory, key: str) -> Optional[str]:
+    """The value the second pass writes for a catalog key, formatted as the
+    first pass would format it."""
+    value = memory.lookup(key)
+    if key == "phone":
+        from app.autofill.format import format_phone
+
+        value = format_phone(value)
+    return str(value) if value else None
+
+
 def _profile_catalog(memory: Memory) -> Dict[str, str]:
+    """What the second pass may choose from: key -> value, or key -> shape
+    for a contact detail. Every key here has a stored, non-blank value."""
     catalog: Dict[str, str] = {}
     for section in _SECOND_PASS_SECTIONS:
         for key, value in (getattr(memory, section, None) or {}).items():
             if key in _SECOND_PASS_EXCLUDE or not value or memory.is_blank(str(value)):
                 continue
-            shown = memory.lookup(key) if key == "phone" else str(value)
-            if shown:
-                catalog[key] = str(shown)[:120]
+            catalog[key] = _CONTACT_SHAPES.get(key) or str(value)[:120]
     for key in ("full_name", "country_of_residence", "state_of_residence", "city_of_residence"):
         value = memory.lookup(key)
         if value:
-            catalog[key] = str(value)[:120]
+            catalog[key] = _CONTACT_SHAPES.get(key) or str(value)[:120]
     return catalog
 
 
@@ -1230,12 +1481,7 @@ def _second_pass(entries: List[FillPlanEntry], form: FormSchema, memory: Memory,
     catalog = _profile_catalog(memory)
     if not catalog:
         return
-    earlier = [
-        {"question": (e.label or "")[:120], "answer": e.values or e.value}
-        for e in entries
-        if (e.value or e.values) and not e.needs_review and not e.skipped and not e.satisfied_by
-    ]
-    state = _answer_state(form, memory, earlier)
+    state = _answer_state(form, memory, _earlier_answers(form, {e.field_key: e for e in entries}))
     state["profile"] = catalog
     requests = [("sp_{}".format(index), fields[entry.field_key], catalog) for index, entry in candidates]
     decided = binder.second_pass(state, requests)
@@ -1255,13 +1501,67 @@ def _second_pass(entries: List[FillPlanEntry], form: FormSchema, memory: Memory,
         if p_ok < SECOND_PASS_VERIFY:
             entry.reason = "second pass: {} looked like the answer but did not verify ({:.0%})".format(key, p_ok)
             continue
-        entry.value = catalog[key]
+        # The stored value, never the catalog text: for a contact key the
+        # catalog holds a shape description, not the value.
+        written = _catalog_value(memory, key)
+        if not written:
+            entry.reason = "second pass: {} was chosen but nothing is stored under it".format(key)
+            continue
+        entry.value = written
         entry.values = []
         entry.source = FillSource.MODEL_DECISION
         entry.confidence = min(p_cov, p_key, p_ok)
         entry.needs_review = False
         entry.theme = "profile.{}".format(key)
         entry.reason = "second pass: your {} answers this ({:.0%} covered, {:.0%} verified)".format(key, p_cov, p_ok)
+
+
+#: The only classes whose settled answers may be shown to the model as
+#: "earlier answers on this form". LEGAL (EEOC, veteran, disability) and
+#: CONSENT answers are the applicant's own and never leave the deterministic
+#: path; DOCUMENT values are file paths; NARRATIVE is prose. Before this
+#: filter every Greenhouse form with a compliance block sent the race, gender,
+#: veteran and disability answers to the answer gate and the second pass
+#: (audit 2026-10-12, F1).
+_EARLIER_ANSWER_CLASSES = frozenset({FieldClass.CORE, FieldClass.SCREENING})
+
+
+def _earlier_answers(form: FormSchema, answered: Dict[str, object]) -> List[Dict[str, object]]:
+    """The answers already settled on this form, as the model may see them.
+
+    `answered` maps a field key to a Resolution or FillPlanEntry. An answer
+    counts only when it is a confident fill (not review, not skipped, not
+    satisfied by a sibling, not an attachment) on a CORE or SCREENING field
+    that is not a file. One builder for the three gates, so the class filter
+    cannot drift between them.
+    """
+    earlier: List[Dict[str, object]] = []
+    for field in form.fields:
+        if field.field_class not in _EARLIER_ANSWER_CLASSES or field.kind == FieldKind.FILE:
+            continue
+        item = answered.get(field.key)
+        if item is None:
+            continue
+        value = getattr(item, "values", None) or getattr(item, "value", None)
+        if not value:
+            continue
+        if (getattr(item, "needs_review", False) or getattr(item, "skipped", None)
+                or getattr(item, "satisfied_by", None) or getattr(item, "attach", None)):
+            continue
+        # A contact detail is not an earlier answer the gate can use: a name,
+        # email, phone, address or profile link answers no screening
+        # question, and the core fields are answered on every form, so the
+        # address travelled every time (F8). Dropped by memory key, and by
+        # shape for anything that is itself an address or a link.
+        key = memory_key_for(field.key, field.label, field.kind)
+        if key in _CONTACT_KEYS or any(_CONTACT_SHAPED.search(str(v)) for v in (value if isinstance(value, list) else [value])):
+            continue
+        earlier.append({"question": (field.label or "")[:120], "answer": value})
+    return earlier
+
+
+#: An answer that is itself an address or a link, whatever key produced it.
+_CONTACT_SHAPED = re.compile(r"@|https?://|\bwww\.", re.I)
 
 
 def _answer_state(form: FormSchema, memory: Memory, earlier: List[Dict[str, object]]) -> Dict[str, object]:
@@ -1299,15 +1599,7 @@ def _speculative_answers(
     if not SPECULATE_ANSWERS or not (candidates or mismatches):
         return binder.classify_themes(labels), {}, {}
 
-    earlier = [
-        {"question": (f.label or "")[:120], "answer": resolved[f.key].values or resolved[f.key].value}
-        for f in form.fields
-        if f.key in resolved
-        and (resolved[f.key].value or resolved[f.key].values)
-        and not resolved[f.key].needs_review
-        and not resolved[f.key].skipped
-    ]
-    state = _answer_state(form, memory, earlier)
+    state = _answer_state(form, memory, _earlier_answers(form, resolved))
     requests = [("spec_{}".format(f.key), f) for f in candidates]
     match_requests = [("match_{}".format(f.key), value, f) for f, value in mismatches]
 
@@ -1317,14 +1609,16 @@ def _speculative_answers(
         themes = binder.classify_themes(labels)
         answers, matches = {}, {}
         # A failed speculation costs nothing: the sequential gates still run.
+        # Logged by type only (F21): a model error's message can echo the
+        # request, and the request carries the applicant's answers.
         try:
             answers = answer_future.result() if answer_future else {}
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("speculative profile-answer gate failed (%s)", type(e).__name__)
         try:
             matches = match_future.result() if match_future else {}
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("speculative option-match gate failed (%s)", type(e).__name__)
 
     return (
         themes,
@@ -1369,11 +1663,7 @@ def _answer_from_profile(
     fresh = [(rid, f) for rid, f in requests if f is not None]
 
     if fresh:
-        earlier = [
-            {"question": (e.label or "")[:120], "answer": e.values or e.value}
-            for e in entries
-            if (e.value or e.values) and not e.needs_review and not e.skipped and not e.satisfied_by
-        ]
+        earlier = _earlier_answers(form, {e.field_key: e for e in entries})
         results.update(binder.answer_from_profile(_answer_state(form, memory, earlier), fresh))
 
     for request_id, _field in requests:
@@ -1492,6 +1782,10 @@ def _mark_attachments(entries: List[FillPlanEntry], form: FormSchema) -> None:
         entry.reason = "attach this file yourself — a browser will not let a script do it"
 
 
+#: One question shipped as two controls, by the vendor's own keys.
+_VENDOR_ALTERNATES = (frozenset({"resume", "resume_text"}), frozenset({"cover_letter", "cover_letter_text"}))
+
+
 def _mark_satisfied_alternates(entries: List[FillPlanEntry], form: FormSchema) -> None:
     """Stop asking for a paste when the file is already attached.
 
@@ -1504,11 +1798,12 @@ def _mark_satisfied_alternates(entries: List[FillPlanEntry], form: FormSchema) -
     Mutates `entries` in place, since it is a post-pass over the plan rather
     than a resolution rule.
     """
-    by_label: Dict[str, List[FillPlanEntry]] = {}
-    field_labels = {f.key: f.label for f in form.fields}
+    by_label: Dict[object, List[FillPlanEntry]] = {}
+    fields = {f.key: f for f in form.fields}
 
     for entry in entries:
-        label = field_labels.get(entry.field_key, entry.label)
+        field = fields.get(entry.field_key)
+        label = field.label if field is not None else entry.label
         # A blank label is the absence of a question, not a shared one. On a
         # real Ashby form the radio groups (no legend), a bare file input, two
         # unlabelled checkboxes and the reCAPTCHA textarea all have empty
@@ -1516,7 +1811,22 @@ def _mark_satisfied_alternates(entries: List[FillPlanEntry], form: FormSchema) -
         # them, which hid a pronoun group and credited a CAPTCHA as done.
         if not (label or "").strip():
             continue
-        by_label.setdefault(label, []).append(entry)
+        # Same label is not the same question. The vendor's own alternate
+        # pairs are grouped by key; anything else only with the same class
+        # and kind, and never a follow-up ("If yes, please specify" recurs
+        # under several questions on one form). A reference's "Email" is a
+        # SCREENING text field; the applicant's is CORE — not one question
+        # (audit 2026-10-12, F20).
+        pair = next((p for p in _VENDOR_ALTERNATES if entry.field_key in p), None)
+        if pair is not None:
+            group_key: object = pair
+        elif field is not None:
+            if is_follow_up(label) or _CONDITIONAL.search(label):
+                continue
+            group_key = (label, field.field_class, field.kind)
+        else:
+            continue
+        by_label.setdefault(group_key, []).append(entry)
 
     for label, group in by_label.items():
         if len(group) < 2:
@@ -1539,6 +1849,81 @@ def _mark_satisfied_alternates(entries: List[FillPlanEntry], form: FormSchema) -
             entry.reason = "already answered by '{}' on this question".format(
                 satisfied.label or satisfied.field_key
             )
+
+
+#: Where a STORED or COMPUTED theme may write: a short answer on a core or
+#: screening control. A theme reads a label, and a label is not the whole
+#: question — "Please explain any gaps in your résumé or a low GPA"
+#: (textarea) was filled with the GPA, and "Upload a zip of your code
+#: sample" (file) became an instruction to attach the postal code (audit
+#: 2026-10-12, F33). Prose and files take no theme value; a file field's
+#: document comes from memory's document keys in gate 1.
+_THEME_CLASSES = frozenset({FieldClass.CORE, FieldClass.SCREENING})
+_THEME_KINDS = frozenset({FieldKind.TEXT, FieldKind.SINGLE_SELECT, FieldKind.MULTI_SELECT, FieldKind.BOOLEAN})
+
+
+def _theme_may_fill(field: FormField) -> bool:
+    return field.field_class in _THEME_CLASSES and field.kind in _THEME_KINDS
+
+
+#: A bare core alias on a custom key: "Email", "Phone", "Name", "Company".
+#: On a reference or employment block these are someone else's details.
+_BARE_CORE_ALIASES = frozenset({
+    "email", "e mail", "email address", "phone", "phone number", "telephone", "mobile", "mobile phone",
+    "mobile number", "cell phone", "name", "full name", "first name", "last name", "company", "company name",
+    "employer",
+})
+_STORED_AS = re.compile(r"^stored as ([a-z_]+)$")
+
+
+def _second_core_alias_guard(field: FormField, resolution: Resolution, vendor_answered: Dict[str, str]) -> Resolution:
+    """Send a second bare "Email" / "Phone" / "Name" on one form to review.
+
+    A vendor-keyed core field (`email`, `_systemfield_email`, …) answers the
+    applicant's own detail; a later custom-keyed field with the same bare
+    label and the same memory key is a reference's or an employer's, and
+    was filled with the applicant's at confidence 1.0 (audit 2026-10-12,
+    F18, probe p10). "Legal First Name" is not bare and still fills.
+    Records what vendor keys answered as a side effect, in form order.
+    """
+    if resolution.needs_review or resolution.skipped or not (resolution.value or resolution.values):
+        return resolution
+    match = _STORED_AS.match(resolution.reason or "")
+    if not match:
+        return resolution
+    key = match.group(1)
+    if field.key in CORE_FIELD_NAMES:
+        vendor_answered.setdefault(key, field.key)
+        return resolution
+    if normalize_label(field.label) not in _BARE_CORE_ALIASES:
+        return resolution
+    already = key in vendor_answered or (
+        key == "full_name" and ("first_name" in vendor_answered or "last_name" in vendor_answered))
+    if not already:
+        return resolution
+    return Resolution(
+        field_key=field.key,
+        source=FillSource.HUMAN,
+        confidence=0.0,
+        needs_review=True,
+        reason="a second {} on this form — a reference's or an employer's?".format((field.label or "").strip()),
+    )
+
+
+def _model_gate(name: str, gate, *args) -> None:
+    """Run one model-backed pass; a model failure leaves its entries for review.
+
+    Only the exception type is logged, never its message: an upstream error
+    body can echo the request, and the request carries the applicant's
+    answers (audit 2026-10-12, F9/F21).
+    """
+    from app.exceptions import JevServiceError
+
+    try:
+        gate(*args)
+    except JevServiceError as e:
+        logger.warning("%s gate skipped after a model error (%s); the plan was finished deterministically",
+                       name, type(e).__name__)
 
 
 def resolve_form(
@@ -1568,6 +1953,9 @@ def resolve_form(
     # state is sent once and extra questions are close to free.
     pending: List[FormField] = []
     resolved: Dict[str, Resolution] = {}
+    # Memory keys a vendor-keyed field has already answered on this form,
+    # for the bare-alias guard below (F18).
+    vendor_answered: Dict[str, str] = {}
 
     for field in form.fields:
         resolution = _within_options(memory.resolve(field), field)
@@ -1575,6 +1963,7 @@ def resolve_form(
             resolution = (_class_standing_answer(field, memory) or _based_in_country_answer(field, memory)
                           or _other_degree_level_answer(field, memory))
         if resolution is not None:
+            resolution = _second_core_alias_guard(field, resolution, vendor_answered)
             resolved[field.key] = resolution
         else:
             pending.append(field)
@@ -1596,7 +1985,7 @@ def resolve_form(
             # collapsing them hides which of the two happened.
             theme_name = theme.value
 
-            if theme != QuestionTheme.UNKNOWN and confidence >= SUGGEST_CONFIDENCE:
+            if theme != QuestionTheme.UNKNOWN and confidence >= SUGGEST_CONFIDENCE and _theme_may_fill(field):
                 kind = THEME_RESOLVERS.get(theme, Resolver.ASK)
 
                 if kind == Resolver.COMPUTED:
@@ -1623,6 +2012,7 @@ def resolve_form(
                 FillPlanEntry(
                     field_key=field.key,
                     label=field.label,
+                    field_class=field.field_class.value,
                     source=FillSource.HUMAN,
                     confidence=0.0,
                     needs_review=True,
@@ -1637,6 +2027,7 @@ def resolve_form(
             FillPlanEntry(
                 field_key=field.key,
                 label=field.label,
+                field_class=field.field_class.value,
                 value=resolution.value,
                 values=resolution.values,
                 source=resolution.source,
@@ -1651,11 +2042,16 @@ def resolve_form(
 
     _mark_attachments(entries, form)
     _mark_missing_facts(entries, form)
-    _resolve_option_mismatches(entries, form, binder, matched)
+    # The model gates run behind the Jev binder's circuit breaker: once a
+    # call has timed out, every later call raises at once. A tripped breaker
+    # must finish the plan deterministically — the entries it would have
+    # improved stay for review — rather than fail the whole plan; the
+    # speculative pool already swallows it, the sequential gates did not.
+    _model_gate("option translation", _resolve_option_mismatches, entries, form, binder, matched)
     _mark_satisfied_alternates(entries, form)
     _resolve_conditionals(entries, form)
-    _answer_from_profile(entries, form, memory, binder, speculative)
-    _second_pass(entries, form, memory, binder)
+    _model_gate("profile answer", _answer_from_profile, entries, form, memory, binder, speculative)
+    _model_gate("second pass", _second_pass, entries, form, memory, binder)
 
     return FillPlan(
         posting_id=form.posting_id,

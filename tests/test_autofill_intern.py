@@ -891,13 +891,34 @@ def test_a_legal_multi_select_is_unreachable_by_the_model_gate():
 
 
 def test_the_model_gate_never_produces_a_set_of_options():
-    """Selecting several options is only ever a deterministic decision — the
-    cohort case, driven by a stated preference for flexibility."""
-    import inspect
+    """Selecting several options is only ever a deterministic decision (the
+    cohort case) or the profile gate's per-option nouls. The option-translation
+    gate maps one stored answer to one option: a multi-select mismatch is asked
+    as a single Choice and receives a single label, never a set.
 
-    from app.autofill.binder import _resolve_option_mismatches
+    Executed against the real JevBinder (audit 2026-10-12, F19: this used to
+    grep the source of `_resolve_option_mismatches` for "entry.values")."""
+    from app.autofill.jev_binder import JevBinder, OptionCache, ThemeCache
+    from tests.jev_fakes import ScriptedClient, answer_everything
 
-    assert "entry.values" not in inspect.getsource(_resolve_option_mismatches)
+    options = ("Relocating works for me", "Only within my current state", "Depends on the offer")
+    field = FormField(key="q1", label="Which relocation arrangements would you accept?",
+                      kind=FieldKind.MULTI_SELECT, field_class=FieldClass.SCREENING,
+                      options=[FieldOption(label=o, value=str(i)) for i, o in enumerate(options)])
+    memory = Memory()
+    assert memory.remember_answer(field.label, "Yes") is True
+    assert match_option("Yes", field) is None                  # precondition: a genuine mismatch
+
+    client = ScriptedClient(match=answer_everything, applies=1.0)
+    plan = resolve_form(FormSchema(source="t", ats="t", posting_id="1", fields=[field]), memory,
+                        binder=JevBinder(client=client, cache=ThemeCache(), option_cache=OptionCache()))
+
+    assert [c["description"] for c in client.calls] == ["match 1 option set(s)"]
+    (question,) = client.calls[0]["questions"].values()
+    assert question["type"] == "choice" and set(question["criteria"]) == {"opt_0", "opt_1", "opt_2", "none"}
+    entry = plan.entries[0]
+    assert entry.value == options[0] and entry.values == []
+    assert entry.source == FillSource.MODEL_DECISION and not entry.needs_review
 
 
 def test_pronouns_match_across_form_wordings():

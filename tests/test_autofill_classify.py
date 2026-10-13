@@ -434,3 +434,499 @@ def test_a_university_email_address_is_not_a_street_address():
     label = "Please provide your university email address"
     assert DeterministicBinder().classify_themes([label])[label][0] != QuestionTheme.WORK_ADDRESS
     assert memory_key_for("question_1", label, FieldKind.TEXT) != "street_address"
+
+
+# --- code audit of 2026-10-12, F2: "essential job functions" with the example value "None"
+
+ESSENTIAL_FUNCTIONS = [
+    # The corpus label (51 occurrences, 28 choice fields filled "No").
+    "Do you understand the job requirements, and are you able to perform the essential job functions "
+    "(with or without reasonable accommodation)?",
+    "Can you perform all of the essential functions of this role with or without reasonable accommodation?",  # x6
+    "Are you able to perform the essential functions of the job, with or without reasonable accommodation?",
+    "Can you perform the essential job functions of this position?",
+]
+
+ACCOMMODATION_REQUESTS = [
+    "Do you require any reasonable adjustments or accommodations to participate in the recruitment process?",
+    "If you require any support or adjustments during the recruitment process for any reason, please indicate here",
+    "Please describe any need for a reasonable accommodation",
+]
+
+
+@pytest.mark.parametrize("label", ESSENTIAL_FUNCTIONS)
+def test_the_ability_question_keys_essential_functions_in_every_wording(label):
+    """F2: `\\bessential functions\\b` missed the three-word form, which then
+    fell to the accommodation key beside it in the same table."""
+    assert memory_only_key_for(label) == "essential_functions"
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) == "essential_functions"
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=3) == FieldClass.LEGAL
+
+
+@pytest.mark.parametrize("label", ACCOMMODATION_REQUESTS)
+def test_an_accommodation_request_still_keys_accommodation_needs(label):
+    assert memory_only_key_for(label) == "accommodation_needs"
+
+
+@pytest.mark.parametrize("label", [
+    "Describe the essential functions of your last role",
+    "Which essential job functions of a backend engineer do you enjoy most?",
+    "Essential functionality you would add to our product",
+])
+def test_essential_functions_in_another_sense_is_still_memory_only_and_never_a_fill(label):
+    """A near miss lands on LEGAL (review-only) or on no key; what it must
+    never do is reach a model. The third label has no key at all."""
+    assert classify("question_1", label, FieldKind.TEXT) in (FieldClass.LEGAL, FieldClass.NARRATIVE, FieldClass.SCREENING)
+    assert memory_only_key_for(label) in ("essential_functions", None)
+    assert memory_only_key_for("Essential functionality you would add to our product") is None
+
+
+def test_a_capable_applicant_is_never_written_as_unable():
+    """Probe p18's shape: the documented example value for accommodation_needs
+    is "None"; with essential_functions "Yes" the ability question fills
+    "Yes", and the stored "None" is never read as the option "No"."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    memory = Memory(protected={"accommodation_needs": "None", "essential_functions": "Yes"})
+    three_way = ("Yes, without accommodations", "Yes, with accommodations", "No")
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(ESSENTIAL_FUNCTIONS)]
+    fields += [_field(label, options=three_way, key="t{}".format(i)) for i, label in enumerate(ESSENTIAL_FUNCTIONS)]
+    fields += [_field(label, key="a{}".format(i)) for i, label in enumerate(ACCOMMODATION_REQUESTS[:2])]
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    for entry in plan.entries:
+        assert entry.value != "No", entry.label
+        if entry.field_key.startswith("q"):
+            assert entry.value == "Yes" and not entry.needs_review, entry.label
+        elif entry.field_key.startswith("t"):
+            # Two "Yes" options: with or without accommodation is the
+            # applicant's call, so review with the stored "Yes" intact (or
+            # satisfied by the same question's yes/no sibling above).
+            assert entry.value == "Yes" and (entry.needs_review or entry.satisfied_by), entry.label
+        else:
+            # "None" on a yes/no accommodation question is a decision the
+            # matcher cannot make from spelling: review, with the value intact.
+            assert entry.needs_review or entry.skipped, entry.label
+
+
+# --- code audit of 2026-10-12, F36 / F15(b): `_DECISIONS_NOT_FACTS` under the compound-label guard
+
+def test_a_consent_rider_on_a_theme_question_is_the_theme_question():
+    """"Do you need sponsorship? By submitting you agree to our privacy
+    policy." was CONSENT by `_DECISIONS_NOT_FACTS`, which ran before the
+    guard §56 put on `is_consent_asked`, and filled "Yes" from privacy_notice
+    while needs_sponsorship said "No" (probe p20)."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    memory = Memory(consents={"privacy_notice": "Agree", "terms_and_conditions": "Agree", "sms_messages": "Yes"},
+                    legal_status={"needs_sponsorship": "No", "work_authorization": "Yes", "age_18_plus": "Yes"})
+    labels = {
+        "Do you need sponsorship? By submitting you agree to our privacy policy.": "No",
+        "Are you authorized to work in the US? Please acknowledge that you have read and agree to our Privacy Policy.": "Yes",
+        # One "?", two asks: the age theme answers it (binder's theme-wins
+        # rule, §56); what must not happen is the terms consent answering it.
+        "Are you 18 or older and do you agree to the terms and conditions?": "Yes",
+        "Do you have a GitHub? By applying you consent to the processing of your personal data.": None,
+        "Do you agree to the terms and conditions and are you authorized to work in the US?": "Yes",   # F15(b)
+    }
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(labels)]
+    for field in fields:
+        assert field.field_class == FieldClass.SCREENING, field.label
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    for entry, (label, expected) in zip(plan.entries, labels.items()):
+        assert "standing consent" not in (entry.reason or ""), label
+        assert entry.theme != "none" and "consent" not in (entry.theme or ""), label
+        if expected is None:
+            assert entry.value is None and entry.needs_review, label
+        else:
+            assert entry.value == expected and not entry.needs_review, label
+
+
+@pytest.mark.parametrize("label,options", [
+    ("Please acknowledge that you have read and agree to our Privacy Policy", 1),            # x6
+    ("Do you opt-in to receive WhatsApp messages from Stripe Recruiting?", 2),               # x2
+    ("I consent to have my personal data disclosed to other Momentum Group entities", 2),    # x2
+    ("[Compensation] Do you accept the listed salary range for this position?", 2),         # x2
+    ("To ensure we can focus fully on our conversation, we use Brighthire to record interviews. Do you consent?", 2),
+])
+def test_the_decisions_not_facts_table_still_catches_a_plain_consent(label, options):
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=options) == FieldClass.CONSENT
+
+
+# --- code audit of 2026-10-12, F10: a long label costs linear time ------------
+
+def test_a_fifty_kilobyte_label_is_classified_in_well_under_a_second():
+    """One 50 KB label cost ~10 s (quadratic lookaheads, no size bound).
+    The tables read the first 2,000 characters — longer than any label in
+    the corpora — and the one unanchored double lookahead is anchored."""
+    import time
+    from app.autofill.classify import LABEL_SCAN_LIMIT, SENSITIVE_TOPIC_PATTERNS, is_sensitive_topic
+
+    seed = "Do you have a disability that we should know about and do you sponsor "
+    label = (seed * (50_000 // len(seed) + 1))[:50_000] + " authorized to work"
+    started = time.perf_counter()
+    for _ in range(3):
+        klass = classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2)
+        key = memory_key_for("question_1", label, FieldKind.SINGLE_SELECT)
+        is_sensitive_topic(label)
+    elapsed = (time.perf_counter() - started) / 3
+    assert elapsed < 0.5, elapsed
+    # The same decision as for the label's readable prefix.
+    assert klass == classify("question_1", label[:LABEL_SCAN_LIMIT], FieldKind.SINGLE_SELECT, option_count=2)
+    assert key == memory_key_for("question_1", label[:LABEL_SCAN_LIMIT], FieldKind.SINGLE_SELECT)
+    # The paired disability+accommodation pattern itself, unbounded by the cap.
+    pattern = [p for p in SENSITIVE_TOPIC_PATTERNS if "accommodat" in p.pattern and "disabilit" in p.pattern][0]
+    started = time.perf_counter()
+    assert not pattern.search(("disability and " * 4000) + "x")
+    assert pattern.search(("disability and " * 4000) + "accommodation")
+    assert time.perf_counter() - started < 0.2
+
+
+# --- code audit of 2026-10-12, F34: a consent verb grants only with the grant as its object
+
+#: bucket -> (labels that name the bucket's subject but ask something else,
+#:            labels that ask for the consent and must stay CONSENT)
+CONSENT_NEAR_MISSES = {
+    "sms_messages": (
+        ["Are you willing to be on-call for SMS alerts?",
+         "Do you understand WhatsApp's Business API?",
+         "Are you happy to support text message campaigns as part of this role?",
+         "Can you accept pager duty via text message?",
+         "I confirm I have experience with SMS gateways"],
+        ["Do you consent to receiving follow-up communication via text message about your application?",   # x7
+         "If you wish to receive information via text/SMS, please indicate the cell number below.",        # x2
+         "Do you opt-in to receive WhatsApp messages from our recruiting team?"],
+    ),
+    "marketing_communications": (
+        ["Are you willing to do marketing work as part of the role?",
+         "I understand this is a marketing role",
+         "Would you accept a role on the newsletter editorial team?",
+         "Would you like to run our engineering newsletter?",
+         "Do you agree that marketing and engineering should work closely?",
+         "Are you willing to join the talent pool for our hackathon judges?"],
+        ["Would you like to join our talent community for future opportunities?",
+         "Do you want to join our talent community?",
+         "Would you like to receive our engineering newsletter?"],
+    ),
+    "background_check": (
+        ["Would you be willing to build background check integrations?",
+         "Do you understand our background screening takes two weeks?",
+         "Are you happy to verify the accuracy of data pipelines as part of the role?"],
+        ["Are you willing to undergo a background check?",                                            # x3
+         "Are you willing to submit to a background screening if offered the position?",
+         "Subject to receiving an offer, please confirm you are happy to complete the mandatory background check",  # x2
+         "If an offer is extended and accepted, would you be willing to participate in and successfully complete "
+         "any background check and/or drug screening required for this position and location?"],
+    ),
+    "privacy_notice": (
+        ["Are you willing to work on data processing pipelines?",
+         "I confirm I have experience with data privacy engineering",
+         "Would you accept a data protection officer role in future?",
+         "Do you understand GDPR well enough to advise the product team?"],
+        ["Privacy Policy Acknowledgment",
+         "I agree with the Privacy Notice for Recruitment",
+         "I have read and agree to the Privacy notice and Terms of use.",       # x5; privacy is the first bucket named
+         "By applying you agree to the processing of your personal data as described in our privacy notice."],
+    ),
+    "terms_and_conditions": (
+        ["Are you willing to sign a confidentiality agreement?",                                      # p20
+         "Do you understand the terms and conditions of our bug bounty programme?",
+         "Would you like a copy of the candidate agreement by email?",
+         "I understand the pre-employment requirements include a drug test",
+         "Are you happy to enforce the code of conduct as a community moderator?"],
+        ["I accept the terms and conditions",
+         "Do you agree to our terms of use?",
+         "Please confirm that you have read and accept our candidate agreement."],
+    ),
+}
+
+
+@pytest.mark.parametrize("bucket,label", [
+    (bucket, label) for bucket, (misses, _asks) in CONSENT_NEAR_MISSES.items() for label in misses
+])
+def test_a_consent_verb_without_the_grant_as_its_object_is_not_a_consent(bucket, label):
+    """F34: `willing`, `understand`, `accept`, `confirm`, `happy to` and
+    `would you like` counted on their own, so these filled the standing
+    decision for the bucket they merely mention (38 of 73 such labels)."""
+    from app.autofill.classify import is_consent_asked
+    assert consent_key_for(label) == bucket, "the near miss must still name the bucket"
+    assert not is_consent_asked(label, 2), label
+    kind = FieldKind.BOOLEAN if label.startswith("I ") else FieldKind.SINGLE_SELECT
+    assert classify("question_1", label, kind, option_count=0 if kind == FieldKind.BOOLEAN else 2) != FieldClass.CONSENT, label
+
+
+@pytest.mark.parametrize("bucket,label", [
+    (bucket, label) for bucket, (_misses, asks) in CONSENT_NEAR_MISSES.items() for label in asks
+])
+def test_a_consent_asked_for_is_still_a_consent(bucket, label):
+    assert consent_key_for(label) == bucket
+    kind = FieldKind.TEXT if "cell number" in label else FieldKind.SINGLE_SELECT
+    assert classify("question_1", label, kind, option_count=0 if kind == FieldKind.TEXT else 2) == FieldClass.CONSENT, label
+
+
+def test_a_near_miss_never_replays_the_standing_decision_end_to_end():
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    every_bucket = Memory(consents={"sms_messages": "No", "marketing_communications": "No", "background_check": "Yes",
+                                    "privacy_notice": "Agree", "terms_and_conditions": "Agree", "interview_recording": "Yes"})
+    labels = [label for _bucket, (misses, _asks) in CONSENT_NEAR_MISSES.items() for label in misses]
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(labels)]
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        every_bucket, binder=DeterministicBinder())
+    for entry in plan.entries:
+        assert "standing consent" not in (entry.reason or ""), entry.label
+
+
+@pytest.mark.parametrize("label", [
+    "Are you willing to record the interview sessions you run as a hiring manager?",
+    "Would you like to record the conversation with your mentor for notes?",
+    "Are you willing to record the interview of customers for research?",
+    "Do you have experience recording interviews for a podcast?",
+])
+def test_recording_an_interview_as_job_content_is_not_the_recording_consent(label):
+    """The recording entry of `_DECISIONS_NOT_FACTS` carried no verb at all;
+    the generic phrase now needs a consent ask beside it."""
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2) != FieldClass.CONSENT
+
+
+@pytest.mark.parametrize("label", [
+    "To ensure we can focus fully on our conversation, we use BrightHire to record and transcribe interviews. "
+    "Please confirm if you consent to BrightHire being enabled for this interview",                      # x4
+    "We use Metaview, an AI notetaking tool, to streamline interviews by recording and summarizing discussions. "
+    "With your approval, it silently records notes during interviews. Can Metaview transcribe all your interviews?",  # x2
+    "I consent to my interview being recorded via BrightHire, Inc. to assist in our recruiting efforts.",
+    "Would you agree to recording the interview for training purposes?",
+    "Are you happy to be recorded the interview?",
+])
+def test_the_recording_notice_is_still_a_consent(label):
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=2) == FieldClass.CONSENT
+    assert consent_key_for(label) == "interview_recording"
+
+
+# --- code audit of 2026-10-12, F35: a protected word is a topic; the key needs the question's shape
+
+#: memory key -> (labels using the word in another sense: LEGAL, no key;
+#:                labels asking the question: LEGAL with the key)
+PROTECTED_NEAR_MISSES = {
+    "veteran_status": (
+        ["Are you a veteran of the Linux kernel community?",                        # p20: filled "No"
+         "Veteran Python developer (5+ years)?",
+         "Are you a veteran of any hackathons?",
+         "Veteran status of your spouse",
+         "Have you worked at a veteran-owned business?",
+         "Which veteran engineer on our team would you like to meet?",
+         "Are you a veteran of the startup scene?",
+         "Describe your experience as a veteran user of our API",
+         "Veteran discount code (if any)"],
+        ["Are you a protected Veteran?",
+         "Veteran Status (check only one)",
+         "US candidates only: Are you a veteran/have you served in the military?",
+         "If you are a veteran of the armed forces in your country and would like to identify this fact to our recruiting team, please do so here",  # x3
+         "What is your veteran status?",
+         "Are you a veteran or active member of the United States Armed Forces?"],
+    ),
+    "race_ethnicity": (
+        ["Race condition debugging experience (years)",                            # received the stored decline
+         "Race car engineering experience (Formula SAE)?",
+         "Have you competed in a hackathon race?",
+         "Have you run a 5k race for charity?",
+         "Ethnic cuisine preference for the team lunch",
+         "Data race detection tools you have used",
+         "Describe a race you ran",
+         "Experience with ethnic-minority outreach programmes (volunteer)?"],
+        ["Please indicate your race or ethnicity",                                  # Canonical, §55
+         "What is your ethnicity?",                                                 # x5
+         "Ethnicity", "Race/Ethnicity (Hispanic or Latino, White, Asian, ...)", "Ethnic background",
+         "What race and/or ethnic identities do you identify with? (please select all that apply)",
+         "I identify my race as (check all that apply):"],
+    ),
+    "gender": (
+        ["Gender pay gap research experience?",
+         "Gender of your mentor (for our mentorship matching)",
+         "Have you worked on gender-neutral language tooling?",
+         "Gender balance of the team you led (ratio)",
+         "Experience building gender selection UI (inclusive forms)?"],
+        ["Which gender do you identify as?",                                        # Canonical, §55
+         "Gender", "Gender Identity", "What is your gender?",
+         "Which most closely describes your gender?",                               # x5
+         "How would you describe your gender?",                                     # x5
+         "I identify my gender as (check all that apply):"],
+    ),
+    "disability_status": (
+        ["Disability insurance product experience?",
+         "Have you built accessibility features for users with a disability?",
+         "Disability benefits claims processing experience (years)",
+         "Which disability advocacy groups have you volunteered with?",
+         "Short-term disability plan administration experience?"],
+        ["Do you have a disability?", "Disability Status", "Please indicate your disability status",
+         "Do you consider yourself to have a disability?",                           # x4
+         "US candidates only: Do you live with a disability (as outlined in the Americans with Disabilities Act)?"],
+    ),
+    "hispanic_latino": (
+        ["Experience marketing to Latino communities?",
+         "Hispanic Heritage Month event you helped organise",
+         "Name of the Hispanic student association you were a member of",
+         "Do you speak Spanish or have you worked with Latinx user groups?"],
+        ["Do you identify as Hispanic or Latino?", "Are you Hispanic/Latino?", "Hispanic or Latino"],
+    ),
+    "sexual_orientation": (
+        ["Sexual orientation training facilitator experience?"],
+        ["I identify my sexual orientation as (check all that apply):", "Sexual Orientation"],
+    ),
+    "transgender": (
+        ["Transgender healthcare product experience?"],
+        ["Do you identify as transgender?", "Transgender status"],
+    ),
+}
+
+
+@pytest.mark.parametrize("memory_key,label", [
+    (k, label) for k, (misses, _asks) in PROTECTED_NEAR_MISSES.items() for label in misses
+])
+def test_a_protected_word_in_another_sense_is_legal_and_keyless(memory_key, label):
+    """F35: `\\bveteran\\b`, `\\bgender\\b`, race/ethnic and disabilit keyed with
+    no question shape. The topic still keeps a model out (LEGAL); the key,
+    and so the replay, needs the question."""
+    assert protected_key_for("question_1", label) is None, label
+    for kind in (FieldKind.SINGLE_SELECT, FieldKind.TEXT):
+        assert memory_key_for("question_1", label, kind) != memory_key, label
+        assert classify("question_1", label, kind, option_count=2 if kind == FieldKind.SINGLE_SELECT else 0) == FieldClass.LEGAL, label
+
+
+@pytest.mark.parametrize("memory_key,label", [
+    (k, label) for k, (_misses, asks) in PROTECTED_NEAR_MISSES.items() for label in asks
+])
+def test_the_identification_question_still_keys_its_protected_answer(memory_key, label):
+    assert protected_key_for("question_1", label) == memory_key, label
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) == memory_key, label
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=3) == FieldClass.LEGAL
+
+
+def test_the_vendor_marker_needs_no_shape():
+    """Greenhouse's names and Ashby's suffix are exact; the label's wording
+    is irrelevant there, as before."""
+    assert protected_key_for("veteran_status", "Veteran") == "veteran_status"
+    assert protected_key_for("abc__systemfield_eeoc_gender", "") == "gender"
+    assert protected_key_for("demographic_answers.3", "Veteran") == "veteran_status"
+
+
+def test_a_protected_word_in_another_sense_is_never_filled_from_the_stored_answer():
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    memory = Memory(protected={"veteran_status": "I am not a protected veteran", "race_ethnicity": "Decline to self-identify",
+                               "gender": "Decline to self-identify", "disability_status": "I do not want to answer",
+                               "hispanic_latino": "Decline to self-identify", "sexual_orientation": "I don't wish to answer",
+                               "transgender": "I don't wish to answer"})
+    labels = [label for _k, (misses, _asks) in PROTECTED_NEAR_MISSES.items() for label in misses]
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(labels)]
+    fields += [_field(label, kind=FieldKind.TEXT, options=(), key="t{}".format(i)) for i, label in enumerate(labels)]
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    for entry in plan.entries:
+        assert entry.value is None and not entry.values and entry.needs_review, entry.label
+        assert entry.needs_fact is None, entry.label
+
+
+# --- the bare "Company" alias (binder stream, code audit of 2026-10-12) --------
+
+@pytest.mark.parametrize("label", ["Company", "Company:", "Company *", "Employer"])
+def test_a_bare_company_label_is_an_employment_block_column_not_the_current_employer(label):
+    """An employment-history or reference block's "Company" has no vendor key,
+    so nothing downstream could tell it from a question about the applicant;
+    the alias filled a previous job's row with the current employer."""
+    assert memory_key_for("question_1", label, FieldKind.TEXT) is None
+    assert classify("question_1", label, FieldKind.TEXT) != FieldClass.CORE
+
+
+@pytest.mark.parametrize("label", ["Current Company", "Current company", "Current Employer"])   # "Who is your current employer?" is the theme
+def test_the_current_employer_question_still_keys(label):
+    assert memory_key_for("question_1", label, FieldKind.TEXT) == "current_employer"
+
+
+# --- the 23 further sensitive topics (code audit of 2026-10-12, §4 trailing paragraph)
+
+MORE_SENSITIVE = [
+    "Do you hold dual citizenship?", "Dual nationality",
+    "Are you pregnant or planning to be in the next year?",
+    "Do you have children or dependents?", "Do you have caregiver responsibilities?", "Number of dependents",
+    "Political party affiliation", "What are your political views?",
+    "Are you a union member?", "Are you a member of a trade union?",
+    "Height and weight", "What is your height?",
+    "Family medical history (genetic conditions)", "Do you have a medical condition we should know about?",
+    "Mental health history",
+    "Native language / mother tongue", "What is your first language?",
+    "Do you observe the Sabbath?",
+    "Were you born in the US?", "Year you were born", "Birth year",
+    "Which generation are you (Gen Z, Millennial, Gen X)?",
+    "Have you ever been charged with a crime?", "Any pending criminal charges?",
+    "Have you ever filed for bankruptcy?",
+    "Credit score range", "Credit history",
+    "Have you ever been dishonorably discharged?", "Character of service / type of discharge",
+    "Is your spouse employed at Acme?", "Spouse's employer",
+    "Sex", "Sex assigned at birth", "What is your sex?",
+]
+
+
+@pytest.mark.parametrize("label", MORE_SENSITIVE)
+def test_a_further_sensitive_topic_is_legal_keyless_and_review_only(label):
+    """These were SCREENING: model-eligible, second-pass-eligible, learnable.
+    The same treatment as M2's ten: LEGAL, no key, nothing fills them."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    field = _field(label, options=("Yes", "No", "Prefer not to say"))
+    assert field.field_class == FieldClass.LEGAL, label
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) is None
+    assert memory_key_for("question_1", label, FieldKind.TEXT) is None
+    assert not field.allows_model_judgement()
+    full = Memory(facts={"first_name": "Ada", "country_of_residence": "United States", "current_employer": "Acme"},
+                  legal_status={"citizenship": "US citizen", "age_18_plus": "Yes", "work_authorization": "Yes"},
+                  protected={"veteran_status": "No", "gender": "Male", "race_ethnicity": "Asian"},
+                  preferences={"earliest_start": "June 2027", "timeline_notes": "None"})
+    entry = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", company="Acme", fields=[field]),
+                         full, binder=DeterministicBinder()).entries[0]
+    assert entry.needs_review and entry.value is None and not entry.values and entry.needs_fact is None, label
+
+
+@pytest.mark.parametrize("label,expected_class", [
+    # Language *skills*, not a native language.
+    ("Which programming languages are you proficient in?", FieldClass.SCREENING),
+    ("Please indicate which languages you speak in addition to English:", FieldClass.SCREENING),   # x11
+    ("What was your first programming language?", FieldClass.SCREENING),
+    # Work authorisation, sponsorship, citizenship-as-authorisation, age, the sanctions disclosure.
+    ("Are you legally authorized to work in the United States?", FieldClass.SCREENING),
+    ("Will you now or in the future require sponsorship for employment visa status?", FieldClass.SCREENING),
+    ("Are you a U.S. citizen or permanent resident?", FieldClass.SCREENING),
+    ("Are you 18 years of age or older?", FieldClass.SCREENING),
+    ("Please select the country where you hold citizenship / permanent residence. If you have dual citizenship, "
+     "select the country you reside in.", FieldClass.SCREENING),                                        # x5
+    ("If yes, please provide your visa type and expiration date.", FieldClass.SCREENING),               # x11
+    # The background-check notice that mentions credit checks (a one-option
+    # select in the corpus, x2: CONSENT by shape, and never LEGAL).
+    ("Offers of employment are contingent upon passing pre-employment background checks. Drug and/or credit "
+     "check screenings may be required for specific positions.", FieldClass.CONSENT),
+    ("Do you consent to a criminal background check?", FieldClass.CONSENT),
+    # The words in another sense.
+    ("Are you a native speaker of Canadian French", FieldClass.SCREENING),                              # x1
+    ("Are you pursuing a degree in Political Science, Economics or a related field?", FieldClass.SCREENING),
+    ("Do you hold a European Union work permit?", FieldClass.SCREENING),
+    ("What weight do you give to compensation versus learning?", FieldClass.SCREENING),
+    ("Experience with medical device software (years)", FieldClass.SCREENING),
+    ("Have you worked on a next-generation payments platform?", FieldClass.SCREENING),
+    ("Current Company", FieldClass.CORE),
+])
+def test_the_neighbours_of_the_further_sensitive_topics_keep_their_class(label, expected_class):
+    kind = FieldKind.TEXT if expected_class == FieldClass.CORE or "years" in label else FieldKind.SINGLE_SELECT
+    options = 0 if kind == FieldKind.TEXT else (1 if label.startswith("Offers of employment") else 2)
+    assert classify("question_1", label, kind, option_count=options) == expected_class, label
+    assert memory_key_for("question_1", label, kind) != None or expected_class != FieldClass.CORE

@@ -1,13 +1,16 @@
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.routers import resume, job, analysis, pipeline, autofill
 from app.db import engine, Base, SQLALCHEMY_DATABASE_URL
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, request_id_var
 from app.models import Resume, JobDescription, GapAnalysis, ProjectPlan, ImprovedResume
 
 logger = logging.getLogger(__name__)
@@ -129,12 +132,124 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down")
 
 
+#: The OpenAPI UI is off unless asked for. The hosted one was public and
+#: enumerated every legacy endpoint to anyone who looked (audit 2026-10-12,
+#: F23); the extension never reads it, and a developer sets FIRSTPLAY_DOCS=1
+#: locally when they want it.
+DOCS_ENABLED = os.getenv("FIRSTPLAY_DOCS", "").strip().lower() in ("1", "true", "yes")
+
 app = FastAPI(
     title="FirstPlay Coach API",
     description="Resume analysis and project planning for early-career CS students",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if DOCS_ENABLED else None,
+    redoc_url="/redoc" if DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if DOCS_ENABLED else None,
 )
+
+
+class RequestIdMiddleware:
+    """One UUID4 per request: set in the logging context for every line the
+    request produces, and returned as `X-Request-Id` so a report from the
+    extension can be matched to the hosted log (audit 2026-10-12, F21).
+
+    Pure ASGI rather than BaseHTTPMiddleware, which buffers bodies and runs
+    the handler in a separate task where the context variable would not be
+    visible. The id is always ours — an incoming header is not honoured, so
+    a caller cannot forge a line into someone else's trace.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_id = uuid.uuid4().hex
+        token = request_id_var.set(request_id)
+
+        async def send_with_id(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                headers.append((b"x-request-id", request_id.encode("ascii")))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_id)
+        finally:
+            request_id_var.reset(token)
+
+
+#: Largest request body the autofill endpoints accept. The largest frozen
+#: corpus form is 172 KB of board-API JSON (1,269 Greenhouse postings, p99
+#: 157 KB; Ashby max 94 KB) plus a profile of a few KB; one megabyte is six
+#: times that. Beyond it a stranger is buying worker time, not a plan
+#: (audit 2026-10-12, F10).
+AUTOFILL_MAX_BODY_BYTES = int(os.getenv("AUTOFILL_MAX_BODY_BYTES", str(1024 * 1024)))
+_BODY_LIMITED_PATHS = frozenset({"/api/autofill/plan", "/api/autofill/learn"})
+
+
+class BodySizeLimitMiddleware:
+    """413 for a declared body over the limit, 411 for an undeclared one.
+
+    Decided from the headers alone, before a byte of the body is read or
+    JSON-parsed: every real client of these two endpoints (the extension's
+    `fetch` with a string body, urllib, the test client) declares
+    Content-Length, and uvicorn enforces that the body matches it. A chunked
+    body with no length is refused rather than counted, so the limit is
+    exact and nothing is buffered to find out.
+    """
+
+    def __init__(self, app, limit: int = None, paths=_BODY_LIMITED_PATHS):
+        self.app = app
+        self.limit = AUTOFILL_MAX_BODY_BYTES if limit is None else limit
+        self.paths = paths
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path") in self.paths \
+                and scope.get("method", "GET").upper() in ("POST", "PUT", "PATCH"):
+            headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []}
+            declared = headers.get("content-length")
+            if declared is None or not declared.isdigit():
+                response = JSONResponse(status_code=411, content={
+                    "detail": "Content-Length is required on this endpoint."})
+                await response(scope, receive, send)
+                return
+            if int(declared) > self.limit:
+                response = JSONResponse(status_code=413, content={
+                    "detail": "Request body of {} bytes exceeds the limit of {} bytes.".format(declared, self.limit)})
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+# Outermost first: the id wraps everything, the size check sits inside it so
+# a refused body still gets a request id.
+app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(RequestIdMiddleware)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_without_values(request: Request, error: RequestValidationError):
+    """422s name the field path and the problem, never the value.
+
+    FastAPI's default detail includes each error's `input`, which for the
+    autofill endpoints is a profile value or the applicant's typed answer
+    (audit 2026-10-12, F22). Location, message and type are enough to fix
+    a payload.
+    """
+    rows = []
+    for row in error.errors():
+        rows.append({
+            "loc": list(row.get("loc") or ()),
+            "msg": str(row.get("msg") or ""),
+            "type": str(row.get("type") or ""),
+        })
+    return JSONResponse(status_code=422, content={"detail": rows})
 
 # CORS middleware.
 # `allow_origins` is matched by exact string comparison, so the previous
@@ -151,6 +266,16 @@ app.add_middleware(
     # the FirstPlay Autofill extension's service worker (chrome-extension://<id>),
     # which sends the applicant's profile with each plan request and stores
     # nothing here — the backend stays stateless for it.
+    #
+    # Pinning plan (audit 2026-10-12, F23): any `chrome-extension://` id is
+    # admitted today because an unpacked extension gets a new id per machine
+    # and the store id does not exist until the first upload. Once published,
+    # replace the `chrome-extension://[a-z]+` alternative with the store id
+    # literally (`chrome-extension://<32 lowercase letters>`), read from
+    # FIRSTPLAY_EXTENSION_ID so a dev id can still be added locally. Until
+    # then the exposure is bounded: there are no cookies, so the credentials
+    # flag is inert, and a plan request carries whatever profile the caller
+    # chose to send — another extension learns nothing it did not already hold.
     allow_origin_regex=r"https://[a-zA-Z0-9-]+\.vercel\.app|chrome-extension://[a-z]+",
     allow_credentials=True,
     allow_methods=["*"],
@@ -168,7 +293,7 @@ app.include_router(autofill.router)
 def read_root():
     return {
         "message": "Welcome to FirstPlay Coach API",
-        "docs": "/docs",
+        "docs": "/docs" if DOCS_ENABLED else None,
         "health": "/health",
         "ready": "/ready"
     }

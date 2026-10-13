@@ -41,6 +41,7 @@ about one form in a single call, never one call per field.
 """
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -192,10 +193,12 @@ class JevClient:
             )
 
         if not key.startswith("sk-or-"):
+            # The length only: eight characters of a value that was *meant*
+            # to be a secret is still a fragment of it, and exception text
+            # reaches the log (audit 2026-10-12, F22).
             raise JevConfigurationError(
                 "OPENROUTER_API_KEY does not look like an OpenRouter key "
-                "(expected it to start with 'sk-or-'). Got {} characters "
-                "starting {!r}.".format(len(key), key[:8])
+                "(expected it to start with 'sk-or-'). Got {} characters.".format(len(key))
             )
 
         self._key = key
@@ -253,6 +256,14 @@ class JevClient:
         return self._parse(response, description=description)
 
     def _parse(self, response: httpx.Response, *, description: str) -> Decision:
+        """Translate a response into a Decision or a typed error.
+
+        No error message carries the upstream body. The questions sent to
+        the model contain the applicant's answers, so a 4xx that echoes the
+        request would put them in the exception text, and exception text is
+        what the handlers log (audit 2026-10-12, F9; probe p08). Status code
+        and a category only; the body is dropped here, not downstream.
+        """
         status = response.status_code
 
         if status in (401, 403):
@@ -262,9 +273,7 @@ class JevClient:
 
         if status == 422:
             raise JevConfigurationError(
-                "{}: the question set was rejected (HTTP 422): {}".format(
-                    description, response.text[:300]
-                )
+                "{}: the question set was rejected (HTTP 422)".format(description)
             )
 
         if status in _TRANSIENT_STATUSES:
@@ -274,13 +283,13 @@ class JevClient:
 
         if status >= 400:
             raise JevError(
-                "{}: unexpected HTTP {}: {}".format(description, status, response.text[:200])
+                "{}: unexpected HTTP {}".format(description, status)
             )
 
         try:
             body = response.json()
         except ValueError as e:
-            raise JevError("{}: response was not JSON: {}".format(description, e)) from e
+            raise JevError("{}: response was not JSON".format(description)) from e
 
         answers = {}
         for key, raw in (body.get("answers") or {}).items():
@@ -300,3 +309,26 @@ class JevClient:
 def get_jev_client(**kwargs) -> JevClient:
     """Build a client from the environment. Mirrors `llm_client.get_llm`."""
     return JevClient(**kwargs)
+
+
+def summarise_error(error: Exception) -> str:
+    """A short, sanitised category for a model failure.
+
+    What /health, the response's `model_error` and every log line carry
+    instead of the exception text: the previous /health field republished
+    up to 200 characters of whatever OpenRouter returned, to anyone who
+    asked. Lives here, beside the error classes, so the binder can use it
+    without importing the router.
+    """
+    if isinstance(error, JevConfigurationError):
+        return "model not configured"
+    text = str(error)
+    status = re.search(r"\b([45]\d\d)\b", text)
+    if status:
+        return "{} from upstream".format(status.group(1))
+    lowered = text.lower()
+    if "timed out" in lowered or "timeout" in lowered:
+        return "upstream timed out"
+    if "transport" in lowered or "connect" in lowered or "unreachable" in lowered:
+        return "upstream unreachable"
+    return type(error).__name__[:80]
