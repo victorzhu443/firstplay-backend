@@ -253,7 +253,11 @@ THEME_MEMORY_KEYS: Dict[QuestionTheme, str] = {
     QuestionTheme.POSTAL_CODE: "postal_code",
     QuestionTheme.AGE_ELIGIBILITY: "age_18_plus",
     QuestionTheme.CURRENT_LOCATION: "current_location",
-    QuestionTheme.CURRENT_STATE: "current_state",
+    # Derived from the stored location ("Ithaca, NY" -> "New York"). The
+    # theme once read `current_state`, a key no profile section sets, so
+    # every "Which state…" select was "recognised but not set" (audit
+    # 2026-10-12, F24).
+    QuestionTheme.CURRENT_STATE: "state_of_residence",
     # The stored street address. The theme once read `work_address`, a key no
     # profile section sets, so "Address 1" (12 required fields in the R48 gap
     # list) and "Address" were reported as "recognised but not set" while
@@ -333,3 +337,57 @@ def country_in_label(label: str) -> Optional[str]:
             return code
 
     return None
+
+
+#: Capitalised words that follow "in" / "within" / "for" in authorisation
+#: questions without naming a place: visa programmes ("(including CPT/OPT)")
+#: and months. Checked on the first word, so "STEM OPT" and "F-1 OPT" fall
+#: out together.
+_NOT_A_PLACE = frozenset("""
+cpt opt stem ead h1b h-1b tn j1 j-1 f1 f-1 e3 e-3 o1 o-1 l1 l-1 person
+january february march april may june july august september october november december
+""".split())
+
+_PLACE_AFTER = re.compile(
+    r"\b(in|within|for)\s+(?:the\s+)?([A-Z][A-Za-z.\-]+(?:\s+(?:of|the|and|[A-Z][A-Za-z.\-]+))*)"
+)
+
+
+def unlisted_place(label: str, company: Optional[str] = None) -> Optional[str]:
+    """A place the question names that `country_in_label` has no key for.
+
+    "Are you legally authorized to work in Japan?" names a country the table
+    does not know; before this the general answer filled it, a false
+    statement about work eligibility (audit 2026-10-12, F37). A capitalised
+    word after "in" / "within" / "for" that is not a known country, not a US
+    state, not the employer and not a visa programme is such a place; "in"
+    and "within" are preferred over "for" ("work for Formlabs in Hungary").
+
+    Returns:
+        The place as written, or None when the label names a known country
+        or no unknown place.
+    """
+    if country_in_label(label):
+        return None
+    from app.autofill.memory import _US_STATE_NAMES  # local: keeps the import one-directional
+
+    states = {name.lower() for name in _US_STATE_NAMES.values()}
+    employer = (company or "").strip().lower()
+    found_in, found_for = None, None
+    for match in _PLACE_AFTER.finditer(label or ""):
+        words = match.group(2).split()
+        while words and words[-1].lower() in ("of", "the", "and"):
+            words.pop()
+        if not words or words[0].lower().strip(".") in _NOT_A_PLACE:
+            continue
+        place = " ".join(words).rstrip(".")
+        lowered = place.lower()
+        if lowered in states or lowered in _NOT_A_PLACE:
+            continue
+        if employer and (lowered in employer or employer in lowered):
+            continue
+        if match.group(1).lower() == "for":
+            found_for = found_for or place
+        else:
+            found_in = found_in or place
+    return found_in or found_for
