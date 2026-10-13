@@ -32,6 +32,19 @@ from app.autofill.schema import FieldClass, FieldKind
 #: own convention, not ours.
 ASHBY_EEOC_MARKER = "_systemfield_eeoc"
 
+#: How much of a label the tables read. The longest label in the two frozen
+#: corpora is 1,941 characters; the patterns here and the theme patterns
+#: `_asks_a_theme` consults include lookaheads whose cost grows with the
+#: square of the length, and the plan endpoint accepts labels of any size:
+#: one 50 KB label cost ~10 s of worker time (code audit of 2026-10-12,
+#: F10). Nothing a form asks needs more than this to be recognised.
+LABEL_SCAN_LIMIT = 2000
+
+
+def _scan(label: Optional[str]) -> str:
+    """The part of a label the classifier reads."""
+    return (label or "")[:LABEL_SCAN_LIMIT]
+
 #: ATS field names that identify a core fact, mapped to the canonical memory
 #: key. These are stable across postings — unlike custom question names, which
 #: are allocated per posting and carry no meaning.
@@ -186,7 +199,11 @@ CORE_LABEL_ALIASES = {
     "current city": "city_of_residence",
     "current company": "current_employer",
     "current employer": "current_employer",
-    "company": "current_employer",
+    # Not the bare "Company": that is the employer column of an employment
+    # or reference block, which has no vendor key the binder's F18 guard
+    # could recognise, and it filled the applicant's current employer into
+    # a previous job's row (code audit of 2026-10-12). 0 bare occurrences
+    # in the corpora; "Current Company" is x25.
     "current title": "current_job_title",
     "current job title": "current_job_title",
     "please provide your linkedin profile": "linkedin",
@@ -403,9 +420,35 @@ _GRANT_BUCKETS = frozenset({
 #: the bucket regexes alone turned a non-compete disclosure ("any agreement
 #: with your current employer … confidentiality agreement", x5) and "experience
 #: coding in Python for data processing" into consents.
+#:
+#: A verb grants only when the grant is its object. The first cut counted
+#: `willing`, `understand`, `accept`, `confirm`, `happy to` and `would you
+#: like` on their own, so "Are you willing to sign a confidentiality
+#: agreement?", "Do you understand the terms and conditions of our bug
+#: bounty programme?", "Can you accept pager duty via text message?" and
+#: "Would you like to run our engineering newsletter?" each replayed a
+#: standing decision (code audit of 2026-10-12, F34: 38 of 73 such labels).
+#: `understand` is gone; the others carry their object. The corpus consents
+#: these must keep: "willing to undergo a background check" (x3), "confirm
+#: you are happy to complete the mandatory … background check" (x2),
+#: "willing to participate in and successfully complete any background
+#: check", "wish to receive information via text/SMS" (x2), "Would you like
+#: to join our talent community for future opportunities?".
 _CONSENT_ASKED = re.compile(
-    r"\b(consent|agree|acknowledg\w*|willing|authoriz\w*|authoris\w*|permission|opt[- ]?in"
-    r"|accept|understand|confirm|certify|attest|happy to|wish to receive|would you like)\b", re.I)
+    r"\b(consent|acknowledg\w*|authoriz\w*|authoris\w*|permission|opt[- ]?in|certify|attest"
+    r"|agree(s|d|ment)? (to|with)|i agree"
+    r"|willing to (undergo|submit to|complete|participate in|take|consent|receive|comply"
+    r"|be (contacted|recorded|subject)|authori[sz]e)"
+    r"|(would you like|do you want|do you wish|want|wish|like) to (join|receive|opt|hear|stay|get|subscribe"
+    r"|remain|continue|be (contacted|added|considered|included|notified|kept|part|recorded))"
+    r"|wish to receive"
+    r"|happy to (be |receive|undergo|complete|consent|opt|take)"
+    r"|accept(s|ed|ance)? (of )?(the |our |these |this |all |any |my )?(terms|conditions|polic(y|ies)|notice"
+    r"|statement|agreement|code of conduct|requirements|background)"
+    r"|i accept"
+    r"|confirm (that )?(i|you) (are |have |will )?(read|agree|consent|accept|acknowledge|happy|willing"
+    r"|underst(and|ood)|comply)"
+    r"|confirm (your |my )?(consent|agreement|acceptance|acknowledg\w*))\b", re.I)
 
 
 #: Sentence boundaries, for reading a consent ask one sentence at a time.
@@ -417,6 +460,31 @@ def _asks_a_theme(label: str) -> bool:
     # Lazy: binder imports this module at load.
     from app.autofill.binder import _THEME_PATTERNS
     return any(pattern.search(label) for _theme, pattern in _THEME_PATTERNS)
+
+
+def _asks_something_else(label: str) -> bool:
+    """Whether a consent-shaped label is also asking a different question.
+
+    A second question mark, a non-compete disclosure, or a label a local
+    theme pattern recognises: the consent wording is a rider, and the
+    standing consent must not answer the question beside it. Shared by
+    `is_consent_asked` and the `_DECISIONS_NOT_FACTS` table in `classify`,
+    which ran before this guard and so let "Do you need sponsorship? By
+    submitting you agree to our privacy policy." fill "Yes" from the privacy
+    consent (code audit of 2026-10-12, F36 / F15b).
+    """
+    text = label or ""
+    if text.count("?") > 1 or re.search(r"\bnon[-\s]?compete", text, re.I) or _asks_a_theme(text):
+        return True
+    # One question mark, but on a sentence that neither names a bucket nor
+    # asks for consent: "Do you have a GitHub? By applying you consent to
+    # the processing of your personal data." The question is the GitHub one.
+    # "… we use BrightHire to record interviews. Do you consent?" is not.
+    if consent_key_for(text) in _GRANT_BUCKETS:
+        return any("?" in sentence and consent_key_for(sentence) is None
+                   and not _CONSENT_ASKED.search(normalize_label(sentence))
+                   for sentence in _SENTENCES.split(text))
+    return False
 
 
 def is_consent_asked(label: str, option_count: int = 0) -> bool:
@@ -435,12 +503,12 @@ def is_consent_asked(label: str, option_count: int = 0) -> bool:
     (review of 2026-10-12, finding 2). So a second question, a label a local
     theme pattern recognises, or a non-compete is never a consent ask.
     """
-    text = label or ""
+    text = _scan(label)
     if consent_key_for(text) not in _GRANT_BUCKETS:
         return False
     if option_count == 1:
         return True
-    if text.count("?") > 1 or re.search(r"\bnon[-\s]?compete", text, re.I) or _asks_a_theme(text):
+    if _asks_something_else(text):
         return False
     for sentence in _SENTENCES.split(text):
         if consent_key_for(sentence) in _GRANT_BUCKETS and _CONSENT_ASKED.search(normalize_label(sentence)):
@@ -450,7 +518,7 @@ def is_consent_asked(label: str, option_count: int = 0) -> bool:
 
 def consent_key_for(label: str) -> Optional[str]:
     """Which standing consent, if any, a consent-class field asks for."""
-    text = label or ""
+    text = _scan(label)
     if _AI_POLICY.search(normalize_label(text)) or re.search(r"\barbitrat", text, re.I):
         return None
     for pattern, key in CONSENT_BUCKETS:
@@ -510,12 +578,19 @@ _ACCOMMODATION = re.compile(
     r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
     r"|assistance (during|with|in|for) the (interview|recruit|hiring|application))\b", re.I)
 
+#: "Essential functions", "essential job functions", "essential functions of
+#: the job": the ADA ability question in every wording the corpora carry.
+_ESSENTIAL_FUNCTIONS = re.compile(r"\bessential (job )?functions\b", re.I)
+
 MEMORY_ONLY_LABEL_KEYS = (
     # Order matters: "Can you perform these essential functions of the job with
     # reasonable accommodation?" mentions both. It asks about ability, and with
     # accommodation first it was answered from accommodation_needs ("None"),
     # which rendered as "No" — the inverted answer, on a live Lyft posting.
-    (re.compile(r"\bessential functions\b", re.I), "essential_functions"),
+    # The same inversion came back as "essential *job* functions" (51 corpus
+    # occurrences, 28 of them choice fields filled "No"; code audit of
+    # 2026-10-12, F2), so the regex is shared with `_MEMORY_ONLY` below.
+    (_ESSENTIAL_FUNCTIONS, "essential_functions"),
     # Maven Securities 8043552: "If you require any support or adjustments
     # during the recruitment process…" is the UK wording. Unmatched, it was
     # SCREENING and the model gate answered it "No" from nothing (§40).
@@ -632,14 +707,47 @@ SENSITIVE_TOPIC_PATTERNS = (
     # has no memory-only key either. Between the two it fell to SCREENING and
     # the model gate (review of 2026-10-12, finding 1). Keyless LEGAL instead.
     # Checked after `memory_only_key_for` in `memory_key_for`, so a genuine
-    # accommodation request still reaches `accommodation_needs`.
-    re.compile(r"(?=.*\bdisabilit)(?=.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))", re.I | re.S),
+    # accommodation request still reaches `accommodation_needs`. Anchored:
+    # unanchored, each lookahead re-scanned to the end from every start
+    # position, 10 s on a 50 KB label (F10).
+    re.compile(r"^(?=.*\bdisabilit)(?=.*\b(accommodat|adjustments?\b|assistance (during|with|in|for)\b))", re.I | re.S),
+    # The further topics the code audit of 2026-10-12 found SCREENING, and
+    # so model-eligible: 23 of 26 tried. Written with M2's care. Still out:
+    # the sanctions citizenship-residence disclosure (its "dual citizenship"
+    # sentence sits beside "permanent residence"), "Are you a US citizen?"
+    # and "visa type / status" (work-authorisation-shaped, deterministic),
+    # the background-check consent's "credit check screenings", and language
+    # *skills* ("Which programming languages…", "languages you speak in
+    # addition to English").
+    re.compile(r"^(?!.*\b(permanent residen|sanction|export control))(?=.*\bdual (citizenship|nationality|citizen|national)\b)", re.I | re.S),
+    re.compile(r"\bpregnan(t|cy)\b|\bmaternity\b|\bexpecting a (child|baby)\b", re.I),
+    re.compile(r"\bcaregiv(er|ing)\b|\bcare ?giver\b|\bchildcare\b|\bdependents\b|\bdependent children\b"
+               r"|\b(do you have|number of|how many) (any )?(children|kids)\b", re.I),
+    re.compile(r"\bpolitical (party|affiliation|views?|opinions?|beliefs?|membership|activit)|\bparty affiliation\b", re.I),
+    re.compile(r"\b(trade |labou?r )?union (member|membership|affiliation)\b|\bmember of a (trade |labou?r )?union\b", re.I),
+    re.compile(r"\bheight and weight\b|\byour (height|weight)\b|^(height|weight)$|\bbody (mass|weight)\b|\bbmi\b", re.I),
+    re.compile(r"\bmedical (condition|history|information|records?|diagnos)|\bgenetic (condition|information|test)"
+               r"|\bfamily medical\b|\bhealth (condition|status|history)\b|\bmental (health|illness)\b", re.I),
+    # Not "native speaker": "Are you a native speaker of Canadian French" is
+    # a language-skill question on a bilingual posting (corpus, x1).
+    re.compile(r"\bnative (language|tongue)\b|\bmother tongue\b|\bfirst language\b", re.I),
+    re.compile(r"\bsabbath\b|\bplace of worship\b", re.I),
+    re.compile(r"\b(were|was) you born\b|\byear (you were |of )?born\b|\bborn in\b|\bbirth year\b|\byear born\b", re.I),
+    re.compile(r"\b(gen z|gen x|gen y|millennial|baby boomer|generation (z|x|y|alpha))\b|\bwhich generation\b", re.I),
+    re.compile(r"\b(charged with|committed|convicted of|accused of) (a |an |any )?(crime|offen[cs]e|felony)"
+               r"|\bpending (criminal )?charges\b", re.I),
+    re.compile(r"\b(filed?|declared?|filing) (for )?bankruptcy\b|\bbeen bankrupt\b|^bankruptcy$|\binsolvenc", re.I),
+    re.compile(r"\bcredit (score|history|rating)\b|^credit check$", re.I),
+    re.compile(r"\bdishonou?rabl[ey] discharg|\bdischarged? from the (military|armed|service)"
+               r"|\btype of (military )?discharge\b|\bcharacter of (service|discharge)\b", re.I),
+    re.compile(r"\byour spouse\b|\bspouse('|’| )?s (name|employer|occupation)\b", re.I),
+    re.compile(r"^(what is your |your )?sex$|\bsex (assigned )?at birth\b|\bbiological sex\b", re.I),
 )
 
 
 def is_sensitive_topic(label: str) -> bool:
     """Whether a label asks about a protected or sensitive topic no key answers."""
-    normalized = normalize_label(label)
+    normalized = normalize_label(_scan(label))
     return bool(normalized) and any(p.search(normalized) for p in SENSITIVE_TOPIC_PATTERNS)
 
 
@@ -685,17 +793,43 @@ _EEOC_DISABILITY_ASK = re.compile(
 _CHOICE_KINDS = (FieldKind.SINGLE_SELECT, FieldKind.MULTI_SELECT, FieldKind.BOOLEAN)
 
 
-def custom_protected_key_for(label: str) -> Optional[str]:
-    """Memory key for a protected characteristic asked as a custom question.
+#: The shape of a question that asks the applicant to identify themselves,
+#: on the normalised label. A protected word alone is a topic, not that
+#: question: "Are you a veteran of the Linux kernel community?" was answered
+#: "No" from the stored veteran status (the stored sentence has polarity),
+#: and "Race condition debugging experience (years)" received the stored
+#: decline (code audit of 2026-10-12, F35). Without the shape the label is
+#: still LEGAL — no model sees it — but it has no key, so it is reviewed.
+_IDENTIFICATION_SHAPE = re.compile(
+    r"\b(identif(y|ies|ied|ication)|identity|self[- ]?identif\w*"
+    r"|(veteran|disability|protected|military|ethnic|racial|gender|transgender) status(?! of (your|the|a)\b)"
+    r"|are you (a |an |currently )?(protected |disabled )?(veteran|hispanic|latin[oax]|transgender)"
+    r"|do you (have|consider yourself|live with)|which (of the following )?(most closely |best )?(describes|applies)"
+    r"|describes? your|what (is|are) your|please (select|indicate|specify|choose|state|check)|select your"
+    r"|your (gender|race|ethnicity|ethnic|racial|veteran|disability|sexual orientation|transgender))\b", re.I)
 
-    A custom question outside the demographic block that asks the same thing
-    is the same question. Canonical (Greenhouse, audit of 2026-10-12): "Which
-    gender do you identify as?" and "Please indicate your race or ethnicity"
-    as ordinary custom questions were SCREENING, and the gate inferred both
-    from the profile. Pronouns are not a protected characteristic and keep
-    their own alias; "race" as in a race car does not occur on an application
-    form.
-    """
+#: A label that *is* the topic — "Gender", "Race/Ethnicity (Hispanic or
+#: Latino, White, …)", "Veteran Status (check only one)", "Ethnic
+#: background" — read on the raw label: the topic, then punctuation or the
+#: end. "Gender pay gap research experience?" continues with a word.
+_BARE_TOPIC = re.compile(
+    r"^\W*(your )?(race|ethnicity|ethnic(ity)?|ethnic background|racial background|gender( identity)?"
+    r"|(protected )?veteran( status)?|disabilit(y|ies)( status)?|sexual orientation|transgender( status)?"
+    r"|hispanic( or | ?/ ?)latin[oax]|hispanic|latin[oax])\s*([:(\-–—/?*]|$)", re.I)
+
+#: The protected words in another sense, which no shape rescues: a veteran of
+#: the startup scene, a veteran user, a race condition, a 5k race.
+_ANOTHER_SENSE = re.compile(
+    r"\bveteran (of|in|at) (?!(the |any |our |a )?(armed|military|u\.?s\b|united states|uniformed|navy|army"
+    r"|air force|marines?|coast guard|war|active|service|forces))"
+    r"|\bveteran[- ](owned|discount|user|developer|engineer|programmer|coder|employee|customer|python)"
+    r"|\brace[- ]?(condition|car|track|to the bottom|day|for charity|you ran)|\b(5k|10k|hackathon|data|relay|drag|boat|horse|foot) race\b"
+    r"|\bgender[- ](pay|neutral|balance|selection|inclusive|gap)|\bdisability (insurance|benefits|advocacy|plan|claims|inclusive)"
+    r"|\b(latino|hispanic|latinx) (communit|market|heritage|student|consumer|user)", re.I)
+
+
+def _protected_topic_for(label: str) -> Optional[str]:
+    """The protected characteristic a custom label *mentions*, if any."""
     text = label or ""
     if text and not re.search(r"\bpronoun", text, re.I):
         for pattern, memory_key in PROTECTED_LABEL_PATTERNS:
@@ -705,8 +839,35 @@ def custom_protected_key_for(label: str) -> Optional[str]:
     return None
 
 
+def custom_protected_key_for(label: str) -> Optional[str]:
+    """Memory key for a protected characteristic asked as a custom question.
+
+    A custom question outside the demographic block that asks the same thing
+    is the same question. Canonical (Greenhouse, audit of 2026-10-12): "Which
+    gender do you identify as?" and "Please indicate your race or ethnicity"
+    as ordinary custom questions were SCREENING, and the gate inferred both
+    from the profile. Pronouns are not a protected characteristic and keep
+    their own alias.
+
+    The key is assigned only to a label shaped as that question
+    (`_IDENTIFICATION_SHAPE`, or the bare topic), never to one that uses the
+    word in another sense; the vendor's own marker needs no shape
+    (`vendor_protected_key_for`). A mention without the shape is LEGAL and
+    keyless: reviewed, never judged, never replayed.
+    """
+    text = label or ""
+    memory_key = _protected_topic_for(text)
+    if memory_key is None or _ANOTHER_SENSE.search(text):
+        return None
+    if _BARE_TOPIC.search(text) or _IDENTIFICATION_SHAPE.search(normalize_label(text)):
+        return memory_key
+
+    return None
+
+
 def protected_key_for(key: str, label: str = "") -> Optional[str]:
     """Canonical memory key for a protected-characteristic field, if it is one."""
+    label = _scan(label)
     return vendor_protected_key_for(key, label) or custom_protected_key_for(label)
 
 
@@ -723,7 +884,7 @@ _MEMORY_ONLY = (
     # ADA / accommodation. Free text or yes/no, and the applicant's own
     # statement either way — most people store "None" and never see it again.
     _ACCOMMODATION,
-    re.compile(r"\bessential functions\b", re.I),
+    _ESSENTIAL_FUNCTIONS,
     # Conflict-of-interest and political-exposure screens (~30 instances across
     # the fintech boards). Stable facts about relatives and holdings.
     re.compile(r"\bgovernment official\b", re.I),
@@ -765,9 +926,17 @@ _ATTESTATION = (
 #: bucket and human while unrecorded.
 _DECISIONS_NOT_FACTS = (
     # "To ensure we can focus fully on our conversation, we use Brighthire to
-    # record interviews" (x4). Consent to being recorded.
-    re.compile(r"\b(record(ing|ed)?\s+(the\s+)?(interview|conversation)|brighthire"
-               r"|metaview|otter\.ai)\b", re.I),
+    # record interviews" (x4). Consent to being recorded. A recording vendor
+    # named on an application form is that notice (7 of 7 corpus labels);
+    # the generic phrase needs a consent verb beside it ("consent",
+    # "opt-in", "with your approval" are the corpus wordings), else "Are you
+    # willing to record the interview sessions you run as a hiring manager?"
+    # replayed the recording consent (code audit of 2026-10-12, F34).
+    # Anchored lookaheads: linear time.
+    re.compile(r"^(?:(?=.*\b(brighthire|metaview|otter\.ai)\b)"
+               r"|(?=.*\b(consent|opt[- ]?in|approv\w*|agree|acknowledg\w*|permission|authori[sz]\w*"
+               r"|(happy|willing) to be recorded)\b)"
+               r"(?=.*\brecord(ing|ed)?\s+(the\s+)?(interview|conversation)\b))", re.I | re.S),
     # "Do you opt-in to receive WhatsApp messages from Stripe Recruiting" (x2).
     re.compile(r"\bopt[-\s]?in\b|\b(receive|consent to).{0,20}\b(messages|texts|sms"
                r"|whatsapp|marketing)\b", re.I),
@@ -870,6 +1039,7 @@ def classify(
     Returns:
         The field's class
     """
+    label = _scan(label)
     normalized = normalize_label(label)
 
     # Structure first, and it is the only sensitive-field rule there is.
@@ -904,12 +1074,17 @@ def classify(
     # A protected characteristic asked as a custom question (Canonical: "Which
     # gender do you identify as?", "Please indicate your race or ethnicity")
     # is LEGAL wherever it sits: the stored answer replays, no model touches it.
-    # A sensitive topic with no key is LEGAL too, and review-only.
+    # A sensitive topic with no key is LEGAL too, and review-only — as is a
+    # protected word without the question's shape (F35).
     if normalized not in CORE_LABEL_ALIASES and (
-            protected_key_for(key, label) or is_sensitive_topic(label)):
+            protected_key_for(key, label) or _protected_topic_for(label) or is_sensitive_topic(label)):
         return FieldClass.LEGAL
 
-    if any(pattern.search(normalized) for pattern in _DECISIONS_NOT_FACTS):
+    # Under the same guard as `is_consent_asked`: a consent rider on a
+    # question a theme answers ("Do you need sponsorship? By submitting you
+    # agree to our privacy policy.") is that question, not the consent.
+    if (any(pattern.search(normalized) for pattern in _DECISIONS_NOT_FACTS)
+            and not _asks_something_else(label)):
         return FieldClass.CONSENT
 
     # A required single-select offering exactly one option is not a question,
@@ -984,6 +1159,7 @@ def memory_key_for(key: str, label: str, kind: Optional[FieldKind] = None) -> Op
     Returns:
         A memory key, or None
     """
+    label = _scan(label)
     if key in CORE_FIELD_NAMES:
         return CORE_FIELD_NAMES[key]
 

@@ -67,8 +67,11 @@ def normalize_value(text: Optional[str]) -> str:
 #: member" (x40 in the Greenhouse corpus) and "Yes, I am a veteran or active
 #: member": the stored answer and the option each open with their polarity.
 #: Word-bounded so "none" is not "no" and "yesterday" is not "yes".
-_OPENS_NEGATIVE = re.compile(r"^(no|n|false|never|i am not|i do not|i have not|i will not|i would not)\b")
-_OPENS_AFFIRMATIVE = re.compile(r"^(yes|y|true|i am|i do|i have|i will|i would|agree|i agree|authorized)\b(?! not)")
+#: "I identify as one or more of the classifications of a protected veteran"
+#: is Greenhouse's own affirmative veteran option, and had no polarity
+#: (code audit of 2026-10-12).
+_OPENS_NEGATIVE = re.compile(r"^(no|n|false|never|i am not|i do not|i don t|i have not|i will not|i would not)\b")
+_OPENS_AFFIRMATIVE = re.compile(r"^(yes|y|true|i am|i do|i have|i will|i would|i identify|agree|i agree|authorized)\b(?! not)")
 _NOT_AN_ANSWER = re.compile(r"^(n a|not applicable|none|not sure|unsure|unknown|i don t know|other)\b")
 
 
@@ -283,6 +286,16 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
     # meets forms offering "He / Him", and requiring an exact match left 13
     # fields unanswered across the corpus. Still requires a unique winner, so
     # "he him" cannot also match "he him hers" if a form offered both.
+    #
+    # Never for a value that is not an answer. "None" starts with "no", and
+    # the stored accommodation_needs "None" — the registry's own example —
+    # was selected as "No" on "are you able to perform the essential job
+    # functions…?", writing a capable applicant as unable (code audit of
+    # 2026-10-12, F2). A blank carries no polarity (`_as_bool` already says
+    # so) and so it must not acquire one by spelling.
+    if _NOT_AN_ANSWER.match(target):
+        return None
+
     contained = [
         o for o in field.options
         if normalize_value(o.label) and target.startswith(normalize_value(o.label))
