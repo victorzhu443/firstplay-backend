@@ -2662,6 +2662,80 @@ extension changes need (F4's fidelity diff first).
 
 ---
 
+## 58. R50 — one hundred open engineering internships through the hosted backend, tallied
+
+Victor, after the audit rounds: "test across 100 software engineer internship
+positions that are open and basically tally what works, what doesn't, why".
+Drawn 2026-10-12 from the Simplify Summer-2027 list: active postings,
+engineering titles preferred (84% of the draw), one posting per board or
+org, only boards and orgs with **no result row yet** (a drawn-but-never-run
+board is still held out), every posting live-checked at draw time:
+**53 Greenhouse** (12 of them a new posting on a board first run in rounds
+1–2, marked `revisit`) and **47 Ashby**. Run that evening through the
+installed extension (0.4.52 — 0.4.53 had merged but was not yet reloaded)
+against the **hosted** backend on Render (the localhost probe is opt-in
+since §57), Greenhouse with the window on screen, Ashby in a hidden tab.
+Rows in `survey/survey_results.jsonl` and `survey/ashby_results.jsonl`,
+round `R50`, with `version`; draw in `survey/draws/draw_r50.json`.
+
+| | Greenhouse (53) | Ashby (47) |
+|---|---|---|
+| fields filled | 821 | 360 |
+| known but could not be entered | **1** | **9** |
+| left for the applicant (review) | 215 | 158 |
+| nothing left to do after the fill | 11 | 12 |
+| fill time, median | 738 ms (52 of 53 under 1 s) | 82 ms (43 of 47 under 1 s) |
+| Submit pressed | 0 | 0 |
+| model failed | 0 | 0 |
+
+**What did not work, and why.**
+- *Nine of the ten entry failures are one widget.* Ashby's Date field is
+  react-datepicker. The filler set the input's text ("May 2028"); the
+  display showed it, but the picker's selected date stayed null, so Ashby's
+  form state was empty and the read-back said "the field now reads
+  something else". Measured live on TensorWave: typed text does not reach
+  the state either; clicking the input opens a popper with a month header,
+  previous/next buttons and day cells labelled "Choose Monday, May 15th,
+  2028". The fix (0.4.54) drives the picker: open, step to the month, click
+  the day; a stored month-year takes the 1st and the tooltip says so.
+- *The tenth is localisation.* Haven Interactive's form is French; the
+  Country option reads "États-Unis +1" and "United States" matched nothing,
+  which then left Phone wanted. The backend now sends `dial_code` and `iso2`
+  on the Country entry and the extension matches on them when the names
+  differ (several countries share +1, so the ISO code decides).
+- *67 "INPUT · not in plan" rows* were react-select's hidden required decoy
+  — the 0.4.53 fix, not yet reloaded. Excluded from the counts above.
+- *Four consent checkboxes reported "not in plan"* although the plan knew
+  them: Greenhouse renders a one-box question as `question_N-labeled-
+  checkbox-0` while the plan key is `question_N`; the DOM check did not map
+  the id back. Fixed with the above.
+- *26 "Start date month/year" rows, 4 "Street Address" rows, salary and
+  how-did-you-hear rows are not engine gaps.* Replanning the same boards with
+  the profile file on disk fills all of them; the extension's copy of the
+  profile is missing those facts, and the popup has **61 queued questions**
+  from this round alone that Victor has not answered. The engine asked; the
+  answers are owed.
+- *Three engine gaps, each small, fixed on the backend branch:* "Full Legal
+  Name" had no alias (xAI, review at 50%); "Please select the month you
+  will be able to start" with month-name options could not take a stored
+  month-year; "Will you be graduating in 2028?" / "…in December 2027 or May
+  2028?" are computable from the graduation date and went to review.
+- *What stays review by design:* 49 essays, 27 experience questions ("what
+  tools have you used…"), 13 consents and attestations the extension's
+  profile copy lacks, 7 legal/clearance questions (FINRA, DOD clearance,
+  export rule, felony), 2 "are you an LLM" attestations, Ashby's
+  education-history block (Lendable ×2, still open), a video recording, an
+  exercise link.
+
+**What worked.** 1,181 fields across 100 forms with no Submit press anywhere;
+the no-click required check held on every Greenhouse board; the hosted
+backend served every plan with the model available (9 cache hits where a
+batch had been retried); the drift re-check caught and re-applied 13 Ashby
+fields; the twelve "revisit" boards from rounds 1–2 behaved like the new
+ones (no regressions on the old forms).
+
+---
+
 ## Current state
 
 Rewritten 2026-10-12 after the outside audit; the previous table here was
