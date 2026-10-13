@@ -20,7 +20,7 @@ import pytest
 from app.autofill.binder import DeterministicBinder, _THEME_PATTERNS
 from app.autofill.buckets import looks_like_date, match_numeric_bucket, match_term_bucket
 from app.autofill.format import match_option
-from app.autofill.schema import FieldKind, FieldOption, FormField
+from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField
 from app.autofill.themes import QuestionTheme
 
 
@@ -393,3 +393,73 @@ def test_a_name_that_is_not_the_applicants_is_never_the_stored_name(label):
     name typed into a native-language box or a reference slot."""
     assert _core_key(label)[1] != "full_name", label
     assert _core_key(label)[0] != "core", label
+
+
+# --- R50 live round, item 2: a stored month-year against a month menu ---------
+
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August",
+          "September", "October", "November", "December")
+
+
+def _month_field(*labels):
+    return FormField(key="m", label="Please select the month you will be able to start",
+                     kind=FieldKind.SINGLE_SELECT, options=_options(*labels))
+
+
+@pytest.mark.parametrize("value", ["August 2027", "Aug 2027", "Aug. 2027", "August 1, 2027", "08/2027", "8/2027", "2027-08", "2027-08-01"])
+def test_a_stored_month_year_matches_a_bare_month_option_by_its_month(value):
+    """"Please select the month you will be able to start" (January … December)
+    against a stored earliest start in month-year shape. Full names already
+    matched by accident through the reverse-prefix pass; abbreviated and
+    numeric shapes did not. The month is the answer, in both spellings."""
+    assert match_option(value, _month_field(*MONTHS)).label == "August"
+    assert match_option(value, _month_field(*[m[:3] for m in MONTHS])).label == "Aug"
+
+
+def test_a_stored_month_year_still_matches_a_year_only_menu_by_its_year():
+    """The other half, kept from §53: the year alone on a list of years."""
+    assert match_option("August 2027", _month_field("2026", "2027", "2028")).label == "2027"
+    assert match_option("08/2027", _month_field("2026", "2027", "2028")).label == "2027"
+
+
+def test_a_month_range_menu_matches_only_when_exactly_one_range_holds_the_month():
+    quarters = _month_field("January–March", "April–June", "July–September", "October–December")
+    assert match_option("August 2027", quarters).label == "July–September"
+    assert match_option("Dec 2027", quarters).label == "October–December"
+    assert match_option("Nov 2027", _month_field("November to February", "March to October")).label == "November to February"
+    # Two ranges hold May: the applicant's call, not the engine's.
+    overlapping = _month_field("January - June", "April - September", "October - December")
+    assert match_option("May 2027", overlapping) is None
+    assert match_option("August 2027", overlapping).label == "April - September"
+
+
+@pytest.mark.parametrize("value", ["Summer 2027", "2027", "ASAP", "N/A", "Immediately", "Fall 2027"])
+def test_a_value_that_names_no_month_never_selects_a_month(value):
+    """A season, a bare year or a non-date carries no month: nothing is
+    selected and the field goes to the option-translation gate or review."""
+    assert match_option(value, _month_field(*MONTHS)) is None
+    assert match_option(value, _month_field("January–March", "April–June", "July–September", "October–December")) is None
+
+
+def test_a_month_year_menu_is_matched_by_month_and_year_never_by_season():
+    """Pre-existing, found while adding the month pass: a stored "Aug 2027"
+    against "June 2027 / July 2027 / August 2027" picked June 2027 — the
+    term buckets read both sides as "summer 2027" and took the first. Same
+    month and year, or nothing."""
+    dated = _month_field(*["{} 2027".format(m) for m in MONTHS])
+    assert match_option("Aug 2027", dated).label == "August 2027"
+    assert match_option("August 1, 2027", dated).label == "August 2027"
+    assert match_option("08/2027", dated).label == "August 2027"
+    assert match_option("August 2028", dated) is None                       # right month, wrong year
+    assert match_option("Aug 2027", _month_field("June 2027", "July 2027", "Other")) is None
+    # Season menus keep the bucket arithmetic (DECISIONS: Spring/Summer buckets).
+    assert match_option("May 2028", _month_field("Fall 2027", "Spring 2028", "Later than Summer 2028")).label == "Spring 2028"
+
+
+def test_a_bare_month_option_menu_does_not_catch_other_dated_answers():
+    """"Graduation Date" as a text field and a stored date on a non-month
+    menu are unchanged: the pass only runs when some option *is* a month."""
+    from app.autofill.memory import Memory
+    text = FormField(key="g", label="Graduation Date", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING)
+    assert text.options == [] and match_option("May 2028", text) is None
+    assert match_option("May 2028", _month_field("Yes", "No")) is None

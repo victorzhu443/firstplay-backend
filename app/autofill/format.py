@@ -12,9 +12,9 @@ answer on an application, so anything short of an unambiguous match returns None
 and the field goes to review instead.
 """
 import re
-from typing import Optional
+from typing import Optional, Tuple
 
-from app.autofill.buckets import match_numeric_bucket, match_term_bucket
+from app.autofill.buckets import match_numeric_bucket, match_term_bucket, parse_month_year, month_span
 from app.autofill.schema import FieldOption, FormField
 
 #: Set as a resolution's reason when a stored answer exists but matches no
@@ -255,6 +255,21 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
     if bucket is not None:
         return bucket
 
+    # A stored month-and-year against options that are themselves
+    # month-and-years ("June 2027" / "July 2027" / "August 2027"): the same
+    # month and year, or nothing. Before the term buckets, which read both
+    # sides as seasons and picked "June 2027" for a stored "Aug 2027" (R50,
+    # found while adding the month pass below). Only when the menu is dated
+    # by month: season menus ("Spring 2028") keep the bucket arithmetic.
+    month_year = parse_month_year(value)
+    if month_year is not None:
+        dated = [(o, parse_month_year(o.label)) for o in field.options]
+        if any(parsed is not None for _o, parsed in dated):
+            same = [o for o, parsed in dated if parsed == month_year]
+            if len(same) == 1:
+                return same[0]
+            return None
+
     bucket = match_term_bucket(value, field.options)
     if bucket is not None:
         return bucket
@@ -275,6 +290,23 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
         same_year = [o for o in field.options if normalize_value(o.label) == year.group(0)]
         if len(same_year) == 1:
             return same_year[0]
+
+    # And the symmetric case (R50 live round): a stored month-and-year
+    # ("August 2027", "Aug 2027", "08/2027") against a list of bare months,
+    # "Please select the month you will be able to start" (January …
+    # December). The month alone is the answer. A month *range* option
+    # ("January–March") counts only when the stored month falls inside it,
+    # and the winner must be unique: overlapping ranges are the applicant's
+    # call. Options carrying a year or any other words are not months and
+    # are left to the exact pass above.
+    if month_year is not None:
+        month = month_year[0]
+        spans = [(o, month_span(o.label)) for o in field.options]
+        if any(span is not None for _o, span in spans):
+            inside = [o for o, span in spans if span is not None and _month_in_span(month, span)]
+            if len(inside) == 1:
+                return inside[0]
+            return None
 
     # A stored answer that is a unique prefix of exactly one option label.
     prefix = [o for o in field.options if normalize_value(o.label).startswith(target)]
@@ -304,6 +336,14 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
         return contained[0]
 
     return None
+
+
+def _month_in_span(month: int, span: "Tuple[int, int]") -> bool:
+    """Whether `month` (1-12) falls in an inclusive span, wrapping past December."""
+    low, high = span
+    if low <= high:
+        return low <= month <= high
+    return month >= low or month <= high
 
 
 def option_for_bool(answer: bool, field: FormField) -> Optional[FieldOption]:
