@@ -1170,6 +1170,141 @@ def _class_standing_answer(field: FormField, memory: Memory) -> Optional[Resolut
                       reason="computed: you are a {} by your stored dates".format(mine))
 
 
+_GRADUATES = re.compile(r"\bgraduat\w*\b", re.I)
+_GRAD_MONTH = r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
+_GRAD_MONTH_YEAR = re.compile(r"\b" + _GRAD_MONTH + r",?\s+((?:19|20)\d{2})\b", re.I)
+_GRAD_YEAR = re.compile(r"\b((?:19|20)\d{2})\b")
+#: The question's date is a bound, not a set: "by June 2027", "before 2028",
+#: "after May 2027", "no earlier than 2028", "between X and Y".
+_GRAD_AT_MOST = re.compile(r"\b(by|before|prior to|no later than|on or before|until|up to|or earlier|or sooner)\b", re.I)
+_GRAD_AT_LEAST = re.compile(r"\b(after|later than|no earlier than|on or after|following|or later|at the earliest)\b", re.I)
+_GRAD_STRICT = re.compile(r"\b(before|prior to|after|later than)\b", re.I)
+_GRAD_BETWEEN = re.compile(r"\bbetween\b", re.I)
+#: A date the question refers to but does not state: "before the start
+#: date", "by the time the internship begins", "prior to your start".
+_GRAD_UNSTATED = re.compile(r"\b(start date|start of|begins?|beginning|commence|prior to (your|the)|before (your|the)"
+                            r"|by the time|at the time|when (you|the)|end of (the|your|this))\b", re.I)
+_GRAD_NOT_THIS = re.compile(r"\bhigh school\b|\bsecondary school\b|\bbootcamp\b|\b(ceremony|commencement|gift|party)\b", re.I)
+_GRAD_OTHER_LEVEL = re.compile(r"\b(master'?s?|phd|ph\.d|doctor(al|ate)|mba|graduate (program|programme|degree|school|studies|student))\b", re.I)
+_GRAD_BACHELORS = re.compile(r"\b(bachelor'?s?|undergrad\w*|b\.?s\.?|b\.?a\.?)\b", re.I)
+_GRAD_UNDERGRAD_MARKERS = ("bachelor", "b.s", "bs ", "b.a", "ba ", "undergrad", "bsc")
+
+
+def _graduation_by_date_answer(field: FormField, memory: Memory) -> Optional[Resolution]:
+    """Answer "Will you be graduating in 2028?" from the stored graduation date.
+
+    R50 live round: Lendable (Ashby) asked it as Yes/No, another board asked
+    "Are you graduating in December 2027 or May 2028?", Enova asked "If you
+    are in a Bachelor's program, do you graduate by June 2027?". All three
+    went to the model gate for a comparison the calendar settles. The
+    question names a year, a month-year or a set of them, possibly as a
+    bound ("by", "before", "after", "between"); the stored date is compared
+    at the granularity the question uses.
+
+    Review, not a guess, when the question refers to a date it does not
+    state ("will you have graduated before the start date?"), when the
+    stored date is too coarse for the comparison (a bare year against "by
+    June 2027" when the years are equal), when the question is conditional
+    on a degree level the applicant is not in, or when the dates in the
+    question do not compose into one test. None — the existing paths — when
+    the question names no date at all ("Have you graduated?") or asks about
+    another graduation (high school, a bootcamp, a graduate programme for a
+    bachelor's student).
+    """
+    two_way = (field.kind == FieldKind.SINGLE_SELECT and len(field.options) == 2
+               and all(_as_bool(o.label) is not None for o in field.options))
+    if field.kind != FieldKind.BOOLEAN and not two_way:
+        return None
+    label = field.label or ""
+    # "graduate program" is a degree level, not the act of graduating: "Are
+    # you enrolled in a graduate program through 2028?" is the
+    # graduate-programme theme's question and it answers it.
+    if not _GRADUATES.search(_GRAD_OTHER_LEVEL.sub(" ", label)) or _GRAD_NOT_THIS.search(label):
+        return None
+
+    from app.autofill.memory import _month_of, _year_of  # local: memory imports binder's schema
+
+    stored = memory.education.get("graduation_date") or ""
+    grad_year = _year_of(stored)
+    if not grad_year:
+        return None
+    grad_year = int(grad_year)
+    grad_month = _month_of(stored)
+    grad_month_index = (_MONTH_INDEX[grad_month] if grad_month else None)
+
+    # A conditional on a degree level: "If you are in a Bachelor's program…"
+    # for a master's student, or a graduate-programme date for an
+    # undergraduate, is not settled by the stored date.
+    degree = (memory.education.get("degree") or "").lower()
+    names_bachelors = bool(_GRAD_BACHELORS.search(label))
+    names_graduate = bool(_GRAD_OTHER_LEVEL.search(label))
+    if degree and (names_bachelors or names_graduate):
+        is_undergrad = any(m in degree for m in _GRAD_UNDERGRAD_MARKERS)
+        is_graduate = any(m in degree for m in _GRAD_MARKERS)
+        if (names_bachelors and not names_graduate and is_graduate and not is_undergrad) or \
+                (names_graduate and not names_bachelors and is_undergrad and not is_graduate):
+            return Resolution(field_key=field.key, source=FillSource.HUMAN, needs_review=True,
+                              reason="asks about graduating from a {} programme; you are pursuing {}".format(
+                                  "bachelor's" if names_bachelors else "graduate", memory.education.get("degree")))
+    elif names_graduate and not names_bachelors:
+        return None
+
+    # The dates the question names: month-years first, then the years not
+    # already inside one.
+    month_years = [(_MONTH_INDEX[m[:3].lower()], int(y)) for m, y in _GRAD_MONTH_YEAR.findall(label)]
+    rest = _GRAD_MONTH_YEAR.sub(" ", label)
+    years = [int(y) for y in _GRAD_YEAR.findall(rest)]
+    named = [(None, y) for y in years] + month_years
+    if not named:
+        if _GRAD_UNSTATED.search(label) or _GRAD_AT_MOST.search(label) or _GRAD_AT_LEAST.search(label):
+            return Resolution(field_key=field.key, source=FillSource.HUMAN, needs_review=True,
+                              reason="asks whether you graduate relative to a date the question does not state")
+        return None
+
+    def compare(target):
+        """-1, 0, 1 for stored before / same / after `target`, None if unsettled."""
+        month, year = target
+        if grad_year != year:
+            return -1 if grad_year < year else 1
+        if month is None:
+            return 0
+        if grad_month_index is None:
+            return None
+        return (grad_month_index > month) - (grad_month_index < month)
+
+    at_most, at_least, between = _GRAD_AT_MOST.search(label), _GRAD_AT_LEAST.search(label), _GRAD_BETWEEN.search(label)
+    answer: Optional[bool]
+    if between and len(named) == 2:
+        low, high = sorted(named, key=lambda t: (t[1], t[0] or 0))
+        lo, hi = compare(low), compare(high)
+        answer = None if lo is None or hi is None else (lo >= 0 and hi <= 0)
+    elif (at_most or at_least) and not between and len(named) == 1 and not (at_most and at_least):
+        c = compare(named[0])
+        if c is None:
+            answer = None
+        elif at_most:
+            answer = c < 0 if _GRAD_STRICT.search(at_most.group(0)) else c <= 0
+        else:
+            answer = c > 0 if _GRAD_STRICT.search(at_least.group(0)) else c >= 0
+    elif not at_most and not at_least and not between:
+        results = [compare(t) for t in named]
+        answer = None if any(r is None for r in results) else any(r == 0 for r in results)
+    else:
+        answer = None
+
+    if answer is None:
+        return Resolution(field_key=field.key, source=FillSource.HUMAN, needs_review=True,
+                          reason="your stored graduation date ({}) does not settle this question as asked".format(stored))
+    option = option_for_bool(answer, field) if field.options else None
+    value = option.label if option else ("Yes" if answer else "No")
+    return Resolution(field_key=field.key, value=value, source=FillSource.MEMORY,
+                      reason="computed: you graduate {}".format(stored))
+
+
+_MONTH_INDEX = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
+_MONTH_INDEX.update({m: i + 1 for i, m in enumerate(("January", "February", "March", "April", "May", "June", "July",
+                                                      "August", "September", "October", "November", "December"))})
+
 _OTHER_LEVEL = re.compile(r"\b(master'?s?|phd|ph\.d|doctor(al|ate)|graduate (gpa|degree|studies|program|programme))\b", re.I)
 _GRAD_MARKERS = ("master", "m.s", "ms ", "phd", "ph.d", "doctor", "msc", "meng")
 
@@ -1961,7 +2096,7 @@ def resolve_form(
         resolution = _within_options(memory.resolve(field), field)
         if resolution is None:
             resolution = (_class_standing_answer(field, memory) or _based_in_country_answer(field, memory)
-                          or _other_degree_level_answer(field, memory))
+                          or _graduation_by_date_answer(field, memory) or _other_degree_level_answer(field, memory))
         if resolution is not None:
             resolution = _second_core_alias_guard(field, resolution, vendor_answered)
             resolved[field.key] = resolution

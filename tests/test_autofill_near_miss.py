@@ -463,3 +463,128 @@ def test_a_bare_month_option_menu_does_not_catch_other_dated_answers():
     text = FormField(key="g", label="Graduation Date", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING)
     assert text.options == [] and match_option("May 2028", text) is None
     assert match_option("May 2028", _month_field("Yes", "No")) is None
+
+
+# --- R50 live round, item 3: graduation yes/no computed from the stored date --
+
+def _yes_no(label, kind=FieldKind.SINGLE_SELECT):
+    options = _options("Yes", "No") if kind == FieldKind.SINGLE_SELECT else []
+    return FormField(key="g", label=label, kind=kind, options=options, field_class=FieldClass.SCREENING)
+
+
+def _grad(label, memory, kind=FieldKind.SINGLE_SELECT):
+    from app.autofill.binder import _graduation_by_date_answer
+    return _graduation_by_date_answer(_yes_no(label, kind), memory)
+
+
+BS_MAY_2028 = {"graduation_date": "May 2028", "degree": "BS Computer Science"}
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("Will you be graduating in 2028?", "Yes"),                                        # Lendable (Ashby)
+    ("Will you be graduating in 2027?", "No"),
+    ("Are you graduating in December 2027 or May 2028?", "Yes"),
+    ("Are you graduating in December 2027 or June 2028?", "No"),
+    ("Are you expecting to graduate in 2028 or 2029?", "Yes"),
+    ("If you are in a Bachelor's program, do you graduate by June 2027?", "No"),       # Enova
+    ("If you are in a Bachelor's program, do you graduate by June 2028?", "Yes"),
+    ("Do you graduate before May 2028?", "No"),                                        # strict bound
+    ("Will you graduate after January 2028?", "Yes"),
+    ("Will you graduate no earlier than 2028?", "Yes"),
+    ("Will you graduate between December 2027 and August 2028?", "Yes"),
+    ("Will you graduate between June 2028 and December 2028?", "No"),
+])
+def test_a_graduation_yes_no_that_names_a_date_is_computed_from_the_stored_date(label, expected):
+    """Three live boards asked a calendar comparison the model gate was left
+    to make. A year, a month-year, a set of them, or a bound: compared with
+    the stored graduation date at the granularity the question uses."""
+    from app.autofill.memory import Memory
+
+    memory = Memory(education=BS_MAY_2028)
+    for kind in (FieldKind.SINGLE_SELECT, FieldKind.BOOLEAN):
+        resolution = _grad(label, memory, kind)
+        assert resolution is not None and not resolution.needs_review, label
+        assert resolution.value == expected, (label, kind)
+        assert resolution.reason == "computed: you graduate May 2028"
+
+
+@pytest.mark.parametrize("label,education,why", [
+    # A date the question refers to but never states.
+    ("Will you have graduated before the start date?", BS_MAY_2028, "does not state"),
+    ("Will you have graduated by the time the internship begins?", BS_MAY_2028, "does not state"),
+    # A bare stored year cannot settle a month-level comparison in that year.
+    ("Are you graduating in December 2027 or May 2028?", {"graduation_date": "2028"}, "does not settle"),
+    ("Do you graduate by June 2028?", {"graduation_date": "2028"}, "does not settle"),
+    # Conditional on a degree level the applicant is not in.
+    ("If you are in a Bachelor's program, do you graduate by June 2027?",
+     {"graduation_date": "May 2028", "degree": "MS Computer Science"}, "bachelor's programme"),
+    ("Are you graduating with a Master's degree by 2028?", BS_MAY_2028, "graduate programme"),
+    # "before X or after Y": two bounds that do not compose into one test.
+    ("Will you graduate before May 2027 or after May 2029?", BS_MAY_2028, "does not settle"),
+])
+def test_a_graduation_question_the_stored_date_does_not_settle_goes_to_review(label, education, why):
+    from app.autofill.memory import Memory
+
+    resolution = _grad(label, Memory(education=education))
+    assert resolution is not None and resolution.needs_review and resolution.value is None, label
+    assert why in resolution.reason, (label, resolution.reason)
+
+
+@pytest.mark.parametrize("label", [
+    "Have you graduated?",                                      # no date named: the existing paths
+    "Did you graduate from high school before 2020?",           # another graduation
+    "Did you graduate from a coding bootcamp in 2024?",
+    "Will you attend the 2028 graduation ceremony?",
+    "Are you enrolled in a graduate program through 2028?",     # the graduate-programme theme's question
+])
+def test_a_graduation_question_outside_the_rule_is_left_to_the_existing_paths(label):
+    from app.autofill.memory import Memory
+
+    assert _grad(label, Memory(education=BS_MAY_2028)) is None, label
+    assert _grad(label, Memory(education=BS_MAY_2028), FieldKind.BOOLEAN) is None, label
+
+
+def test_a_graduation_question_with_no_stored_date_or_no_yes_no_control_is_untouched():
+    from app.autofill.binder import _graduation_by_date_answer
+    from app.autofill.memory import Memory
+
+    assert _grad("Will you be graduating in 2028?", Memory()) is None
+    # Not a yes/no control: a date menu, a three-way select, a text field.
+    years = FormField(key="g", label="Will you be graduating in 2028?", kind=FieldKind.SINGLE_SELECT,
+                      options=_options("2027", "2028", "2029"), field_class=FieldClass.SCREENING)
+    three = FormField(key="g", label="Will you be graduating in 2028?", kind=FieldKind.SINGLE_SELECT,
+                      options=_options("Yes", "No", "Not sure"), field_class=FieldClass.SCREENING)
+    text = FormField(key="g", label="Graduation Date", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING)
+    memory = Memory(education=BS_MAY_2028)
+    for field in (years, three, text):
+        assert _graduation_by_date_answer(field, memory) is None, field.label
+
+
+def test_graduation_yes_no_end_to_end_leaves_the_date_fill_alone():
+    """The whole plan: the Lendable and Enova shapes fill, "expected graduation
+    date" keeps the existing date fill, "Graduation Date" on a text field is
+    unchanged, and the unstated-date question is a review, not a date typed
+    into a yes/no."""
+    from app.autofill.binder import resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    fields = [
+        _yes_no("Will you be graduating in 2028?"),
+        FormField(key="e", label="If you are in a Bachelor's program, do you graduate by June 2027?",
+                  kind=FieldKind.SINGLE_SELECT, options=_options("Yes", "No"), field_class=FieldClass.SCREENING),
+        FormField(key="d", label="What is your expected graduation date?", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING),
+        FormField(key="t", label="Graduation Date", kind=FieldKind.TEXT, field_class=FieldClass.SCREENING),
+        _yes_no("Will you have graduated before the start date?"),
+    ]
+    for i, f in enumerate(fields):
+        f.key = "q{}".format(i)
+    plan = resolve_form(FormSchema(source="t", ats="ashby", posting_id="1", fields=fields),
+                        Memory(education=BS_MAY_2028), binder=DeterministicBinder())
+    by_label = {e.label: e for e in plan.entries}
+    assert by_label["Will you be graduating in 2028?"].value == "Yes"
+    assert by_label["If you are in a Bachelor's program, do you graduate by June 2027?"].value == "No"
+    assert by_label["What is your expected graduation date?"].value == "May 2028"
+    assert by_label["Graduation Date"].value == "May 2028"
+    unstated = by_label["Will you have graduated before the start date?"]
+    assert unstated.needs_review and unstated.value is None and "does not state" in unstated.reason
