@@ -314,8 +314,6 @@ def test_the_invariant_holds_across_the_whole_plan(anthropic, figma, notion, mem
     assert decided_by_model > 0                                # the pressure was real
 
 
-@pytest.mark.xfail(strict=True, reason="audit F1: earlier_answers is built from every resolved entry with no "
-                                       "class filter, so EEOC and consent answers reach the model's state")
 def test_no_protected_or_consent_answer_is_shown_to_the_model_across_the_whole_plan(anthropic, figma, notion, memory):
     """The other half of the invariant: a protected or consent answer is not
     only never *decided* by the model, it is never *shown* to it. Checked on

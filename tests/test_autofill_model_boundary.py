@@ -9,7 +9,7 @@ the option-gate test grepped source text. Nothing here touches the network:
 the client is faked at the one seam the binder has (`JevClient.decide`), and
 the endpoint tests swap `get_jev_client` for it.
 
-Tests marked xfail point at a finding the owning stream is fixing (F1: the
+Tests that were xfail during audit round two now pass (F1: the
 protected and consent answers travel in `earlier_answers`; F8: contact
 values travel in the second pass; F19: `model_skipped` is never reported when
 the trip happens in a sequential gate). They are strict: when the fix lands
@@ -268,9 +268,6 @@ def test_a_timeout_in_a_sequential_gate_still_yields_a_deterministic_plan_and_is
     assert len(client.calls) <= 2
 
 
-@pytest.mark.xfail(strict=True, reason="audit F19: model_skipped stays false when the trip happens in a "
-                                       "sequential gate — the JevServiceError propagates out of resolve_form "
-                                       "and the router rebuilds the plan with jev=None")
 def test_plan_reports_model_skipped_after_a_timeout_in_a_sequential_gate(model_configured):
     """The documented contract (`AutofillResponse.model_skipped`, `_decide`):
     after the first transport failure the rest of the plan is finished
@@ -510,9 +507,6 @@ def test_learn_falls_back_to_episodes_when_the_judge_fails(model_configured):
         assert body["model_failed"] is True
 
 
-@pytest.mark.xfail(strict=True, reason="audit F19 (found by this test): /learn's JevError fallback re-runs "
-                                       "learn() on the Memory the first run already mutated, so the episode "
-                                       "it saved is reported as learned: 0")
 def test_learn_counts_the_episode_it_kept_when_the_judge_fails(model_configured):
     _client, body = _learn_with_a_failing_judge(model_configured)
     assert Memory(**body["profile"]).recall_answer(TSHIRT) == "M"
@@ -680,8 +674,6 @@ def test_the_fixture_exercises_every_gate():
             assert not any(qid.endswith(k) for k in sensitive_keys), (call["description"], qid)
 
 
-@pytest.mark.xfail(strict=True, reason="audit F1: earlier_answers is built from every resolved entry with no "
-                                       "class filter, so EEOC and consent answers travel to the model")
 def test_no_protected_or_consent_value_or_label_reaches_the_model():
     client = ScriptedClient()
     form, memory, plan = _full_plan(client)
@@ -700,9 +692,6 @@ def _contact_values():
     return set(CONTACT.values()) | {"301-555-0100"}            # as stored, and as the plan formats the phone
 
 
-@pytest.mark.xfail(strict=True, reason="audit F8 (via the F1 mechanism): earlier_answers carries the CORE "
-                                       "Email / Phone / address entries, so contact values reach the answer "
-                                       "gate; a CORE+SCREENING class filter alone would not stop this")
 def test_earlier_answers_carry_no_contact_value():
     client = ScriptedClient()
     _full_plan(client)
@@ -714,8 +703,6 @@ def test_earlier_answers_carry_no_contact_value():
                 assert text not in blob, (call["description"], earlier)
 
 
-@pytest.mark.xfail(strict=True, reason="audit F8: _profile_catalog puts email, phone and street address "
-                                       "into the second-pass state and the __key criteria text")
 def test_the_second_pass_shows_the_model_no_contact_value():
     client = ScriptedClient()
     _full_plan(client)
