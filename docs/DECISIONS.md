@@ -2510,6 +2510,138 @@ rule change probes outside the corpus by construction.
 
 ---
 
+## 57. The full-codebase audit, round two: priority zero first, five streams, the model's state cleaned
+
+A fresh session audited both repositories end to end against a step-by-step
+brief (`CODE_AUDIT_PROMPT.md`; report `CODE_AUDIT_REPORT.md`, 567 lines)
+with the priorities Victor set: the user's data and exploitability first,
+then correctness, logging, efficiency, cleanliness, deprecation. It read
+every file, ran the suites, traced 25 labels, probed 793 off-corpus labels,
+re-judged 50 model decisions blind (49 agreed), and audited the dependency
+pins. Step 1 failed: three of the four stated invariants did not hold as
+written. Victor: work every item, in parallel where files allow. Five
+streams ran on separate worktrees and merged here; every finding was
+re-verified with the audit's own probe before any change, and each fix
+carries a regression test built from that probe. Tests 829 → **1,210**.
+
+**Priority 0 — what left the machine that the documents said did not.**
+- *F1 (high).* `earlier_answers`, the list of already-answered questions the
+  profile-answer gate and the second pass send for consistency, was built
+  from every filled entry with no class filter, so on any Greenhouse form
+  with an EEO block the race, gender, veteran and disability answers and the
+  standing consents went to OpenRouter. The router docstring, the popup and
+  `PRIVACY.md` said the opposite. One `_earlier_answers` now admits confident
+  SCREENING answers only and drops contact-keyed rows (the tests stream found
+  that keeping CORE rows still sent the email). Probe p01: 18 leaked rows →
+  none. An answer-everything fake client now drives the invariant test
+  through the real `JevBinder`; the old test used the deterministic binder
+  and could not have failed.
+- *F8.* The second-pass catalog and the learning judge's catalog carried
+  contact values (email, phone, street address, LinkedIn, names). Contact
+  keys are sent as a shape ("an email address") and the binder writes the
+  stored value verbatim; a "university email" field still resolves.
+- *F3 (high, extension).* `detectPosting` accepted any host *ending in*
+  greenhouse.io/ashbyhq.com and any page carrying `?gh_jid=` plus an embed
+  script tag, so one popup click on a crafted page filled it with the profile
+  and attached the résumé (probe p02). Exact hosts and vendor subdomains only;
+  on an employer's own page the content script hands off to the
+  `boards.greenhouse.io/embed/job_app` frame and the worker refuses to inject
+  the filler, warm or click into any non-ATS frame; the popup describes what
+  it will do and waits for a second click. p02: three detections → none.
+- *F4 (high, extension).* "Never submits" rested on pressing the real Submit
+  inside a four-second monkeypatch of late-bound globals, and no survey row
+  had ever recorded the block firing. The press is gone from the default
+  path: what the form still wants is read from the plan's required flags and
+  the DOM's own signals. The press survives behind a developer setting, never
+  on a form that reads complete, and a press that blocks nothing is recorded
+  as `dry_run_bypassed`. Fidelity lost versus the form's own validation
+  (format rules, script-computed requirements, the §44 wrapper-state defect)
+  is to be measured live by diffing `wants` against `dom_wants` per board.
+- *F5.* Derived files beside the profile (`labels.json`, the legacy
+  `options.json`, coverage and audit outputs) were 0644 with values in their
+  keys. One `write_private_json` (0600 from the first byte, atomic) serves
+  every tool; label keys hash the value; a persisted option cache with
+  plaintext keys is dropped and rewritten. Victor's own files were made
+  owner-only the same hour.
+- *F6, F7, F16, F17 (extension).* The misses log stored values; learning
+  captured custom-keyed protected questions (now refused by reason, and by
+  the new `field_class` on every plan entry); the worker probed `localhost`
+  silently over plain HTTP while the popup described Render (one selector,
+  localhost opt-in, the popup says where the profile goes); the previous
+  plan's location was typed into the next Ashby page before its plan
+  existed (warm is Greenhouse loader reads only).
+- *F9, F10, F11, F12, F22, F23 (hosted process).* `/learn` logged the raw
+  upstream body; the rate limiter's key was client-chosen and never pruned;
+  no body or field caps; eight malformed-JSON shapes were 500s; the option
+  cache raced under eviction; 422s echoed profile values; `/docs` was public.
+  Now: summarised errors everywhere, a bounded limiter keyed on token and IP
+  with a per-IP cap, a 1 MB body limit, caps set from the corpus maxima
+  (500 fields; the audit's proposed 300-option cap would have broken 44 real
+  fields, one college menu has 2,464 options, so 5,000), labels scanned to
+  2,000 characters (a 50 KB label: 10.6 s → 2 ms), 400s naming the path, a
+  lock on the cache, field paths only in 422s, docs behind an env flag.
+  `python-dotenv` pinned to 1.2.1; the advisory's 1.2.2 is not on PyPI.
+
+**Correctness.**
+- *F2 (high).* "Are you able to perform the essential *job* functions…" (51
+  corpus occurrences) missed the two-word regex, keyed `accommodation_needs`,
+  whose example value "None" the reverse-prefix pass turned into "No" — a
+  capable applicant written as unable, no flag. Both tables take the
+  three-word form, and a blank-like value never maps onto an option by
+  prefix. 28 wrong fills → 0.
+- *F32.* Thousands separators broke every numeric bucket ("$70,000+" read as
+  "000+"); also `_RANGE` had never matched a currency sign before the second
+  number. 45000 → "$70,000+" became "$40,000 - $55,000".
+- *F15(a)* was on-corpus after all: 24 instances of "authorized to work in the
+  US without sponsorship" filled "No" for a citizen. Two authorisation shapes
+  outrank the bare sponsorship pattern and the computed answer is authorised
+  AND NOT needs-sponsorship.
+- *F33, F13, F14, F20, F18, F37, F24, F34, F35, F36* and the §4 tail: themes
+  no longer fill NARRATIVE or FILE fields; a follow-up hangs on its real
+  parent and an unsettled parent sends it to review; polarity comes from one
+  shared `_as_bool` ("I am not…" was yes); alternates group by vendor pair or
+  same class and kind; a second bare "Email" on a form is a reference's, not
+  the applicant's; an unlisted country ("work in Singapore", 14 corpus
+  fields) is review, not the general answer; `current_state` reads a key that
+  exists; consent verbs need their object (73-label set: 38 wrong → 6);
+  protected keys replay only on an identification shape ("veteran of the
+  Linux kernel community" no longer replays veteran status; all 23
+  custom-keyed protected corpus labels keep their key); `_DECISIONS_NOT_FACTS`
+  passes the compound-label guard; 17 more sensitive topics are review-only;
+  "None" is never typed as a timeline note.
+- *F19.* The model-boundary passes had no executing test. `tests/jev_fakes.py`
+  and 38 tests drive option translation, the breaker, the second pass and
+  verify, the answer bands, multi-selects and `/learn`'s fallback through the
+  real `JevBinder`; two defects fell out (the breaker's trip reported as
+  degradation; `/learn`'s fallback undercounting) and are fixed. `conftest`
+  pins the key empty and resets limiter, caches and model status per test.
+
+**Observability.** Request ids on every response and log line; `model_failed`
+and `model_error` on both responses, with the three flags given one meaning
+each (skipped = the breaker tripped; failed = a call raised; degraded = the
+caller's last outcome was a failure); the speculative pool's swallowed
+failures are logged by type; the run record names engine, backend host,
+world, cache hit and check mode, and the popup exports it.
+
+**Measured.** Deterministic coverage 76.2% / 74.3% → **75.6% / 73.9%**
+(Greenhouse / Ashby). The binder stream diffed the gap lists: 85 fills lost,
+16 gained; every lost fill was a wrong or dishonest one (53 follow-ups hidden
+by an unrelated earlier answer, 15 self-contained "if so" questions hidden the
+same way, 14 unlisted-country reviews, 2 typed "None"s). Corpus class and key
+movement across the whole classifier stream: 2 labels / 5 instances, all F2.
+With-model coverage is recorded below once the run finishes.
+
+**Audit claims corrected in the doing.** The 300-option cap (above); F15(a)
+"off-corpus" (24 on-corpus wrong fills); F5's files were already 0600 by
+the time the stream read them (chmod'd by hand after the report); dotenv
+1.2.2 does not exist. Not done this round, by scope: the deprecation PRs
+(§9 of the report), the cleanliness split of `binder.py`, the remaining
+consent residue the classifier stream listed (`_ATTESTATION`, the plural
+"text messages" bucket, "future opportunities"), and the live checks the
+extension changes need (F4's fidelity diff first).
+
+---
+
 ## Current state
 
 Rewritten 2026-10-12 after the outside audit; the previous table here was
@@ -2518,13 +2650,13 @@ target met".
 
 | | |
 |---|---|
-| **Coverage, deterministic** | Greenhouse **77.8%** (10,790 / 13,863 in-scope fields over 578 frozen forms), Ashby **74.9%** (2,665 / 3,558 over 413) — re-run 2026-10-12, real profile, `coverage.py`. "Blank by choice" fields (258 / 86) count as filled; essays and files are outside the denominator |
+| **Coverage, deterministic** | Greenhouse **75.6%** (10,697 / 14,147 in-scope fields over 578 frozen forms), Ashby **73.9%** (2,629 / 3,558 over 413) — after §57, 2026-10-12, real profile, `coverage.py`. "Blank by choice" fields (267 / 90) count as filled; essays and files are outside the denominator |
 | **Coverage, with the model** | Greenhouse **85.0%** (12,030 / 14,147), Ashby **85.5%** (3,044 / 3,558) — run 2026-10-12 after §55 (`coverage.py --model`, $0.32; 278 / 78 blank by choice counted). The audit's run that morning, before §55 and on the smaller denominator: 86.3% / 85.6% |
 | **Precision of model decisions** | **98.0%** over 289 hand-judged decisions from 168 forms (§52): 283 correct, 5 wrong, 1 unsure. Target 99% **not met**. Second pass 43 / 43 |
 | **Live, Greenhouse** | 117 live boards, 1,866 filled, 21 "known but could not be entered", all 21 before 0.4.19 by round order (`survey/`); the hundred of R48-2 has 1 of 100 recorded |
 | **Live, Ashby** | A1: 100 organisations, 702 filled, 246 review; R48-2: 100 organisations, 719 / 250 / 1 could-not-enter, median fill 110 ms |
 | **Learning loop** | offline replay 93.2% (1,679 of 1,802 later occurrences, 991 forms, re-run 2026-10-12); counts fills, not correct fills; no live metric yet; one self-poisoning found and closed (§54) |
-| **Tests** | 829, offline, no credentials, ~13 s |
+| **Tests** | 1,210, offline, no credentials, ~15 s |
 
 ## Open, with numbers attached
 
