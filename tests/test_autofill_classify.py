@@ -509,3 +509,50 @@ def test_a_capable_applicant_is_never_written_as_unable():
             # "None" on a yes/no accommodation question is a decision the
             # matcher cannot make from spelling: review, with the value intact.
             assert entry.needs_review or entry.skipped, entry.label
+
+
+# --- code audit of 2026-10-12, F36 / F15(b): `_DECISIONS_NOT_FACTS` under the compound-label guard
+
+def test_a_consent_rider_on_a_theme_question_is_the_theme_question():
+    """"Do you need sponsorship? By submitting you agree to our privacy
+    policy." was CONSENT by `_DECISIONS_NOT_FACTS`, which ran before the
+    guard §56 put on `is_consent_asked`, and filled "Yes" from privacy_notice
+    while needs_sponsorship said "No" (probe p20)."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    memory = Memory(consents={"privacy_notice": "Agree", "terms_and_conditions": "Agree", "sms_messages": "Yes"},
+                    legal_status={"needs_sponsorship": "No", "work_authorization": "Yes", "age_18_plus": "Yes"})
+    labels = {
+        "Do you need sponsorship? By submitting you agree to our privacy policy.": "No",
+        "Are you authorized to work in the US? Please acknowledge that you have read and agree to our Privacy Policy.": "Yes",
+        # One "?", two asks: the age theme answers it (binder's theme-wins
+        # rule, §56); what must not happen is the terms consent answering it.
+        "Are you 18 or older and do you agree to the terms and conditions?": "Yes",
+        "Do you have a GitHub? By applying you consent to the processing of your personal data.": None,
+        "Do you agree to the terms and conditions and are you authorized to work in the US?": "Yes",   # F15(b)
+    }
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(labels)]
+    for field in fields:
+        assert field.field_class == FieldClass.SCREENING, field.label
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    for entry, (label, expected) in zip(plan.entries, labels.items()):
+        assert "standing consent" not in (entry.reason or ""), label
+        assert entry.theme != "none" and "consent" not in (entry.theme or ""), label
+        if expected is None:
+            assert entry.value is None and entry.needs_review, label
+        else:
+            assert entry.value == expected and not entry.needs_review, label
+
+
+@pytest.mark.parametrize("label,options", [
+    ("Please acknowledge that you have read and agree to our Privacy Policy", 1),            # x6
+    ("Do you opt-in to receive WhatsApp messages from Stripe Recruiting?", 2),               # x2
+    ("I consent to have my personal data disclosed to other Momentum Group entities", 2),    # x2
+    ("[Compensation] Do you accept the listed salary range for this position?", 2),         # x2
+    ("To ensure we can focus fully on our conversation, we use Brighthire to record interviews. Do you consent?", 2),
+])
+def test_the_decisions_not_facts_table_still_catches_a_plain_consent(label, options):
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=options) == FieldClass.CONSENT

@@ -419,6 +419,31 @@ def _asks_a_theme(label: str) -> bool:
     return any(pattern.search(label) for _theme, pattern in _THEME_PATTERNS)
 
 
+def _asks_something_else(label: str) -> bool:
+    """Whether a consent-shaped label is also asking a different question.
+
+    A second question mark, a non-compete disclosure, or a label a local
+    theme pattern recognises: the consent wording is a rider, and the
+    standing consent must not answer the question beside it. Shared by
+    `is_consent_asked` and the `_DECISIONS_NOT_FACTS` table in `classify`,
+    which ran before this guard and so let "Do you need sponsorship? By
+    submitting you agree to our privacy policy." fill "Yes" from the privacy
+    consent (code audit of 2026-10-12, F36 / F15b).
+    """
+    text = label or ""
+    if text.count("?") > 1 or re.search(r"\bnon[-\s]?compete", text, re.I) or _asks_a_theme(text):
+        return True
+    # One question mark, but on a sentence that neither names a bucket nor
+    # asks for consent: "Do you have a GitHub? By applying you consent to
+    # the processing of your personal data." The question is the GitHub one.
+    # "… we use BrightHire to record interviews. Do you consent?" is not.
+    if consent_key_for(text) in _GRANT_BUCKETS:
+        return any("?" in sentence and consent_key_for(sentence) is None
+                   and not _CONSENT_ASKED.search(normalize_label(sentence))
+                   for sentence in _SENTENCES.split(text))
+    return False
+
+
 def is_consent_asked(label: str, option_count: int = 0) -> bool:
     """Whether a label asks for one of the standing consents the profile holds.
 
@@ -440,7 +465,7 @@ def is_consent_asked(label: str, option_count: int = 0) -> bool:
         return False
     if option_count == 1:
         return True
-    if text.count("?") > 1 or re.search(r"\bnon[-\s]?compete", text, re.I) or _asks_a_theme(text):
+    if _asks_something_else(text):
         return False
     for sentence in _SENTENCES.split(text):
         if consent_key_for(sentence) in _GRANT_BUCKETS and _CONSENT_ASKED.search(normalize_label(sentence)):
@@ -916,7 +941,11 @@ def classify(
             protected_key_for(key, label) or is_sensitive_topic(label)):
         return FieldClass.LEGAL
 
-    if any(pattern.search(normalized) for pattern in _DECISIONS_NOT_FACTS):
+    # Under the same guard as `is_consent_asked`: a consent rider on a
+    # question a theme answers ("Do you need sponsorship? By submitting you
+    # agree to our privacy policy.") is that question, not the consent.
+    if (any(pattern.search(normalized) for pattern in _DECISIONS_NOT_FACTS)
+            and not _asks_something_else(label)):
         return FieldClass.CONSENT
 
     # A required single-select offering exactly one option is not a question,
