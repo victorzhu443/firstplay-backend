@@ -283,6 +283,16 @@ def match_option(value: Optional[str], field: FormField) -> Optional[FieldOption
     # meets forms offering "He / Him", and requiring an exact match left 13
     # fields unanswered across the corpus. Still requires a unique winner, so
     # "he him" cannot also match "he him hers" if a form offered both.
+    #
+    # Never for a value that is not an answer. "None" starts with "no", and
+    # the stored accommodation_needs "None" — the registry's own example —
+    # was selected as "No" on "are you able to perform the essential job
+    # functions…?", writing a capable applicant as unable (code audit of
+    # 2026-10-12, F2). A blank carries no polarity (`_as_bool` already says
+    # so) and so it must not acquire one by spelling.
+    if _NOT_AN_ANSWER.match(target):
+        return None
+
     contained = [
         o for o in field.options
         if normalize_value(o.label) and target.startswith(normalize_value(o.label))

@@ -434,3 +434,78 @@ def test_a_university_email_address_is_not_a_street_address():
     label = "Please provide your university email address"
     assert DeterministicBinder().classify_themes([label])[label][0] != QuestionTheme.WORK_ADDRESS
     assert memory_key_for("question_1", label, FieldKind.TEXT) != "street_address"
+
+
+# --- code audit of 2026-10-12, F2: "essential job functions" with the example value "None"
+
+ESSENTIAL_FUNCTIONS = [
+    # The corpus label (51 occurrences, 28 choice fields filled "No").
+    "Do you understand the job requirements, and are you able to perform the essential job functions "
+    "(with or without reasonable accommodation)?",
+    "Can you perform all of the essential functions of this role with or without reasonable accommodation?",  # x6
+    "Are you able to perform the essential functions of the job, with or without reasonable accommodation?",
+    "Can you perform the essential job functions of this position?",
+]
+
+ACCOMMODATION_REQUESTS = [
+    "Do you require any reasonable adjustments or accommodations to participate in the recruitment process?",
+    "If you require any support or adjustments during the recruitment process for any reason, please indicate here",
+    "Please describe any need for a reasonable accommodation",
+]
+
+
+@pytest.mark.parametrize("label", ESSENTIAL_FUNCTIONS)
+def test_the_ability_question_keys_essential_functions_in_every_wording(label):
+    """F2: `\\bessential functions\\b` missed the three-word form, which then
+    fell to the accommodation key beside it in the same table."""
+    assert memory_only_key_for(label) == "essential_functions"
+    assert memory_key_for("question_1", label, FieldKind.SINGLE_SELECT) == "essential_functions"
+    assert classify("question_1", label, FieldKind.SINGLE_SELECT, option_count=3) == FieldClass.LEGAL
+
+
+@pytest.mark.parametrize("label", ACCOMMODATION_REQUESTS)
+def test_an_accommodation_request_still_keys_accommodation_needs(label):
+    assert memory_only_key_for(label) == "accommodation_needs"
+
+
+@pytest.mark.parametrize("label", [
+    "Describe the essential functions of your last role",
+    "Which essential job functions of a backend engineer do you enjoy most?",
+    "Essential functionality you would add to our product",
+])
+def test_essential_functions_in_another_sense_is_still_memory_only_and_never_a_fill(label):
+    """A near miss lands on LEGAL (review-only) or on no key; what it must
+    never do is reach a model. The third label has no key at all."""
+    assert classify("question_1", label, FieldKind.TEXT) in (FieldClass.LEGAL, FieldClass.NARRATIVE, FieldClass.SCREENING)
+    assert memory_only_key_for(label) in ("essential_functions", None)
+    assert memory_only_key_for("Essential functionality you would add to our product") is None
+
+
+def test_a_capable_applicant_is_never_written_as_unable():
+    """Probe p18's shape: the documented example value for accommodation_needs
+    is "None"; with essential_functions "Yes" the ability question fills
+    "Yes", and the stored "None" is never read as the option "No"."""
+    from app.autofill.binder import DeterministicBinder, resolve_form
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    memory = Memory(protected={"accommodation_needs": "None", "essential_functions": "Yes"})
+    three_way = ("Yes, without accommodations", "Yes, with accommodations", "No")
+    fields = [_field(label, key="q{}".format(i)) for i, label in enumerate(ESSENTIAL_FUNCTIONS)]
+    fields += [_field(label, options=three_way, key="t{}".format(i)) for i, label in enumerate(ESSENTIAL_FUNCTIONS)]
+    fields += [_field(label, key="a{}".format(i)) for i, label in enumerate(ACCOMMODATION_REQUESTS[:2])]
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    for entry in plan.entries:
+        assert entry.value != "No", entry.label
+        if entry.field_key.startswith("q"):
+            assert entry.value == "Yes" and not entry.needs_review, entry.label
+        elif entry.field_key.startswith("t"):
+            # Two "Yes" options: with or without accommodation is the
+            # applicant's call, so review with the stored "Yes" intact (or
+            # satisfied by the same question's yes/no sibling above).
+            assert entry.value == "Yes" and (entry.needs_review or entry.satisfied_by), entry.label
+        else:
+            # "None" on a yes/no accommodation question is a decision the
+            # matcher cannot make from spelling: review, with the value intact.
+            assert entry.needs_review or entry.skipped, entry.label

@@ -510,12 +510,19 @@ _ACCOMMODATION = re.compile(
     r"|support or adjustments|reasonable adjustments|adjustments (during|to) the"
     r"|assistance (during|with|in|for) the (interview|recruit|hiring|application))\b", re.I)
 
+#: "Essential functions", "essential job functions", "essential functions of
+#: the job": the ADA ability question in every wording the corpora carry.
+_ESSENTIAL_FUNCTIONS = re.compile(r"\bessential (job )?functions\b", re.I)
+
 MEMORY_ONLY_LABEL_KEYS = (
     # Order matters: "Can you perform these essential functions of the job with
     # reasonable accommodation?" mentions both. It asks about ability, and with
     # accommodation first it was answered from accommodation_needs ("None"),
     # which rendered as "No" — the inverted answer, on a live Lyft posting.
-    (re.compile(r"\bessential functions\b", re.I), "essential_functions"),
+    # The same inversion came back as "essential *job* functions" (51 corpus
+    # occurrences, 28 of them choice fields filled "No"; code audit of
+    # 2026-10-12, F2), so the regex is shared with `_MEMORY_ONLY` below.
+    (_ESSENTIAL_FUNCTIONS, "essential_functions"),
     # Maven Securities 8043552: "If you require any support or adjustments
     # during the recruitment process…" is the UK wording. Unmatched, it was
     # SCREENING and the model gate answered it "No" from nothing (§40).
@@ -723,7 +730,7 @@ _MEMORY_ONLY = (
     # ADA / accommodation. Free text or yes/no, and the applicant's own
     # statement either way — most people store "None" and never see it again.
     _ACCOMMODATION,
-    re.compile(r"\bessential functions\b", re.I),
+    _ESSENTIAL_FUNCTIONS,
     # Conflict-of-interest and political-exposure screens (~30 instances across
     # the fintech boards). Stable facts about relatives and holdings.
     re.compile(r"\bgovernment official\b", re.I),
