@@ -142,6 +142,8 @@ _COUNTRY_ALIASES = {
     "great britain": "united kingdom", "britain": "united kingdom",
     "england": "united kingdom",
     "uae": "united arab emirates",
+    "the netherlands": "netherlands", "holland": "netherlands",
+    "deutschland": "germany",
     "south korea": "korea republic of", "republic of korea": "korea republic of",
 }
 
@@ -154,6 +156,36 @@ def canonical_country(text: Optional[str]) -> Optional[str]:
         return None
 
     return _COUNTRY_ALIASES.get(normalized, normalized)
+
+
+#: ISO 3166-1 alpha-2 code and international dialling prefix, by canonical
+#: country name. Haven Interactive's French Greenhouse board (R50 live round)
+#: rendered the country select as "États-Unis +1": the stored "United States"
+#: matched nothing, and the one stable token across locales is the dial
+#: code. Covers every country `themes.country_in_text` knows plus the
+#: countries applicants to US internships commonly live in; a country not
+#: listed simply carries no codes and the value stands on its own. The
+#: United Kingdom's ISO code is GB (themes uses "UK" for its own purposes).
+_COUNTRY_CODES = {
+    "united states": ("US", "+1"), "canada": ("CA", "+1"), "mexico": ("MX", "+52"),
+    "united kingdom": ("GB", "+44"), "ireland": ("IE", "+353"), "germany": ("DE", "+49"),
+    "france": ("FR", "+33"), "india": ("IN", "+91"), "spain": ("ES", "+34"), "italy": ("IT", "+39"),
+    "netherlands": ("NL", "+31"), "belgium": ("BE", "+32"), "switzerland": ("CH", "+41"),
+    "austria": ("AT", "+43"), "portugal": ("PT", "+351"), "sweden": ("SE", "+46"), "norway": ("NO", "+47"),
+    "denmark": ("DK", "+45"), "finland": ("FI", "+358"), "poland": ("PL", "+48"), "turkey": ("TR", "+90"),
+    "israel": ("IL", "+972"), "united arab emirates": ("AE", "+971"), "australia": ("AU", "+61"),
+    "new zealand": ("NZ", "+64"), "singapore": ("SG", "+65"), "china": ("CN", "+86"), "japan": ("JP", "+81"),
+    "korea republic of": ("KR", "+82"), "taiwan": ("TW", "+886"), "hong kong": ("HK", "+852"),
+    "philippines": ("PH", "+63"), "vietnam": ("VN", "+84"), "pakistan": ("PK", "+92"),
+    "bangladesh": ("BD", "+880"), "nigeria": ("NG", "+234"), "south africa": ("ZA", "+27"),
+    "brazil": ("BR", "+55"), "argentina": ("AR", "+54"), "colombia": ("CO", "+57"), "chile": ("CL", "+56"),
+}
+
+
+def country_codes(value: Optional[str]) -> Optional[Tuple[str, str]]:
+    """(iso2, dial code) for a stored country, or None when it is not in the table."""
+    canonical = canonical_country(value)
+    return _COUNTRY_CODES.get(canonical) if canonical else None
 
 
 def match_country(value: Optional[str], field: FormField) -> Optional[FieldOption]:

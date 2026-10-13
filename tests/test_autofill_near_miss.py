@@ -588,3 +588,39 @@ def test_graduation_yes_no_end_to_end_leaves_the_date_fill_alone():
     assert by_label["Graduation Date"].value == "May 2028"
     unstated = by_label["Will you have graduated before the start date?"]
     assert unstated.needs_review and unstated.value is None and "does not state" in unstated.reason
+
+
+# --- R50 live round, item 4: dial codes go on the country select only ---------
+
+def test_a_country_named_inside_another_question_never_acquires_a_dial_code():
+    """"Country of citizenship" and "Are you authorized to work in the United
+    States?" mention a country; neither is the country select, and the
+    extension must not match a localised option on them by "+1"."""
+    from app.autofill.binder import resolve_form
+    from app.autofill.classify import classify
+    from app.autofill.memory import Memory
+    from app.autofill.schema import FormSchema
+
+    def field(key, label, kind=FieldKind.TEXT, options=()):
+        opts = _options(*options)
+        return FormField(key=key, label=label, kind=kind, options=opts,
+                         field_class=classify(key, label, kind, option_count=len(opts)))
+
+    fields = [
+        field("country", "Country", FieldKind.SINGLE_SELECT),                       # the Greenhouse select
+        field("q1", "Country of citizenship"),
+        field("q2", "Are you legally authorized to work in the United States?", FieldKind.SINGLE_SELECT, ("Yes", "No")),
+        field("q3", "Country of residence"),                                        # alias -> country_of_residence
+        field("q4", "Current Location"),
+        field("q5", "Country where you currently live"),                            # the residence theme
+    ]
+    memory = Memory(facts={"current_location": "Ithaca, NY", "country": "United States"},
+                    legal_status={"work_authorization": "Yes", "citizenship": "US citizen"})
+    plan = resolve_form(FormSchema(source="t", ats="greenhouse", posting_id="1", fields=fields),
+                        memory, binder=DeterministicBinder())
+    by_key = {e.field_key: e for e in plan.entries}
+    assert (by_key["country"].iso2, by_key["country"].dial_code) == ("US", "+1")
+    assert (by_key["q3"].iso2, by_key["q3"].dial_code) == ("US", "+1")
+    assert (by_key["q5"].iso2, by_key["q5"].dial_code) == ("US", "+1") and by_key["q5"].theme == "country_of_residence"
+    for key in ("q1", "q2", "q4"):
+        assert by_key[key].iso2 is None and by_key[key].dial_code is None, key

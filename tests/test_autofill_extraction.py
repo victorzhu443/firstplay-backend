@@ -755,3 +755,61 @@ def test_the_router_takes_an_ashby_posting_or_a_dom_extract():
     dom = _parse_form("ashby", {"posting_id": "x", "controls": [
         {"tag": "input", "type": "email", "name": "_systemfield_email", "label": "Email", "required": True}]})
     assert dom.source == "ashby_dom" and len(dom.fields) == 1
+
+
+def test_the_country_entry_carries_iso2_and_dial_code_for_localised_boards():
+    """Haven Interactive's French Greenhouse board rendered the country
+    select as "États-Unis +1" and the stored "United States" matched nothing
+    (R50 live round). The plan entry now carries the codes the extension can
+    match a localised option by; `value` is unchanged."""
+    from app.autofill.binder import resolve_form
+    from app.autofill.memory import Memory
+
+    form = parse_greenhouse_job(_duolingo_like_payload())
+    plan = resolve_form(form, Memory(facts={"current_location": "Ithaca, NY"}), binder=None)
+    country = next(e for e in plan.entries if e.field_key == "country")
+    assert (country.value, country.iso2, country.dial_code) == ("United States", "US", "+1")
+    assert not country.needs_review
+    # Serialised for the extension under exactly these names.
+    dumped = country.model_dump()
+    assert dumped["iso2"] == "US" and dumped["dial_code"] == "+1" and dumped["value"] == "United States"
+
+    plan = resolve_form(form, Memory(facts={"country": "Canada"}), binder=None)
+    country = next(e for e in plan.entries if e.field_key == "country")
+    assert (country.value, country.iso2, country.dial_code) == ("Canada", "CA", "+1")
+
+    # A country outside the table keeps its value and carries no codes.
+    plan = resolve_form(form, Memory(facts={"country": "Narnia"}), binder=None)
+    country = next(e for e in plan.entries if e.field_key == "country")
+    assert country.value == "Narnia" and country.iso2 is None and country.dial_code is None
+
+    # Nothing else on the form acquires codes.
+    for entry in plan.entries:
+        if entry.field_key != "country":
+            assert entry.iso2 is None and entry.dial_code is None, entry.field_key
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("United States", ("US", "+1")), ("USA", ("US", "+1")), ("U.S.", ("US", "+1")),
+    ("Canada", ("CA", "+1")), ("United Kingdom", ("GB", "+44")), ("UK", ("GB", "+44")),
+    ("India", ("IN", "+91")), ("Mexico", ("MX", "+52")), ("Germany", ("DE", "+49")),
+    ("France", ("FR", "+33")), ("Ireland", ("IE", "+353")), ("South Korea", ("KR", "+82")),
+    ("The Netherlands", ("NL", "+31")),
+])
+def test_country_codes_cover_the_registry_countries_and_their_spellings(value, expected):
+    from app.autofill.format import country_codes
+
+    assert country_codes(value) == expected
+
+
+def test_country_codes_know_every_country_the_theme_table_names():
+    """`themes.country_in_text` is the registry's country vocabulary; every
+    code it can return has a dial code here."""
+    from app.autofill.format import country_codes
+    from app.autofill.themes import _COUNTRY_PATTERNS
+
+    names = {"US": "United States", "CA": "Canada", "UK": "United Kingdom", "IE": "Ireland",
+             "DE": "Germany", "IN": "India"}
+    for code, _pattern in _COUNTRY_PATTERNS:
+        assert country_codes(names[code]) is not None, code
+    assert country_codes(None) is None and country_codes("") is None and country_codes("Narnia") is None

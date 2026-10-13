@@ -120,6 +120,15 @@ class FillPlanEntry(BaseModel):
     #: postings scored as coverage misses.
     satisfied_by: Optional[str] = None
 
+    #: For a country select: the ISO 3166-1 alpha-2 code and dialling prefix
+    #: of the stored country ("US", "+1"), so the extension can match a
+    #: localised option by its dial-code suffix when the name does not match
+    #: — Haven Interactive's French board rendered "États-Unis +1" (R50).
+    #: `value` is still the stored name. None when the country is not in
+    #: `format._COUNTRY_CODES`, and never set on anything but a country field.
+    iso2: Optional[str] = None
+    dial_code: Optional[str] = None
+
 
 class FillPlan(BaseModel):
     """Everything proposed for one application.
@@ -1858,6 +1867,32 @@ def document_kind(field: FormField) -> str:
 _UNSET = re.compile(r"recognised as ([a-z_]+) but you have not set it|set consents\.([a-z_]+) once|you have not set this( for ([A-Z]{2}))?$")
 
 
+def _mark_country_codes(entries: List[FillPlanEntry], form: FormSchema) -> None:
+    """Attach iso2 / dial_code to a country select's entry (see FillPlanEntry).
+
+    Before the model gates, so the codes come from the stored country and
+    not from whatever option label a gate translates it to. Only a field
+    that *is* the country of residence: Greenhouse's synthetic `country`,
+    or a custom question whose key is country_of_residence. A country named
+    inside another question (citizenship, work authorisation) is not one.
+    """
+    from app.autofill.format import country_codes
+
+    fields = {f.key: f for f in form.fields}
+    for entry in entries:
+        if not entry.value or entry.skipped or entry.satisfied_by:
+            continue
+        field = fields.get(entry.field_key)
+        if field is None:
+            continue
+        if not (field.key == "country" or memory_key_for(field.key, field.label, field.kind) == "country_of_residence"
+                or entry.theme == QuestionTheme.COUNTRY_OF_RESIDENCE.value):
+            continue
+        codes = country_codes(entry.value)
+        if codes is not None:
+            entry.iso2, entry.dial_code = codes
+
+
 def _mark_missing_facts(entries: List[FillPlanEntry], form: Optional[FormSchema] = None) -> None:
     """Turn "recognised as X but you have not set it" into a question to ask."""
     from app.autofill.memory import profile_schema
@@ -2177,6 +2212,7 @@ def resolve_form(
 
     _mark_attachments(entries, form)
     _mark_missing_facts(entries, form)
+    _mark_country_codes(entries, form)
     # The model gates run behind the Jev binder's circuit breaker: once a
     # call has timed out, every later call raises at once. A tripped breaker
     # must finish the plan deterministically — the entries it would have
