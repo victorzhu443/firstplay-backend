@@ -267,6 +267,22 @@ _DERIVED_EDUCATION = {
     "education_start_year": lambda e: _year_of(e.get("start_date") or ""),
 }
 
+#: Which stored fact each derived key is read from, so a form that wants a
+#: derived value the profile cannot produce asks for the fact itself. Until
+#: 2026-10-12 an unset `start_date` surfaced as "recognised as
+#: education_start_month but you have not set it", a key no registry row has,
+#: so the popup never asked for it — 26 "Start date month/year" review rows
+#: across the R50 hundred, and Victor: "still doesn't fill out start date
+#: month and start date year for college".
+DERIVED_SOURCES = {
+    "degree_type": ("education", "degree"),
+    "discipline": ("education", "major"),
+    "graduation_month": ("education", "graduation_date"),
+    "graduation_year": ("education", "graduation_date"),
+    "education_start_month": ("education", "start_date"),
+    "education_start_year": ("education", "start_date"),
+}
+
 
 class Memory(BaseModel):
     """Everything the applicant has told us once.

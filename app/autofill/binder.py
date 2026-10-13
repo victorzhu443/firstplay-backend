@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.autofill.classify import CORE_FIELD_NAMES, FOLLOW_UP_ON_OTHER, LABEL_SCAN_LIMIT, is_follow_up, memory_key_for, normalize_label
 from app.autofill.format import OPTION_MISMATCH, _as_bool, match_option, option_for_bool
-from app.autofill.memory import Memory, Resolution
+from app.autofill.memory import DERIVED_SOURCES, Memory, Resolution
 from app.autofill.schema import FieldClass, FieldKind, FillSource, FormField, FormSchema
 from app.autofill.themes import (
     QuestionTheme,
@@ -1939,6 +1939,11 @@ def _mark_missing_facts(entries: List[FillPlanEntry], form: Optional[FormSchema]
         if not key:
             continue
         row = schema.get(key)
+        if row is None and key in DERIVED_SOURCES:
+            # A derived key (education_start_month) is read from a stored
+            # fact (start_date): ask for the fact, once, in its own shape.
+            _section, key = DERIVED_SOURCES[key]
+            row = schema.get(key)
         if row is None:
             continue
         entry.needs_fact = {
