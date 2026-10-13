@@ -2719,6 +2719,23 @@ round `R50`, with `version`; draw in `survey/draws/draw_r50.json`.
   agreeing to have EEO answers processed), and the extension ticks them by
   name. The `-labeled-checkbox` mapping shipped too but was not the cause
   here; Greenhouse's multi-select checkboxes are named `question_N[]`.
+- *Rugged Robotics, closed the next day (2026-10-13), measured on the live
+  control:* the plan was wrong and the fill was wrong. The flexible-term rule
+  selected "Spring 2027 Co-Op", "Summer 2027 Internship" *and* "Both"; a
+  menu that says it in one option now takes that option alone, and the
+  local term pattern reads the "Co-Op, Internship, or Both" wording. And
+  react-select's pick toggles on a multi-select: the first value was picked
+  in the picks loop and again in the multi-value pass, so it came off while
+  the read-back said filled (picking the same option twice by hand removed
+  it; three different ones with pauses stuck). A held option is now left
+  alone and counts as chosen (0.4.55).
+- *The start date was never asked.* Victor, 2026-10-13: "still doesn't fill
+  out start date month and start date year for college." The two education
+  fields resolve through derived keys (`education_start_month` / `_year`)
+  that no registry row has, so `_mark_missing_facts` attached no question —
+  the 26 review rows above were a question the popup never showed.
+  `DERIVED_SOURCES` maps each derived key to its stored fact and the ask is
+  for that fact, once (the extension collapses the month and year asks).
 - *Live re-check on 0.4.54 the same night:* TensorWave's and Harvey's
   graduation dates filled through the picker (green, popper closed, one drift
   re-apply, 0 failures); Haven's Country selected and Phone filled with no
