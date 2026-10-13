@@ -403,6 +403,12 @@ def test_option_cache_hits_and_is_bounded_with_lru_eviction(tmp_path):
     path.write_text(json.dumps({"optmatch::Label::Jane Doe::Yes|No": ["Yes", 0.9], keys[0]: ["A", 0.8]}))
     loaded = OptionCache(str(path))
     assert loaded.size == 1 and loaded.get(keys[0]) == ("A", 0.8)
+    # ...and the file itself no longer holds them, and is owner-only (F5):
+    # dropping on load left 969 plaintext keys on disk at 0644.
+    import os
+    rewritten = json.loads(path.read_text())
+    assert set(rewritten) == {keys[0]}
+    assert oct(os.stat(str(path)).st_mode & 0o777) == "0o600"
 
 
 # --- F12: the option cache survives concurrent get/put under eviction -------

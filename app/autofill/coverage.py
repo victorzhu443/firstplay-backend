@@ -14,6 +14,12 @@ ApiJobPosting definitions) — with the applicant's real profile, and reports:
     missing alias/theme (code), a guard, or a policy decision.
 
 Train on this, test on fresh boards through the extension (DECISIONS §48).
+
+**The report carries the owner's answers.** Every gap row has `suggested`,
+the value the plan would have written, and the profile that produced it is
+the applicant's real one. The file is written owner-only (0600, atomic, via
+`private_json`) and belongs under `~/.config/firstplay`, never in a
+repository or a shared drive (audit 2026-10-12, F5).
 """
 import argparse
 import collections
@@ -28,6 +34,7 @@ from app.autofill.binder import resolve_form
 from app.autofill.classify import normalize_label
 from app.autofill.evaluate import load_corpus
 from app.autofill.memory import load_memory
+from app.autofill.private_json import write_private_json
 from app.autofill.schema import FieldClass, FieldKind
 
 ASHBY_DIR = os.path.expanduser("~/.config/firstplay/corpus-ashby")
@@ -158,15 +165,15 @@ def main(argv=None):
     report["seconds"] = round(time.perf_counter() - started, 1)
     report["clusters"] = clusters(all_gaps)
     report["gaps"] = all_gaps
-    with open(args.out, "w") as handle:
-        json.dump(report, handle, indent=1, default=str)
+    write_private_json(args.out, report, indent=1, default=str)
 
     for ats, t in report["ats"].items():
         if t.get("errors"):
             kinds = collections.Counter(e["error"][:80] for e in t["errors"])
             print("{:10s} {} forms raised: {}".format(ats, len(t["errors"]), kinds.most_common(3)))
         print("{:10s} forms {:4d}  fields {:5d}  essays {:4d}  files {:3d}  in scope {:5d}  filled {:5d} (blank by choice {:4d})  gaps {:5d}  coverage {:.1%}  ${:.3f}".format(
-            ats, t["forms"], t["fields"], t["essays"], t["files"], t["scope"], t["filled"], t.get("blank_by_choice", 0), t["gap"], t["coverage"], t["cost_usd"]))
+            ats, t["forms"], t.get("fields", 0), t.get("essays", 0), t.get("files", 0), t.get("scope", 0), t.get("filled", 0),
+            t.get("blank_by_choice", 0), t.get("gap", 0), t["coverage"], t["cost_usd"]))
     print("top gap clusters:")
     for r in report["clusters"][:40]:
         print("  {:4d}x {:3d}req [{:12s}] {:62s} {}".format(r["count"], r["required"], r["kind"], r["label"][:62], (r["options"][:4] if r["options"] else r["reasons"][0][0][:40])))

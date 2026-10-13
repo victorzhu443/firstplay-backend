@@ -34,6 +34,7 @@ from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
 from app.autofill.classify import normalize_label
+from app.autofill.private_json import write_private_json
 from app.autofill.themes import THEME_CRITERIA, QuestionTheme
 from app.autofill.schema import FieldKind, FormField
 from app.exceptions import JevServiceError
@@ -123,8 +124,9 @@ class ThemeCache:
         payload = {k: [v[0], v[1]] for k, v in self._entries.items()}
         payload["__taxonomy__"] = taxonomy_fingerprint()
 
-        with open(self.path, "w") as handle:
-            json.dump(payload, handle, indent=1)
+        # Form facts only, but it lives beside the profile: owner-only like
+        # every other file under ~/.config/firstplay (audit 2026-10-12, F5).
+        write_private_json(self.path, payload, indent=1)
 
     @property
     def size(self) -> int:
@@ -269,14 +271,24 @@ class OptionCache:
         self._lock = threading.Lock()
 
         if path and os.path.exists(path):
+            dropped = 0
             try:
                 with open(path) as handle:
                     raw = json.load(handle)
                 for key, value in raw.items():
                     if _SIGNATURE_SHAPE.match(key):
                         self.put(key, value[0], float(value[1]))
+                    else:
+                        dropped += 1
             except Exception:
                 logger.warning("Could not read option cache at %s; starting empty", path)
+            if dropped:
+                # The pre-§55 format keyed on `label::stored value::options`
+                # in clear. Dropping those on load was not enough: the file
+                # stayed on disk, 0644, 969 keys of it (audit 2026-10-12,
+                # F5). Rewritten owner-only with the hashed entries only.
+                logger.info("Dropped %d plaintext option-cache keys at %s and rewrote it", dropped, path)
+                self.save()
 
     def get(self, signature: str) -> Optional[Tuple[Optional[str], float]]:
         with self._lock:
@@ -301,8 +313,7 @@ class OptionCache:
             return
         with self._lock:
             snapshot = {k: [v[0], v[1]] for k, v in self._entries.items()}
-        with open(self.path, "w") as handle:
-            json.dump(snapshot, handle, indent=1)
+        write_private_json(self.path, snapshot, indent=1)
 
     @property
     def size(self) -> int:

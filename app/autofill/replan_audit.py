@@ -10,7 +10,12 @@ round needs:  python -m app.autofill.replan_audit --draws <survey/draws dir> --o
     correct / wrong / unsure, and `tune.py` sweeps the acceptance thresholds
     against those verdicts (the reward) rather than against intuition.
 
-Profile values appear in both files; keep them out of any repository.
+**Every output carries the owner's answers.** `unanswered.json` holds each
+plan entry's `value`/`values`, `model_decisions.jsonl` is nothing but values
+the model chose for this applicant, and the profile they came from is the
+real one. The three files are written owner-only (0600, atomic, via
+`private_json`); keep them under `~/.config/firstplay`, never in a
+repository or a shared drive (audit 2026-10-12, F5).
 """
 import argparse
 import collections
@@ -19,6 +24,8 @@ import os
 import re
 import sys
 import urllib.request
+
+from app.autofill.private_json import private_file, write_private_json
 
 ASHBY_CORPUS = os.path.expanduser("~/.config/firstplay/corpus-ashby")
 KEEP = ("field_key", "label", "value", "values", "needs_review", "skipped", "satisfied_by",
@@ -119,11 +126,9 @@ def main(argv=None):
     decided = [r for r in rows if (r.get("source") in ("model_decision", "model_draft")
                                    or str(r.get("theme") or "").startswith("profile."))
                and (r.get("value") is not None or r.get("values"))]
-    with open(os.path.join(args.out, "unanswered.json"), "w") as h:
-        json.dump({"rows": rows, "errors": errors}, h, indent=0, default=str)
-    with open(os.path.join(args.out, "unanswered_clusters.json"), "w") as h:
-        json.dump(clusters, h, indent=1)
-    with open(os.path.join(args.out, "model_decisions.jsonl"), "w") as h:
+    write_private_json(os.path.join(args.out, "unanswered.json"), {"rows": rows, "errors": errors}, indent=0, default=str)
+    write_private_json(os.path.join(args.out, "unanswered_clusters.json"), clusters, indent=1)
+    with private_file(os.path.join(args.out, "model_decisions.jsonl")) as h:
         for r in decided:
             h.write(json.dumps({**r, "verdict": None}, default=str) + "\n")
     tot = collections.Counter(r["ats"] for r in rows)
