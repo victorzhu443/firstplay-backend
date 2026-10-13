@@ -222,7 +222,11 @@ _THEME_PATTERNS: Tuple[Tuple[QuestionTheme, "re.Pattern"], ...] = (
                r"|\bconfirm .{0,20}availability\b|\bflexibility to consider\b))", re.I | re.S)),
     (QuestionTheme.INTERNSHIP_TERM,
      re.compile(r"\b(winter or summer|summer or winter|internship (term|season|cohort)"
-               r"|cohort dates|prefer a (winter|summer))\b", re.I)),
+               r"|cohort dates|prefer a (winter|summer)"
+               # "Are you interested in a Spring Co-Op, Summer Internship, or
+               # Both?" (Rugged Robotics, R50): two named seasons and an
+               # umbrella, which is the term question in another coat.
+               r"|(spring|summer|fall|winter)[^?]{0,40}\b(co-?op|internship)[^?]{0,40}\bor both)\b", re.I)),
     (QuestionTheme.ENGINEERING_TRACK,
      re.compile(r"\b(type of engineering|which (track|team)|most excited to do"
                r"|engineering work)\b", re.I)),
@@ -483,6 +487,18 @@ def _resolve_computed(
         ]
         if not workable:
             return None
+        # A menu that offers "Both" / "Either" / "All of the above" says it in
+        # one option; ticking it beside the cohorts it stands for is
+        # incoherent (Rugged Robotics, R50 2026-10-12: Spring, Summer and
+        # Both were all selected). That option alone is the answer then.
+        umbrella = [o for o in workable if _ANY_TERM.match(o.strip())]
+        if umbrella and len(workable) > 1:
+            return Resolution(
+                field_key=field.key,
+                values=[umbrella[0]],
+                source=FillSource.MEMORY,
+                reason="you are flexible about terms, and this menu says that in one option",
+            )
         return Resolution(
             field_key=field.key,
             values=workable,
@@ -834,6 +850,12 @@ _CONDITION_IS_OTHER = re.compile(r"\bif (you )?(answered|selected|responded|chos
 #: option deterministically. That is the signal for the Jev pass below.
 #: "None of these options work for me" — an opt-out that must never be selected
 #: alongside the real choices.
+#: "Both", "Either", "All of the above", "Any", "No preference": one option
+#: that stands for every cohort on the menu.
+_ANY_TERM = re.compile(
+    r"^(both|either|all( of (the above|these))?|any( of (the above|these))?|no preference|flexible|open to (both|either|any))"
+    r"\b(?!.*\b(other|not|neither|none)\b).{0,40}$", re.I)
+
 _OPT_OUT = re.compile(r"\bnone of (these|the)\b|\bnot pursuing\b|\bnone apply\b", re.I)
 
 
