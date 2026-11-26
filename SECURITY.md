@@ -114,7 +114,7 @@ local copy.
   weekly), in
   [firstplay-frontend PR #6](https://github.com/victorzhu443/firstplay-frontend/pull/6).
 - **Dependencies.** `requirements.txt` pins
-  `security-agents @ git+https://github.com/victorzhu443/security-agents@v0.1.0`
+  `security-agents @ git+https://github.com/victorzhu443/security-agents@v0.1.1`
   (locally: `pip install -e ../../security-agents`), keeps `httpx` at a
   version with the `sni_hostname` extension the pinned fetch relies on, and moves
   `python-dotenv` to 1.2.2 (the advisory's fix; requires Python ≥ 3.10) under an

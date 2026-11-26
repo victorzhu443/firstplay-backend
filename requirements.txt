@@ -34,4 +34,4 @@ cohere==5.15.0
 # private, so CI and the Render build install it with a token: see TOOLKIT_TOKEN in
 # .github/workflows/security.yml. Locally the sibling checkout is installed
 # editable instead: ./.venv/bin/python -m pip install -e ../../security-agents
-security-agents @ git+https://github.com/victorzhu443/security-agents@v0.1.0  # bump to v0.1.1 once tagged
+security-agents @ git+https://github.com/victorzhu443/security-agents@v0.1.1
