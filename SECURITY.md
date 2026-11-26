@@ -99,7 +99,13 @@ local copy.
   `p/secrets`: **0 findings**.
 - **RC-7 — supply chain (FIXED).** `.github/workflows/security.yml` runs
   `security-tests`, `sast` and `sca` on every push and PR, with every `uses:`
-  pinned to a commit SHA; `.github/dependabot.yml` bumps pip and actions weekly.
+  pinned to a commit SHA; `.github/dependabot.yml` bumps pip and actions weekly
+  with a 7-day release cooldown. The `sast` job reports WARNING and ERROR rules
+  only (`--severity`): `--error` makes any reported finding fatal, and the
+  toolkit's INFO rules are review aids, not findings —
+  `untrusted-placeholder-in-prompt-template` marks every prompt bind site so a
+  reviewer confirms it is hardened (ours are; `test_prompt_assembly.py` proves
+  it). Local scans run without the filter and still show them.
   Jobs run on Python 3.11, matching `render.yaml`'s `PYTHON_VERSION`. The
   toolkit is a **public** repository, so every job installs it anonymously
   from the git pin; `sca` installs the PyPI pins only (the toolkit is audited
