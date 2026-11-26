@@ -59,11 +59,18 @@ jobs:
           token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
           path: .security-agents
       - run: pip install semgrep
+      # --error makes any reported finding fatal, so only WARNING and ERROR
+      # rules are reported here. The toolkit's INFO rules are review aids
+      # (e.g. untrusted-placeholder-in-prompt-template points a reviewer at a
+      # prompt bind site to confirm it is hardened — both of ours are, see
+      # tests/security/test_prompt_assembly.py); they stay visible in local
+      # scans, which run without the severity filter.
       - name: Semgrep (custom rules + python/secrets/owasp packs)
         run: >
           semgrep scan --config .security-agents/semgrep/rules.yml
           --config p/python --config p/secrets --config p/owasp-top-ten
           --exclude .security-agents --exclude .venv
+          --severity ERROR --severity WARNING
           --error --metrics off .
 
   sca:

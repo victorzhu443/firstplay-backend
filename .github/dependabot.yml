@@ -2,13 +2,19 @@
 # SHA-pinned actions in .github/workflows; each arrives as a PR behind the
 # test suite and the security workflow.
 version: 2
+# `cooldown` holds a new release back for a week before it is proposed, so a
+# release that is yanked or fixed in its first days never lands here.
 updates:
   - package-ecosystem: pip
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
