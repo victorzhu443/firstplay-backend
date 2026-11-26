@@ -99,7 +99,13 @@ local copy.
   `p/secrets`: **0 findings**.
 - **RC-7 — supply chain (FIXED).** `.github/workflows/security.yml` runs
   `security-tests`, `sast` and `sca` on every push and PR, with every `uses:`
-  pinned to a commit SHA; `.github/dependabot.yml` bumps pip and actions weekly.
+  pinned to a commit SHA; `.github/dependabot.yml` bumps pip and actions weekly
+  with a 7-day release cooldown. The `sast` job reports WARNING and ERROR rules
+  only (`--severity`): `--error` makes any reported finding fatal, and the
+  toolkit's INFO rules are review aids, not findings —
+  `untrusted-placeholder-in-prompt-template` marks every prompt bind site so a
+  reviewer confirms it is hardened (ours are; `test_prompt_assembly.py` proves
+  it). Local scans run without the filter and still show them.
   Jobs run on Python 3.11, matching `render.yaml`'s `PYTHON_VERSION`. The
   toolkit is a **public** repository, so every job installs it anonymously
   from the git pin; `sca` installs the PyPI pins only (the toolkit is audited
@@ -200,13 +206,18 @@ hard-depends on the toolkit.
    and as a Render environment variable; both install paths pick it up.
 7. **Burp Suite** pass against the local FastAPI app (manual;
    `../security-agents/runbooks/burp-suite.md`) — not automated here.
-8. **Dependency bumps, in their own PR.** `pip-audit` over the installed
-   runtime set (2026-11-26) reports known advisories against the pinned
-   `fastapi`/`starlette` 0.115/0.41, `python-multipart`, `urllib3`, `langchain-*`
-   and transitive `pillow`/`aiohttp` versions (`python-dotenv` is now clean). The
-   `sca` job is therefore **red until a bump PR lands** behind the full suite;
-   that PR is deliberately separate from this one (RC-7 edit plan: bumps are
-   isolated behind the tests).
+8. **Dependency bumps, in their own PR.** The `sca` job on `main` (Python
+   3.11, runtime pins only; run 2026-11-26) reports **72 known advisories in 13
+   packages**, all against pins that predate this work: `starlette` 0.41.3 (14),
+   `python-multipart` 0.0.20 (12), `langchain-core` 0.3.63 (11),
+   `langgraph-checkpoint` (6), `langsmith` (5), `pdfminer-six` (4, via
+   `pdfplumber`), `langchain-text-splitters` (4), `setuptools` (3), `langgraph`,
+   `langgraph-sdk`, `langchain` (3 each), `langchain-openai` and
+   `langchain-community` (2 each). The local 3.9 venv additionally shows
+   `urllib3`/`pillow`/`aiohttp` through dev-only and transitive packages that
+   CI does not install. Nothing in the set is new. The `sca` job is **red until
+   the bump PR lands** behind the full suite; that PR is deliberately separate
+   (RC-7 edit plan: bumps are isolated behind the tests).
 9. Hardening changes the text the model sees for form labels and options (fence
    tokens, redacted override phrasing, the directive at the head of every
    question). Watch the autofill coverage measurement (`DECISIONS`) for a shift
