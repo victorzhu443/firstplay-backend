@@ -20,7 +20,7 @@ pdfplumber==0.11.9
 pdfminer.six==20251230
 # >=0.27: secprim.safe_fetch pins the connection to the validated address and
 # needs the `sni_hostname` request extension so TLS still verifies the hostname.
-httpx==0.28.0
+httpx==0.28.1
 beautifulsoup4==4.12.3
 # >=0.0.31 clears PYSEC-2026-1852/3036-3040 (12 advisories).
 python-multipart==0.0.31
