@@ -206,18 +206,26 @@ hard-depends on the toolkit.
    and as a Render environment variable; both install paths pick it up.
 7. **Burp Suite** pass against the local FastAPI app (manual;
    `../security-agents/runbooks/burp-suite.md`) — not automated here.
-8. **Dependency bumps, in their own PR.** The `sca` job on `main` (Python
-   3.11, runtime pins only; run 2026-11-26) reports **72 known advisories in 13
-   packages**, all against pins that predate this work: `starlette` 0.41.3 (14),
-   `python-multipart` 0.0.20 (12), `langchain-core` 0.3.63 (11),
-   `langgraph-checkpoint` (6), `langsmith` (5), `pdfminer-six` (4, via
-   `pdfplumber`), `langchain-text-splitters` (4), `setuptools` (3), `langgraph`,
-   `langgraph-sdk`, `langchain` (3 each), `langchain-openai` and
-   `langchain-community` (2 each). The local 3.9 venv additionally shows
-   `urllib3`/`pillow`/`aiohttp` through dev-only and transitive packages that
-   CI does not install. Nothing in the set is new. The `sca` job is **red until
-   the bump PR lands** behind the full suite; that PR is deliberately separate
-   (RC-7 edit plan: bumps are isolated behind the tests).
+8. ~~Dependency bumps, in their own PR~~ — **DONE** (PR `deps/sca-bumps`).
+   `main`'s `sca` job (Python 3.11, runtime pins) reported **72 known advisories
+   in 13 packages** (69 in 12 when the requirements file is audited directly;
+   the other 3 were the base image's `setuptools`), every one against a pin
+   that predated this work. `requirements.txt` now pins, for each package, the
+   smallest release that clears its advisories while the set still resolves:
+   `starlette` 1.3.1 (with `fastapi` 0.133.0), `python-multipart` 0.0.31,
+   `pdfplumber` 0.11.9 / `pdfminer.six` 20251230, `langchain-core` 1.4.0,
+   `langchain-openai` 1.1.14, `langgraph` 1.2.4, `langgraph-checkpoint` 4.1.1,
+   `langgraph-sdk` 0.4.6, `langsmith` 0.8.18, `langchain-cohere` 0.5.0 /
+   `cohere` 5.18.0, `openai` 2.26.0, `setuptools` 84.1.0; the never-imported
+   `langchain` and `langchain-community` meta-packages are no longer pinned.
+   After: `pip-audit --strict` over the runtime set on Python 3.11 reports **no
+   known vulnerabilities**; no `audit-ignore.toml` entry was needed. The full
+   suite (1340) and `tests/security/` (49) pass on 3.11 with the new pins. The
+   set requires Python ≥ 3.11 (production already pins 3.11.9); a 3.9 dev venv
+   must be recreated (`uv venv --python 3.11 .venv`). Dev-only: `pytest` 8.3.4
+   carries PYSEC-2026-1845 (fix 9.0.3); it is not installed in the image or
+   audited by `sca`, and the bump waits on a `pytest-asyncio` release that
+   supports pytest 9.
 9. Hardening changes the text the model sees for form labels and options (fence
    tokens, redacted override phrasing, the directive at the head of every
    question). Watch the autofill coverage measurement (`DECISIONS`) for a shift
@@ -228,6 +236,8 @@ hard-depends on the toolkit.
 ```bash
 cd firstplay-backend
 
+# the runtime pins need Python >= 3.11 (as production); recreate an older venv:
+#   uv venv --python 3.11 .venv && uv pip install -r requirements.txt -r requirements-dev.txt
 # install the toolkit into the backend venv (one-time; CI uses the git pin)
 ./.venv/bin/python -m pip install -q -e ../../security-agents
 ./.venv/bin/python -m pip install -q semgrep      # if not already present
@@ -242,9 +252,8 @@ PATH="$PWD/.venv/bin:$PATH" semgrep scan --config p/javascript --config p/owasp-
 
 # SCA
 ./.venv/bin/python -m pip install -q pip-audit
-# Locally the editable toolkit checkout is skipped (not on PyPI; audited in its own
-# CI), which --strict would count as a failure, so --strict is CI-only (sca job).
-# The 3.9 venv still carries python-dotenv 1.2.1 (its two advisories); CI and
-# production run 3.11 with 1.2.2.
-./.venv/bin/pip-audit --skip-editable
+# Audit the runtime pins the way the sca job does (the git-pinned toolkit is not on
+# PyPI and is audited in its own CI, so it is filtered out first).
+grep -v "security-agents @" requirements.txt > /tmp/runtime.txt
+./.venv/bin/pip-audit --strict -r /tmp/runtime.txt
 ```
