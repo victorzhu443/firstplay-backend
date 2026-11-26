@@ -1,0 +1,14 @@
+# RC-7 — supply chain. Weekly bumps for the Python pins and for the
+# SHA-pinned actions in .github/workflows; each arrives as a PR behind the
+# test suite and the security workflow.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

@@ -7,6 +7,8 @@ sqlalchemy==2.0.36
 alembic==1.14.0
 psycopg2-binary==2.9.10
 pdfplumber==0.11.4
+# >=0.27: secprim.safe_fetch pins the connection to the validated address and
+# needs the `sni_hostname` request extension so TLS still verifies the hostname.
 httpx==0.28.0
 beautifulsoup4==4.12.3
 python-multipart==0.0.20
@@ -27,3 +29,9 @@ openai==1.57.2
 # needs cohere<5.16: later SDKs removed types it imports.
 langchain-cohere==0.4.4
 cohere==5.15.0
+# Shared defensive primitives (secprim: boundary validators, pinned fetch;
+# promptinject: prompt hardening and the LLM01 corpus). The repository is
+# private, so CI installs it with a token: see GH_PAT in
+# .github/workflows/security.yml. Locally the sibling checkout is installed
+# editable instead: ./.venv/bin/python -m pip install -e ../../security-agents
+security-agents @ git+https://github.com/victorzhu443/security-agents@v0.1.0

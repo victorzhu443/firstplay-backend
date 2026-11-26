@@ -71,7 +71,7 @@ def run(binder, tag):
             if (e.value is not None or e.values) and not e.needs_review:
                 filled += 1
                 value = " + ".join(e.values) if e.values else str(e.value)
-                key = hashlib.sha1((normalize_value(f.label) + "||" + normalize_value(value) + "||" + str(e.source)).encode()).hexdigest()[:12]
+                key = hashlib.sha1((normalize_value(f.label) + "||" + normalize_value(value) + "||" + str(e.source)).encode(), usedforsecurity=False).hexdigest()[:12]  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
                 d = decisions.get(key)
                 if d is None:
                     d = decisions[key] = {"id": key, "question": f.label[:200], "answer": value[:200], "source": str(e.source).split(".")[-1].lower(),

@@ -86,43 +86,32 @@ def test_redirect_to_internal_address_is_blocked(monkeypatch):
     """The case a single up-front check misses.
 
     The submitted URL is public and passes; the server then 302s to the
-    metadata service. With redirects followed automatically the fetch would
-    already have happened, so each hop is resolved and checked separately.
+    metadata service. Redirects are never followed automatically: each hop
+    is resolved, checked, and only then connected to — so the second hop is
+    refused and the origin never sees a request for it.
     """
+    import httpx
+
+    from tests import fetch_fakes
+
     seen = []
 
     def _resolve(hostname):
         seen.append(hostname)
         # First hop public, everything after it internal.
-        if hostname == "jobs.example.com":
-            return [ipaddress.ip_address("93.184.216.34")]
-        return [ipaddress.ip_address("169.254.169.254")]
+        return fetch_fakes.PUBLIC if hostname == "jobs.example.com" else fetch_fakes.METADATA
 
-    monkeypatch.setattr(job_router, "_resolved_addresses", _resolve)
+    def _origin(request):
+        return httpx.Response(
+            302, headers={"location": "http://metadata.internal/latest/meta-data/"}
+        )
 
-    class _Redirect:
-        is_redirect = True
-        headers = {"location": "http://metadata.internal/latest/meta-data/"}
-
-        class url:
-            @staticmethod
-            def join(location):
-                return location
-
-    class _Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
-        async def get(self, url, timeout=None):
-            return _Redirect()
-
-    monkeypatch.setattr(job_router.httpx, "AsyncClient", lambda **kw: _Client())
+    requests = fetch_fakes.install(monkeypatch, _origin, resolve=_resolve)
 
     response = client.post("/api/job/url", json={"url": "https://jobs.example.com/x"})
 
     assert response.status_code == 400
     assert "public address" in response.json()["detail"]
     assert "metadata.internal" in seen, "the redirect target was never checked"
+    assert [r.headers["host"] for r in requests] == ["jobs.example.com"], \
+        "the origin saw a request for the internal hop"

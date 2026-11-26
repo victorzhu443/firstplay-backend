@@ -38,3 +38,22 @@ def test_openapi_ui_can_be_switched_on(monkeypatch):
     finally:
         monkeypatch.delenv("FIRSTPLAY_DOCS")
         importlib.reload(main_module)
+
+
+def test_malformed_input_from_any_route_is_a_400():
+    """Every boundary validator raises `secprim.MalformedInput`; the app maps
+    the type to 400 once, globally, so a new parser that forgets its own
+    `except` still answers cleanly instead of 500. The handler is exercised
+    directly: it is registered on the app and takes (request, error)."""
+    import asyncio
+    import json
+
+    from secprim import MalformedInput
+
+    from app.main import app as _app
+
+    handler = _app.exception_handlers[MalformedInput]
+    response = asyncio.run(handler(None, MalformedInput("form.questions[2]: expected an object, got str")))
+
+    assert response.status_code == 400
+    assert json.loads(response.body) == {"detail": "form.questions[2]: expected an object, got str"}

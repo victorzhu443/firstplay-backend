@@ -46,86 +46,52 @@ def test_missing_url_field():
     
     assert response.status_code == 422
 
-@patch('app.routers.job.httpx.AsyncClient')
-def test_fetch_html_success(mock_client):
-    """Test T 5.2.1: mock 200 response returns HTML string"""
-    # Create mock response
-    body = "<html><body>Job Description</body></html>"
-    mock_response = AsyncMock()
-    mock_response.text = body
-    mock_response.status_code = 200
-    # Real attributes, not AsyncMocks: the handler reads content-length and
-    # measures the body to enforce a size cap, and an AsyncMock header value
-    # is truthy but not an int.
-    mock_response.headers = {"content-length": str(len(body))}
-    mock_response.is_redirect = False
-    mock_response.content = body.encode()
-    # httpx.Response.raise_for_status is synchronous. Mocked as an AsyncMock
-    # it returned an un-awaited coroutine, so the call under test did nothing
-    # and the error path was never actually exercised.
-    mock_response.raise_for_status = Mock()
-    
-    # Mock the client context manager
-    mock_client_instance = AsyncMock()
-    mock_client_instance.get = AsyncMock(return_value=mock_response)
-    mock_client.return_value.__aenter__.return_value = mock_client_instance
-    
+def test_fetch_html_success(monkeypatch):
+    """Test T 5.2.1: a 200 from the origin returns the HTML string.
+
+    The origin is a scripted transport behind the real fetch path (resolver
+    + pinned connection + body cap), so nothing here reaches the network."""
+    from tests import fetch_fakes
+
+    fetch_fakes.install(monkeypatch, fetch_fakes.html())
+
     response = client.post(
         "/api/job/url",
         json={"url": "https://example.com/job"}
     )
-    
+
     assert response.status_code == 200
     data = response.json()
     assert "job_id" in data
 
-@patch('app.routers.job.httpx.AsyncClient')
-def test_fetch_html_timeout(mock_client):
+def test_fetch_html_timeout(monkeypatch):
     """Test T 5.2.2: timeout handled"""
-    # Mock timeout exception
-    mock_client_instance = AsyncMock()
-    mock_client_instance.get = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
-    mock_client.return_value.__aenter__.return_value = mock_client_instance
-    
+    from tests import fetch_fakes
+
+    def _slow(request):
+        raise httpx.ReadTimeout("Timeout", request=request)
+
+    fetch_fakes.install(monkeypatch, _slow)
+
     response = client.post(
         "/api/job/url",
         json={"url": "https://example.com/job"}
     )
-    
+
     assert response.status_code == 504
     assert "timed out" in response.json()["detail"].lower()
 
-@patch('app.routers.job.httpx.AsyncClient')
-def test_fetch_html_404(mock_client):
+def test_fetch_html_404(monkeypatch):
     """Test T 5.2.2: 404 handled"""
-    # Create a proper mock for HTTPStatusError
-    mock_response = AsyncMock()
-    mock_response.is_redirect = False
-    mock_response.status_code = 404
-    
-    # Create the exception with proper request object
-    mock_request = AsyncMock()
-    http_error = httpx.HTTPStatusError(
-        "Not Found",
-        request=mock_request,
-        response=mock_response
-    )
-    
-    # Make raise_for_status actually raise the exception
-    def raise_error():
-        raise http_error
-    
-    mock_response.raise_for_status = raise_error
-    
-    mock_client_instance = AsyncMock()
-    mock_client_instance.get = AsyncMock(return_value=mock_response)
-    mock_client.return_value.__aenter__.return_value = mock_client_instance
-    
+    from tests import fetch_fakes
+
+    fetch_fakes.install(monkeypatch, fetch_fakes.html(b"gone", status=404))
+
     response = client.post(
         "/api/job/url",
         json={"url": "https://example.com/nonexistent"}
     )
-    
+
     assert response.status_code == 404
 
 def test_extract_text_contains_job_content():

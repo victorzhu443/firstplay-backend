@@ -39,6 +39,7 @@ from app.autofill.memory import Memory, Resolution
 from app.autofill.schema import FieldClass, FieldKind, FieldOption, FillSource, FormField, FormSchema
 from app.exceptions import JevError, JevServiceError
 from app.main import app
+from app.security import harden_untrusted
 from tests.jev_fakes import ScriptedClient, answer_everything, call_blob, earlier_answers_in, letters
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "forms")
@@ -99,8 +100,11 @@ def test_option_translation_writes_the_forms_label_by_index_or_leaves_the_entry_
     assert len(client.calls) == 1 and set(client.calls[0]["questions"]) == set(script)
     question = client.calls[0]["questions"]["req_0"]
     assert question["type"] == "choice"
-    assert question["criteria"] == {"opt_0": RELOCATION_OPTIONS[0], "opt_1": RELOCATION_OPTIONS[1],
-                                    "opt_2": RELOCATION_OPTIONS[2],
+    # Option text comes off the page, so it reaches the model fenced; the
+    # keys and the trusted `none` row are ours and stay bare.
+    assert question["criteria"] == {"opt_0": harden_untrusted(RELOCATION_OPTIONS[0]),
+                                    "opt_1": harden_untrusted(RELOCATION_OPTIONS[1]),
+                                    "opt_2": harden_untrusted(RELOCATION_OPTIONS[2]),
                                     "none": "No listed option expresses the candidate's answer."}
     # The stored answer travels in state, not in the instructions.
     assert {q["candidate_answer"] for q in client.calls[0]["state"]["questions"]} == {"Yes"}
@@ -320,7 +324,7 @@ def test_the_second_pass_writes_the_stored_value_verbatim_after_verification():
     assert set(second[0]["questions"]) == {"sp_0__cov", "sp_0__key"}
     assert second[0]["questions"]["sp_0__cov"]["type"] == "noul"
     # The verify question names the stored value, which is what will be written.
-    assert "Proposed answer: M" in verify[0]["questions"]["sp_0"]["instructions"]
+    assert "Proposed answer: " + harden_untrusted("M") in verify[0]["questions"]["sp_0"]["instructions"]
 
 
 def test_the_key_choice_criteria_hold_only_catalog_keys():
@@ -395,7 +399,8 @@ def test_a_yes_no_single_select_lands_in_the_right_confidence_band(choice, confi
     question = asked[0]["questions"]["spec_q1"]
     assert question["type"] == "choice"
     assert list(question["criteria"]) == ["opt_0", "opt_1", "unsure"]
-    assert question["criteria"]["opt_0"] == "Yes" and question["criteria"]["opt_1"] == "No"
+    assert question["criteria"]["opt_0"] == harden_untrusted("Yes")
+    assert question["criteria"]["opt_1"] == harden_untrusted("No")
     assert TRAVEL in question["instructions"]
 
     entry = plan.entries[0]

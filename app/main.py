@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from secprim import MalformedInput
 from app.routers import resume, job, analysis, pipeline, autofill
 from app.db import engine, Base, SQLALCHEMY_DATABASE_URL
 from app.logging_config import configure_logging, request_id_var
@@ -250,6 +251,19 @@ async def _validation_error_without_values(request: Request, error: RequestValid
             "type": str(row.get("type") or ""),
         })
     return JSONResponse(status_code=422, content={"detail": rows})
+
+@app.exception_handler(MalformedInput)
+async def _malformed_input_is_a_400(request: Request, error: MalformedInput):
+    """Every boundary validator raises one type; it maps to 400 once, here.
+
+    `secprim.MalformedInput` (and the adapters' `MalformedPayload` alias of
+    it) carries the dotted path of the offending node and nothing from the
+    payload itself, so the message is safe to return. The per-router
+    `except MalformedPayload` blocks that add context still run first; this
+    is the backstop for any new parser that forgets one.
+    """
+    return JSONResponse(status_code=400, content={"detail": str(error)})
+
 
 # CORS middleware.
 # `allow_origins` is matched by exact string comparison, so the previous

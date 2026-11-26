@@ -39,6 +39,7 @@ from app.autofill.themes import THEME_CRITERIA, QuestionTheme
 from app.autofill.schema import FieldKind, FormField
 from app.exceptions import JevServiceError
 from app.jev_client import JevClient, choice, get_jev_client, noul, summarise_error
+from app.security import harden_untrusted, scrub_output
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,15 @@ _INSTRUCTIONS = (
     "  {label}\n\n"
     "Which of the following best describes what it is asking for?"
 )
+
+
+def _untrusted(text) -> str:
+    """Form text on its way into a question: a label, an option, a stored or
+    typed answer. None of it was written by the applicant or by us — it comes
+    off a page anyone can serve — so it is fenced and neutralized here, the one
+    place it is formatted into a prompt. Cache signatures and the labels handed
+    back to the caller use the raw text, so nothing else changes."""
+    return harden_untrusted("" if text is None else str(text))
 
 
 def taxonomy_fingerprint() -> str:
@@ -505,8 +515,10 @@ class JevBinder:
         if not requests:
             return {}
 
-        state_hash = hashlib.sha1(
-            json.dumps(state.get("applicant", {}), sort_keys=True, default=str).encode()
+        # Cache key only (usedforsecurity=False keeps stored signatures valid).
+        state_hash = hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
+            json.dumps(state.get("applicant", {}), sort_keys=True, default=str).encode(),
+            usedforsecurity=False,
         ).hexdigest()[:12]
 
         out: Dict[str, Tuple[Optional[str], float]] = {}
@@ -563,7 +575,7 @@ class JevBinder:
                     question_id = "{}__opt_{}".format(request_id, index)
                     questions[question_id] = noul(
                         "{}\n\nQuestion on the form: {}\nOption being judged: {}".format(
-                            _APPLIES_INSTRUCTIONS, field.label, option.label
+                            _APPLIES_INSTRUCTIONS, _untrusted(field.label), _untrusted(option.label)
                         ),
                         true_means="The profile states facts under which the applicant would tick this option.",
                         false_means="The profile rules this option out, or says nothing that bears on it.",
@@ -576,12 +588,12 @@ class JevBinder:
             labels = {}
             for index, option in enumerate(field.options):
                 key = "opt_{}".format(index)
-                criteria[key] = option.label
+                criteria[key] = _untrusted(option.label)
                 labels[key] = option.label
             criteria["unsure"] = "The profile and earlier answers do not determine the answer."
             option_labels[request_id] = labels
             questions[request_id] = choice(
-                "{}\n\nQuestion on the form: {}".format(_ANSWER_INSTRUCTIONS, field.label),
+                "{}\n\nQuestion on the form: {}".format(_ANSWER_INSTRUCTIONS, _untrusted(field.label)),
                 criteria,
             )
 
@@ -658,8 +670,9 @@ class JevBinder:
         """
         if not requests:
             return {}
-        state_hash = hashlib.sha1(
-            json.dumps(state.get("profile", {}), sort_keys=True, default=str).encode()
+        state_hash = hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
+            json.dumps(state.get("profile", {}), sort_keys=True, default=str).encode(),
+            usedforsecurity=False,
         ).hexdigest()[:12]
         out: Dict[str, Tuple[Optional[str], float, float]] = {}
         pending = []
@@ -676,14 +689,14 @@ class JevBinder:
             questions = {}
             for request_id, field, catalog, _sig in batch:
                 questions[request_id + "__cov"] = noul(
-                    _COVERED_INSTRUCTIONS + "\n\nQuestion on the form: " + field.label,
+                    _COVERED_INSTRUCTIONS + "\n\nQuestion on the form: " + _untrusted(field.label),
                     true_means="state.profile holds the specific fact this question asks for, stated plainly.",
                     false_means="The question asks for something the profile does not state, or only hints at.",
                 )
                 criteria = {key: "{}: {}".format(key, value[:80]) for key, value in catalog.items()}
                 criteria["none"] = "No single profile entry answers this question."
                 questions[request_id + "__key"] = choice(
-                    _KEY_INSTRUCTIONS + "\n\nQuestion on the form: " + field.label, criteria,
+                    _KEY_INSTRUCTIONS + "\n\nQuestion on the form: " + _untrusted(field.label), criteria,
                 )
             decision = self._decide(state, questions, description="second pass over {} text question(s)".format(len(batch)))
             self.calls += 1
@@ -725,14 +738,16 @@ class JevBinder:
             questions = {}
             for item_id, question, answer, catalog in batch:
                 questions[item_id + "__stable"] = noul(
-                    _STABLE_INSTRUCTIONS + "\n\nQuestion on the form: {}\nThe applicant's answer: {}".format(question, answer),
+                    _STABLE_INSTRUCTIONS + "\n\nQuestion on the form: {}\nThe applicant's answer: {}".format(
+                        _untrusted(question), _untrusted(answer)),
                     true_means="A fact or standing preference about the applicant; the same answer belongs on any employer's form asking this.",
                     false_means="Specific to this company, role, posting or moment, or free prose, or a one-off.",
                 )
                 criteria = {key: "{}: {}".format(key, (value or "(empty)")[:60]) for key, value in catalog.items()}
                 criteria["new"] = "None of these keys; this is a new kind of fact about the applicant."
                 questions[item_id + "__key"] = choice(
-                    _WHERE_INSTRUCTIONS + "\n\nQuestion on the form: {}\nThe applicant's answer: {}".format(question, answer),
+                    _WHERE_INSTRUCTIONS + "\n\nQuestion on the form: {}\nThe applicant's answer: {}".format(
+                        _untrusted(question), _untrusted(answer)),
                     criteria,
                 )
             decision = self._decide(state, questions, description="judge {} correction(s) for memory".format(len(batch)))
@@ -758,7 +773,8 @@ class JevBinder:
             return {}
         questions = {
             request_id: noul(
-                _VERIFY_INSTRUCTIONS + "\n\nQuestion on the form: {}\nProposed answer: {}".format(label, value),
+                _VERIFY_INSTRUCTIONS + "\n\nQuestion on the form: {}\nProposed answer: {}".format(
+                    _untrusted(label), _untrusted(value)),
                 true_means="The proposed answer is exactly what this applicant would truthfully write here.",
                 false_means="The answer is off-topic, only partly responsive, in the wrong form, or not supported by the profile.",
             )
@@ -783,7 +799,7 @@ class JevBinder:
         if self.tripped:
             raise JevServiceError("model skipped: an earlier call in this plan timed out")
         try:
-            return self._ensure_client().decide(state, questions, description=description)
+            decision = self._ensure_client().decide(state, questions, description=description)
         except JevServiceError as e:
             if "timed out" in str(e) or "transport" in str(e):
                 self.tripped = True
@@ -792,6 +808,14 @@ class JevBinder:
         except Exception as e:  # noqa: BLE001 — recorded, then re-raised unchanged
             self._record_failure(description, e)
             raise
+        # The only free text a model answer carries is the chosen key; every
+        # caller then looks it up in its own table, so a key that is not there
+        # is already dropped. Scrubbing it here, at the one seam model output
+        # crosses, keeps a tripwire marker from ever reaching a log or a reason.
+        for answer in decision.answers.values():
+            if answer.choice:
+                answer.choice = scrub_output(answer.choice)
+        return decision
 
     def _record_failure(self, description: str, error: Exception) -> None:
         """Logged here, once, at the boundary: the speculative pool swallows
@@ -826,7 +850,7 @@ class JevBinder:
             labels = {}
             for index, option in enumerate(field.options):
                 key = "opt_{}".format(index)
-                criteria[key] = option.label
+                criteria[key] = _untrusted(option.label)
                 labels[key] = option.label
             criteria["none"] = "No listed option expresses the candidate's answer."
 
@@ -869,7 +893,7 @@ class JevBinder:
             question_id = "theme_{}".format(index)
             ids[question_id] = label
             questions[question_id] = choice(
-                _INSTRUCTIONS.format(label=label), THEME_CRITERIA
+                _INSTRUCTIONS.format(label=_untrusted(label)), THEME_CRITERIA
             )
 
         decision = self._decide(

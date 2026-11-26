@@ -1,0 +1,85 @@
+name: security
+# The three enforcement jobs every repo in the toolkit family runs
+# (security-agents/.github/workflows/ci.yml is the template):
+#   security-tests  pytest tests/security/  — fuzzed parsers, the pinned fetch
+#                   on a scripted origin, the LLM01 corpus on the real prompt
+#   sast            Semgrep: the toolkit's custom rules + registry packs
+#   sca             pip-audit over the pinned runtime requirements
+#
+# The toolkit (security-agents) is a PRIVATE repository, installed from
+# requirements.txt as a git dependency. Give the workflow a fine-grained PAT
+# with read access to that repository as the `GH_PAT` secret; the step below
+# rewrites the https URL so pip can clone it. Without the secret the install
+# step fails, by design — nothing here silently skips.
+#
+# Every `uses:` is pinned to a commit SHA (the tag it came from is in the
+# comment) so a moved tag cannot change what runs here; Dependabot bumps them.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  security-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.9"
+      - name: Allow pip to clone the private toolkit
+        run: git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Security tests
+        run: python -m pytest tests/security/ -q
+
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Check out the toolkit for its Semgrep rules
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: victorzhu443/security-agents
+          ref: v0.1.0
+          token: ${{ secrets.GH_PAT }}
+          path: .security-agents
+      - run: pip install semgrep
+      - name: Semgrep (custom rules + python/secrets/owasp packs)
+        run: >
+          semgrep scan --config .security-agents/semgrep/rules.yml
+          --config p/python --config p/secrets --config p/owasp-top-ten
+          --exclude .security-agents --exclude .venv
+          --error --metrics off .
+
+  sca:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.9"
+      # The private toolkit is not on PyPI, so pip-audit cannot look it up and
+      # --strict would fail on it; it is audited in its own repository's CI.
+      # Everything else in requirements.txt is installed and audited here, so
+      # this job needs no GH_PAT.
+      - name: Install the runtime pins (toolkit excluded)
+        run: |
+          grep -v "security-agents @" requirements.txt > /tmp/runtime.txt
+          pip install pip-audit && pip install -r /tmp/runtime.txt
+      # Accepted risks are ignored by id, with the reason and the expiry here,
+      # never silently. python-dotenv 1.2.1: the advisory's fix (1.2.2) was not
+      # on PyPI when pinned and the vulnerable functions are never called (see
+      # requirements.txt). Remove both --ignore-vuln flags when 1.2.2 is pinned.
+      - name: pip-audit (installed runtime environment)
+        run: >
+          pip-audit --strict --progress-spinner off
+          --ignore-vuln GHSA-mf9w-mj56-hr94 --ignore-vuln PYSEC-2026-2270
