@@ -18,10 +18,11 @@ services:
     name: firstplay-backend
     runtime: python
     plan: free
-    # requirements.txt pins the private security-agents toolkit from GitHub;
-    # the build clones it with TOOLKIT_TOKEN (a fine-grained PAT with read
-    # access to victorzhu443/security-agents — the same one CI uses).
-    buildCommand: git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/" && pip install -r requirements.txt
+    # requirements.txt pins the security-agents toolkit from GitHub. The
+    # repository is public, so the plain install works; if TOOLKIT_TOKEN is
+    # set (only needed should it ever be made private again) the clone uses
+    # it. Guarded so an unset variable never ends up inside the URL.
+    buildCommand: if [ -n "$TOOLKIT_TOKEN" ]; then git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/"; fi; pip install -r requirements.txt
 
     # Migrations run in the start command rather than a preDeployCommand,
     # which is not available on every instance type. `alembic upgrade head`
@@ -45,8 +46,9 @@ services:
       - key: OPENAI_API_KEY
         sync: false
 
-      # Read access to the private security-agents repository, used by the
-      # build command above. Without it the build fails at pip install.
+      # Optional. Read access to the security-agents repository for the build
+      # command above; unnecessary while that repository is public, and the
+      # build works with it unset.
       - key: TOOLKIT_TOKEN
         sync: false
 

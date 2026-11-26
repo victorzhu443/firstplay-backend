@@ -101,14 +101,14 @@ local copy.
   `security-tests`, `sast` and `sca` on every push and PR, with every `uses:`
   pinned to a commit SHA; `.github/dependabot.yml` bumps pip and actions weekly.
   Jobs run on Python 3.11, matching `render.yaml`'s `PYTHON_VERSION`. The
-  toolkit is a private repository, so `security-tests` and `sast` need a
-  fine-grained PAT with read access to `security-agents` as the
-  **`TOOLKIT_TOKEN`** secret — without it the install step fails, by design.
-  `sca` installs the public pins only and needs no token. **Render:** the build
-  command rewrites the GitHub URL with the same token, read from a
-  **`TOOLKIT_TOKEN`** environment variable declared in `render.yaml`
-  (`sync: false`); set it in the dashboard before the next deploy or the build
-  fails at `pip install`. Frontend:
+  toolkit is a **public** repository, so every job installs it anonymously
+  from the git pin; `sca` installs the PyPI pins only (the toolkit is audited
+  in its own CI). An optional **`TOOLKIT_TOKEN`** secret is honored by
+  `security-tests` and `sast` only if it is set — the provision for the
+  repository ever being made private again. **Render:** the build command
+  installs the same pin anonymously; it uses a `TOOLKIT_TOKEN` environment
+  variable (declared in `render.yaml`, `sync: false`) only when one is set, and
+  is guarded so an unset variable never reaches the URL. Frontend:
   `firstplay-frontend/.github/workflows/test.yml` actions pinned to SHAs, plus an
   `npm audit --audit-level=high` job and `.github/dependabot.yml` (npm + actions,
   weekly), in
@@ -194,10 +194,10 @@ hard-depends on the toolkit.
 4. ~~SHA-1 on the four cache/fingerprint sites~~ — **DONE** (RC-9).
 5. ~~Pin GitHub Action tags to commit SHAs in the frontend workflow~~ — **DONE**
    (frontend PR #6).
-6. **Set `TOOLKIT_TOKEN`** — as a repository secret on `firstplay-backend` (the
-   `security-tests` and `sast` jobs install the private toolkit with it) and as
-   an environment variable on the Render service (the build command uses it).
-   Until then those two jobs, and the next production build, fail at install.
+6. `TOOLKIT_TOKEN` is **optional** (the toolkit is public): nothing needs to be
+   set for CI or the Render build. Only if `security-agents` is made private
+   again, add a fine-grained read PAT as the `TOOLKIT_TOKEN` repository secret
+   and as a Render environment variable; both install paths pick it up.
 7. **Burp Suite** pass against the local FastAPI app (manual;
    `../security-agents/runbooks/burp-suite.md`) — not automated here.
 8. **Dependency bumps, in their own PR.** `pip-audit` over the installed
