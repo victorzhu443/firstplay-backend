@@ -6,6 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from app.llm_client import get_llm, invoke_with_retry
 from app.schemas import ResumeParsed, JobParsed, ImprovedResumeParsed
+from app.security import DIRECTIVE, harden_untrusted, scrub_model
 
 # Low, for consistency, but not zero: rewriting needs some latitude.
 # Retries escalate from here.
@@ -40,7 +41,9 @@ resume_improvement_prompt = ChatPromptTemplate.from_messages([
 ❌ Bad: "Built a web application"
 ✅ Good: "Architected full-stack e-commerce platform with React and Node.js, processing $100K+ in monthly transactions with 99.9% uptime"
 
-{format_instructions}"""),
+{format_instructions}
+
+""" + DIRECTIVE),
     ("user", """**Original Resume:**
 {resume_data}
 
@@ -54,7 +57,7 @@ Skills candidate has: {overlapping_skills}
 Skills candidate lacks: {missing_skills}
 
 Please rewrite this resume to be highly tailored for this job. Focus on:
-1. Highlighting the {overlapping_skills} the candidate already has
+1. Highlighting the skills listed above that the candidate already has
 2. Using Jake's template format for all bullets (action verb + tech + metric)
 3. Making achievements quantifiable and impactful
 4. Prioritizing job-required skills""")
@@ -112,16 +115,20 @@ def improve_resume(
         gap_analysis.get("missing_preferred_skills", [])
     )
     
-    return invoke_with_retry(
+    # The job fields are what the parser extracted from a scraped posting,
+    # so they are fenced where they enter this prompt (second-order: the
+    # model holds no tools and its output is schema-validated, but a posting
+    # must not be able to steer the rewrite either).
+    return scrub_model(invoke_with_retry(
         create_resume_improvement_chain,
         {
             "resume_data": resume_data,
-            "job_title": job_title,
-            "required_skills": required_skills,
-            "preferred_skills": preferred_skills,
-            "overlapping_skills": overlapping_skills,
-            "missing_skills": missing_skills,
+            "job_title": harden_untrusted(job_title),
+            "required_skills": harden_untrusted(required_skills),
+            "preferred_skills": harden_untrusted(preferred_skills),
+            "overlapping_skills": harden_untrusted(overlapping_skills),
+            "missing_skills": harden_untrusted(missing_skills),
         },
         description="Failed to improve resume",
         base_temperature=IMPROVEMENT_TEMPERATURE,
-    )
+    ))

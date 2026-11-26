@@ -22,7 +22,9 @@ def engine_fingerprint() -> str:
     import hashlib
     import os
 
-    digest = hashlib.sha1()
+    # A fingerprint, not a signature: SHA-1 is kept so cached plans keyed
+    # on it stay valid, and marked as non-security use.
+    digest = hashlib.sha1(usedforsecurity=False)  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
     here = os.path.dirname(__file__)
     for name in sorted(os.listdir(here)):
         if name.endswith(".py"):

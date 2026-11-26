@@ -7,16 +7,18 @@ sqlalchemy==2.0.36
 alembic==1.14.0
 psycopg2-binary==2.9.10
 pdfplumber==0.11.4
+# >=0.27: secprim.safe_fetch pins the connection to the validated address and
+# needs the `sni_hostname` request extension so TLS still verifies the hostname.
 httpx==0.28.0
 beautifulsoup4==4.12.3
 python-multipart==0.0.20
-# 1.0.1 carried GHSA-mf9w-mj56-hr94 / PYSEC-2026-2270 (symlink following in
-# set_key/unset_key). The advisory's fix version, 1.2.2, was not on PyPI on
-# 2026-10-12 (latest 1.2.1), so this pins the newest release, which is also
-# what the shared venv already runs. The app calls load_dotenv only; the
-# vulnerable functions are never reached. Re-check with
-# `pip index versions python-dotenv` and move to 1.2.2 when it ships.
-python-dotenv==1.2.1
+# 1.2.2 fixes GHSA-mf9w-mj56-hr94 / PYSEC-2026-2270 (symlink following in
+# set_key/unset_key) and requires Python >= 3.10, which is what production
+# (render.yaml: 3.11.9) and CI run. The 3.9 development venv keeps 1.2.1; the
+# app calls load_dotenv only, so the vulnerable functions are never reached
+# there either.
+python-dotenv==1.2.2; python_version >= "3.10"
+python-dotenv==1.2.1; python_version < "3.10"
 langchain==0.3.12
 langchain-openai==0.2.10
 langchain-community==0.3.11
@@ -27,3 +29,10 @@ openai==1.57.2
 # needs cohere<5.16: later SDKs removed types it imports.
 langchain-cohere==0.4.4
 cohere==5.15.0
+# Shared defensive primitives (secprim: boundary validators, pinned fetch;
+# promptinject: prompt hardening and the LLM01 corpus). The repository is
+# public, so this pin installs anonymously; CI and the Render build honor an
+# optional TOOLKIT_TOKEN only if it is ever made private again (see
+# .github/workflows/security.yml). Locally the sibling checkout is installed
+# editable instead: ./.venv/bin/python -m pip install -e ../../security-agents
+security-agents @ git+https://github.com/victorzhu443/security-agents@v0.1.1

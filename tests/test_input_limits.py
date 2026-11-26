@@ -7,8 +7,6 @@ exhaust a worker. raw_html additionally stored every scraped page forever.
 """
 import io
 
-from unittest.mock import AsyncMock, Mock, patch
-
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -52,65 +50,42 @@ def test_normal_sized_pdf_is_not_rejected_for_size():
 
 # --- job page fetching ------------------------------------------------------
 
-def _mock_response(body: bytes, declared_length=None):
-    response = AsyncMock()
-    response.text = body.decode(errors="ignore")
-    response.content = body
-    response.status_code = 200
-    response.is_redirect = False
-    response.raise_for_status = Mock()
-    length = declared_length if declared_length is not None else str(len(body))
-    response.headers = {"content-length": length} if length is not None else {}
-    return response
+def test_page_over_the_cap_is_rejected(monkeypatch):
+    """A body larger than MAX_HTML_BYTES answers 413. The cap counts bytes
+    as they arrive, so it holds whatever content-length claims."""
+    from tests import fetch_fakes
 
+    body = b"<html>" + b"x" * (MAX_HTML_BYTES + 1) + b"</html>"
+    fetch_fakes.install(monkeypatch, fetch_fakes.html(body))
 
-def _patch_client(response):
-    instance = AsyncMock()
-    instance.get = AsyncMock(return_value=response)
-    client_mock = patch("app.routers.job.httpx.AsyncClient")
-    started = client_mock.start()
-    started.return_value.__aenter__.return_value = instance
-    return client_mock
-
-
-def test_page_rejected_on_declared_content_length():
-    """Rejected before response.text decodes the whole body into memory."""
-    response = _mock_response(b"<html>ok</html>", declared_length=str(MAX_HTML_BYTES + 1))
-    patcher = _patch_client(response)
-    try:
-        result = client.post("/api/job/url", json={"url": "https://example.com/job"})
-    finally:
-        patcher.stop()
+    result = client.post("/api/job/url", json={"url": "https://example.com/job"})
 
     assert result.status_code == 413
     assert "too large" in result.json()["detail"].lower()
 
 
-def test_page_rejected_when_content_length_understates_the_body():
+def test_page_rejected_when_content_length_understates_the_body(monkeypatch):
     """Servers may omit or lie about content-length, so measure it too."""
+    from tests import fetch_fakes
+
     body = b"<html>" + b"x" * (MAX_HTML_BYTES + 1) + b"</html>"
-    response = _mock_response(body, declared_length=None)
-    patcher = _patch_client(response)
-    try:
-        result = client.post("/api/job/url", json={"url": "https://example.com/job"})
-    finally:
-        patcher.stop()
+    fetch_fakes.install(monkeypatch, fetch_fakes.html(body, headers={"content-length": "15"}))
+
+    result = client.post("/api/job/url", json={"url": "https://example.com/job"})
 
     assert result.status_code == 413
 
 
-def test_stored_html_is_capped():
+def test_stored_html_is_capped(monkeypatch):
     """raw_html is kept only for debugging extraction, so a prefix suffices."""
+    from tests import fetch_fakes
+
     body = b"<html><body>" + b"jobtext " * 20000 + b"</body></html>"
     assert len(body) > MAX_STORED_HTML_BYTES
     assert len(body) < MAX_HTML_BYTES
 
-    response = _mock_response(body)
-    patcher = _patch_client(response)
-    try:
-        result = client.post("/api/job/url", json={"url": "https://example.com/job"})
-    finally:
-        patcher.stop()
+    fetch_fakes.install(monkeypatch, fetch_fakes.html(body))
+    result = client.post("/api/job/url", json={"url": "https://example.com/job"})
 
     assert result.status_code == 200
 

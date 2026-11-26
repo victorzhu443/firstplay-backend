@@ -5,6 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from app.llm_client import get_llm, invoke_with_retry
 from app.schemas import JobParsed
+from app.security import DIRECTIVE, harden_untrusted, scrub_model
 
 # Extraction should be deterministic; retries escalate from here.
 PARSER_TEMPERATURE = 0.0
@@ -46,7 +47,9 @@ portfolio project.
 
 If information is not present, use empty lists.
 
-{format_instructions}"""),
+{format_instructions}
+
+""" + DIRECTIVE),
     ("user", """Parse the following job description:
 
 {job_text}""")
@@ -87,9 +90,12 @@ def parse_jd_text(job_text: str) -> JobParsed:
     Raises:
         LLMError: If parsing fails; see app.exceptions for the subtypes
     """
-    return invoke_with_retry(
+    # The posting is scraped from a page the applicant did not write. It is
+    # fenced and neutralized here, the one place it enters the prompt, and the
+    # system message above tells the model that fenced text is data.
+    return scrub_model(invoke_with_retry(
         create_job_parsing_chain,
-        {"job_text": job_text},
+        {"job_text": harden_untrusted(job_text)},
         description="Failed to parse job description",
         base_temperature=PARSER_TEMPERATURE,
-    )
+    ))

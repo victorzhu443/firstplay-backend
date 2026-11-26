@@ -19,38 +19,36 @@ reconcile on field name, which is stable in both.
 """
 from typing import Any, Dict, List, Optional
 
+from secprim import MalformedInput, as_dict, as_list
+
 from app.autofill.classify import classify
 from app.autofill.schema import FieldClass, FieldKind, FieldOption, FormField, FormSchema
 from app.autofill.themes import country_in_text
 
+#: An ATS payload that is JSON but not the shape the adapter reads.
+#:
+#: Raised with the path of the offending node (`form.questions[2].fields`)
+#: so the router can answer 400 and name it. Before this, eight such shapes
+#: reached `.get` on a string and came back as 500s with a traceback in the
+#: log (audit 2026-10-12, F11; probe p14). It is the shared boundary type
+#: from `secprim`, kept under this name so the Ashby adapter and the router
+#: keep importing it from here; `app.main` maps the type to 400 once.
+MalformedPayload = MalformedInput
 
-class MalformedPayload(ValueError):
-    """An ATS payload that is JSON but not the shape the adapter reads.
 
-    Raised with the path of the offending node (`form.questions[2].fields`)
-    so the router can answer 400 and name it. Before this, eight such shapes
-    reached `.get` on a string and came back as 500s with a traceback in
-    the log (audit 2026-10-12, F11; probe p14). Shared with the Ashby
-    adapter, which is why it lives at module level here.
-    """
+def _opt_str(value: Any) -> Optional[str]:
+    """A scalar as a string, None kept as None."""
+    return None if value is None else str(value)
 
 
 def _as_list(value: Any, path: str) -> List[Any]:
     """`value` as a list; None is empty; anything else is malformed."""
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    raise MalformedPayload("{}: expected a list, got {}".format(path, type(value).__name__))
+    return as_list(value, path, optional=True)
 
 
 def _as_dict(value: Any, path: str) -> Dict[str, Any]:
     """`value` as a dict; None is empty; anything else is malformed."""
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return value
-    raise MalformedPayload("{}: expected an object, got {}".format(path, type(value).__name__))
+    return as_dict(value, path, optional=True)
 
 #: Observed across 40 live postings; no other type appeared. `multi_value_
 #: multi_select` is included from the documented vocabulary though it did not
@@ -249,8 +247,8 @@ def _gdpr_fields(payload: Dict[str, Any]) -> List[FormField]:
     consent (privacy for the first, its own bucket for the second).
     """
     fields: List[FormField] = []
-    company = (payload.get("company_name") or "the company").strip()
-    for block in payload.get("data_compliance") or []:
+    company = str(payload.get("company_name") or "the company").strip()
+    for block in _as_list(payload.get("data_compliance"), "form.data_compliance"):
         if not isinstance(block, dict) or block.get("type") != "gdpr":
             continue
         if block.get("requires_processing_consent"):
@@ -356,6 +354,7 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
     """
     fields: List[FormField] = []
 
+    payload = _as_dict(payload, "form")
     for index, question in enumerate(_as_list(payload.get("questions"), "form.questions")):
         fields.extend(_fields_from_question(question, from_compliance_block=False,
                                             path="form.questions[{}]".format(index)))
@@ -385,9 +384,11 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
         source="greenhouse_api",
         ats="greenhouse",
         posting_id=str(payload.get("id", "")),
-        company=payload.get("company_name") or board,
-        title=payload.get("title"),
-        apply_url=payload.get("absolute_url"),
+        # str()-coerced: the payload is untrusted, and a non-string scalar
+        # here would be a pydantic error (a 500), not a MalformedPayload.
+        company=_opt_str(payload.get("company_name") or board),
+        title=_opt_str(payload.get("title")),
+        apply_url=_opt_str(payload.get("absolute_url")),
         remote=_is_remote(payload),
         country=country_in_text(_location_text(payload)),
         fields=fields,

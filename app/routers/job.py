@@ -1,7 +1,7 @@
 from app.chains.job_parser import parse_jd_text
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from app.db import get_db
 from app.rate_limit import ingest_limit, llm_limit
 from app.models import JobDescription
@@ -9,6 +9,8 @@ import httpx
 import ipaddress
 import socket
 from bs4 import BeautifulSoup
+from secprim import MalformedInput, TooLarge
+from secprim.safe_fetch import TooManyRedirects, UnsafeDestination, safe_fetch
 from starlette.concurrency import run_in_threadpool
 from typing import Optional
 from urllib.parse import urlparse
@@ -29,12 +31,24 @@ MAX_STORED_HTML_BYTES = 64 * 1024
 # cloud metadata service on 169.254.169.254 that hands out credentials.
 MAX_REDIRECTS = 5
 
+# A pasted job description has a floor (50 chars) but had no ceiling, and the
+# endpoint is outside the body-size middleware. Twenty times the longest real
+# posting in the corpus is still far below this.
+MAX_MANUAL_JD_CHARS = 200_000
+
+# The two seams the fetch has to the outside world, kept as module attributes
+# so the test suite can run the real fetch path offline: a getaddrinfo-
+# compatible resolver and an httpx transport (None means the default one).
+# `safe_fetch` and the pre-check below both read these at call time.
+RESOLVER = socket.getaddrinfo
+TRANSPORT = None
+
 
 def _resolved_addresses(hostname: str):
     """Every address `hostname` resolves to, as ip_address objects."""
     try:
-        infos = socket.getaddrinfo(hostname, None)
-    except socket.gaierror as e:
+        infos = RESOLVER(hostname, None)
+    except (socket.gaierror, OSError) as e:
         raise HTTPException(
             status_code=400, detail=f"Could not resolve host: {hostname}"
         ) from e
@@ -46,14 +60,13 @@ def assert_public_url(url: str) -> None:
     """
     Reject a URL that resolves to anything other than a public address.
 
-    Checked per redirect hop, not once up front: with redirects followed
-    automatically, a public URL that 302s to http://169.254.169.254/ would
-    otherwise reach the metadata service with the check already passed.
-
-    This narrows the hole rather than closing it. Resolution here and
-    connection in httpx are separate lookups, so a DNS entry that changes
-    between them still gets through. Closing that properly means pinning the
-    connection to the address that was validated, or egress controls.
+    This is the fast pre-check on the submitted URL, so the common mistake
+    (a localhost or intranet link) gets a specific message. It is not what
+    keeps the fetch safe: resolution here and connection in the HTTP client
+    would be separate lookups, and a DNS answer that changes between them
+    would get through. The fetch itself goes through `secprim.safe_fetch`,
+    which resolves once, connects to the address it validated, and repeats
+    that check on every redirect hop.
 
     Args:
         url: The absolute URL about to be fetched
@@ -93,91 +106,93 @@ class JobUrlRequest(BaseModel):
         
         return v
 
+def _fetch_pinned(url: str, timeout: float):
+    """The blocking fetch. Resolves once, connects to the validated address
+    with the real Host header and SNI, re-checks each redirect hop, and reads
+    the body under MAX_HTML_BYTES. Runs in the threadpool from the handler."""
+    return safe_fetch(
+        url,
+        max_bytes=MAX_HTML_BYTES,
+        max_redirects=MAX_REDIRECTS,
+        timeout=timeout,
+        resolver=RESOLVER,
+        transport=TRANSPORT,
+    )
+
+
 async def fetch_html(url: str, timeout: int = 10) -> str:
     """
-    Fetch HTML content from a URL using httpx.
-    
+    Fetch HTML content from a URL.
+
+    The connection is pinned to the address that was validated (see
+    `_fetch_pinned`), which is what closes the gap between checking a host
+    and connecting to it. Failures map to the same statuses as before:
+    400 for a destination the fetcher must not reach, 413 for an oversized
+    body, 502 for a broken redirect chain, 504 for a timeout, and the
+    upstream status for an HTTP error.
+
     Args:
         url: The URL to fetch
         timeout: Request timeout in seconds
-    
+
     Returns:
         str: HTML content
-    
+
     Raises:
         HTTPException: If fetch fails
     """
+    # The pre-check gives the common case (a link into localhost or the
+    # intranet) its specific message before any connection is attempted.
+    assert_public_url(url)
+
     try:
-        # Redirects are followed by hand so every hop can be checked. With
-        # follow_redirects=True, a public URL that 302s to an internal address
-        # would be fetched with the check already passed.
-        async with httpx.AsyncClient(follow_redirects=False) as client:
-            current = url
-
-            for _ in range(MAX_REDIRECTS + 1):
-                assert_public_url(current)
-
-                response = await client.get(current, timeout=timeout)
-
-                if response.is_redirect:
-                    location = response.headers.get("location")
-                    if not location:
-                        raise HTTPException(
-                            status_code=502,
-                            detail="Job posting redirected without a destination"
-                        )
-                    # Relative Locations are legal, so resolve against the
-                    # URL that issued them before re-checking.
-                    current = str(response.url.join(location))
-                    continue
-
-                response.raise_for_status()
-
-                # Reject an oversized body before touching response.text,
-                # which would decode the whole thing into memory first.
-                declared = response.headers.get("content-length")
-                if declared and int(declared) > MAX_HTML_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=(
-                            f"Job posting page is too large "
-                            f"({int(declared) // 1024} KB). "
-                            f"Maximum is {MAX_HTML_BYTES // 1024} KB."
-                        )
-                    )
-
-                # Servers may omit or understate content-length, so cap
-                # regardless.
-                if len(response.content) > MAX_HTML_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"Job posting page exceeds {MAX_HTML_BYTES // 1024} KB."
-                    )
-
-                return response.text
-
+        # safe_fetch is synchronous; the handler stays async, so the blocking
+        # fetch is pushed to the threadpool the same way the parse is.
+        response = await run_in_threadpool(_fetch_pinned, url, timeout)
+    except UnsafeDestination as e:
+        if "without a Location" in str(e):
             raise HTTPException(
                 status_code=502,
-                detail=f"Job posting exceeded {MAX_REDIRECTS} redirects"
+                detail="Job posting redirected without a destination"
             )
-    except HTTPException:
-        # Ours, raised above — must not be recaught and relabelled below.
-        raise
+        # A redirect hop that resolved to a non-public address.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job posting URL must point to a public address; {e}.",
+        )
+    except TooManyRedirects:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Job posting exceeded {MAX_REDIRECTS} redirects"
+        )
+    except TooLarge:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Job posting page is too large. "
+                f"Maximum is {MAX_HTML_BYTES // 1024} KB."
+            )
+        )
+    except MalformedInput as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except httpx.TimeoutException:
         raise HTTPException(
             status_code=504,
             detail="Request timed out while fetching the job posting"
-        )
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Failed to fetch job posting: HTTP {e.response.status_code}"
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching job posting: {str(e)}"
         )
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Failed to fetch job posting: HTTP {response.status_code}"
+        )
+
+    return response.text
 
 def extract_job_text(html: str) -> str:
     """
@@ -254,7 +269,7 @@ async def submit_job_url(
     }
 class ManualJdRequest(BaseModel):
     """Request model for manual job description submission"""
-    jd_text: str
+    jd_text: str = Field(max_length=MAX_MANUAL_JD_CHARS)
     
     @field_validator('jd_text')
     @classmethod

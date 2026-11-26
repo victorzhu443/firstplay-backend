@@ -1,0 +1,87 @@
+name: security
+# The three enforcement jobs every repo in the toolkit family runs
+# (security-agents/.github/workflows/ci.yml is the template):
+#   security-tests  pytest tests/security/  — fuzzed parsers, the pinned fetch
+#                   on a scripted origin, the LLM01 corpus on the real prompt
+#   sast            Semgrep: the toolkit's custom rules + registry packs
+#   sca             pip-audit over the pinned runtime requirements
+#
+# The toolkit (security-agents) is a public repository, installed from
+# requirements.txt as a git dependency, so every job here works with no
+# secret at all. `TOOLKIT_TOKEN` is optional: if the repository is ever made
+# private again, set a fine-grained PAT with read access to it as that secret
+# (the same variable the Render build reads) and the install steps use it;
+# when it is empty they clone anonymously.
+#
+# Every `uses:` is pinned to a commit SHA (the tag it came from is in the
+# comment) so a moved tag cannot change what runs here; Dependabot bumps them.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  security-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"  # matches render.yaml PYTHON_VERSION
+      - name: Use TOOLKIT_TOKEN for the toolkit clone, if one is set
+        run: |
+          if [ -n "$TOOLKIT_TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+        env:
+          TOOLKIT_TOKEN: ${{ secrets.TOOLKIT_TOKEN }}
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Security tests
+        run: python -m pytest tests/security/ -q
+
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Check out the toolkit for its Semgrep rules
+        # Public repository: the job's own token is enough. TOOLKIT_TOKEN, if
+        # set, takes precedence so this keeps working if it goes private.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: victorzhu443/security-agents
+          ref: v0.1.1
+          token: ${{ secrets.TOOLKIT_TOKEN || github.token }}
+          path: .security-agents
+      - run: pip install semgrep
+      - name: Semgrep (custom rules + python/secrets/owasp packs)
+        run: >
+          semgrep scan --config .security-agents/semgrep/rules.yml
+          --config p/python --config p/secrets --config p/owasp-top-ten
+          --exclude .security-agents --exclude .venv
+          --error --metrics off .
+
+  sca:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"  # matches render.yaml PYTHON_VERSION
+      # The toolkit is not on PyPI, so pip-audit cannot look it up and
+      # --strict would fail on it; it is audited in its own repository's CI.
+      # Everything else in requirements.txt is installed and audited here.
+      - name: Install the runtime pins (toolkit excluded)
+        run: |
+          grep -v "security-agents @" requirements.txt > /tmp/runtime.txt
+          pip install pip-audit && pip install -r /tmp/runtime.txt
+      # No accepted risks today. If one is ever needed it goes here as an
+      # --ignore-vuln <id> with the reason and an expiry date in the comment,
+      # never silently.
+      - name: pip-audit (installed runtime environment)
+        run: pip-audit --strict --progress-spinner off
