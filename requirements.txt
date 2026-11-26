@@ -26,7 +26,7 @@ beautifulsoup4==4.12.3
 python-multipart==0.0.31
 # 1.2.2 fixes GHSA-mf9w-mj56-hr94 / PYSEC-2026-2270 (symlink following in
 # set_key/unset_key; the app calls load_dotenv only).
-python-dotenv==1.2.2
+python-dotenv==1.2.4
 # The app imports langchain_core, langchain_openai, langchain_cohere and
 # langgraph only; the `langchain` and `langchain-community` meta-packages
 # were declared but never imported and are no longer pinned here (their
