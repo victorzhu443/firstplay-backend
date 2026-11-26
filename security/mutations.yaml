@@ -1,0 +1,145 @@
+# Mutation catalogue for the security regression net.
+#
+# One entry per security bug fixed in this repo (SECURITY.md, root causes RC-1 …
+# RC-9 in ../security-agents). Each `find` -> `replace` reintroduces the exact
+# pre-fix behaviour — never a syntax error — and the toolkit's runner
+# (`python -m evals.mutate --repo <this repo>`) applies it in a throwaway
+# worktree and runs the command below. A mutation that *survives* is a gap in
+# tests/security/: cover it with a test, never by weakening the mutation.
+#
+# Property numbers follow the root-cause numbering: P1 boundary validation,
+# P4 egress (pin, per-hop recheck, body cap), P8 LLM separation, P9 defaults.
+# Not mutable here: P7 (supply chain is pins + CI, not code under test).
+
+test: ".venv/bin/python -m pytest tests/security -q -x -p no:cacheprovider"
+
+mutations:
+  # ---- P1: untrusted input validated at the boundary (RC-1) -----------------
+  - id: P1-ashby-dom-control-node-unchecked
+    property: P1
+    description: >-
+      parse_ashby_dom trusts the shape of each DOM control node again (the gap
+      that made a scalar node raise AttributeError -> 500 instead of
+      MalformedPayload -> 400; its sibling parse_ashby_posting was hardened in
+      F11 and the fix was never back-ported until 2026-11-25).
+    file: app/autofill/ashby.py
+    find: |
+      controls = [
+              _as_dict(c, "payload.controls[{}]".format(i))
+              for i, c in enumerate(raw_controls)
+          ]
+    replace: |
+      controls = [
+              c
+              for i, c in enumerate(raw_controls)
+          ]
+
+  - id: P1-ashby-dom-label-not-coerced
+    property: P1
+    description: >-
+      A non-string `label` scalar in the DOM extract reaches .strip() again
+      (AttributeError -> 500 instead of being coerced).
+    file: app/autofill/ashby.py
+    find: 'label = str(control.get("label") or "").strip()'
+    replace: 'label = (control.get("label") or "").strip()'
+
+  - id: P1-malformed-input-not-mapped-to-400
+    property: P1
+    description: >-
+      The one global MalformedInput -> 400 handler is gone (registered for an
+      exception nothing raises instead), so a boundary validator firing in a
+      router without its own `except MalformedPayload` is a 500 again.
+    file: app/main.py
+    find: "@app.exception_handler(MalformedInput)"
+    replace: "@app.exception_handler(ZeroDivisionError)"
+
+  # ---- P4 (cost): the fetched body is read under a cap (RC-2 #6, RC-4) --------
+  - id: P4-fetch-body-uncapped
+    property: P4
+    description: >-
+      The fetched job page is no longer read under MAX_HTML_BYTES — the cap is
+      pushed to a terabyte, so an arbitrarily large body streams into memory.
+    file: app/routers/job.py
+    find: "max_bytes=MAX_HTML_BYTES,"
+    replace: "max_bytes=1 << 40,"
+
+  # ---- P4: outbound fetch is egress-validated and connection-pinned (RC-4) ---
+  - id: P4-fetch-unpinned-client-resolves
+    property: P4
+    description: >-
+      /api/job/url goes back to validating the host once and then letting the
+      HTTP client resolve and connect by name with redirects auto-followed —
+      the DNS-rebinding TOCTOU and the unchecked redirect hop.
+    file: app/routers/job.py
+    find: |
+      return safe_fetch(
+              url,
+              max_bytes=MAX_HTML_BYTES,
+              max_redirects=MAX_REDIRECTS,
+              timeout=timeout,
+              resolver=RESOLVER,
+              transport=TRANSPORT,
+          )
+    replace: |
+      with httpx.Client(follow_redirects=True, timeout=timeout, transport=TRANSPORT) as client:
+              return client.get(url)
+
+  # ---- P8: untrusted text is data, not instructions (RC-8 / LLM01) -----------
+  - id: P8-job-text-unhardened
+    property: P8
+    description: >-
+      parse_jd_text binds the raw scraped posting into the {job_text}
+      placeholder again, bypassing the fence + neutralize chokepoint.
+    file: app/chains/job_parser.py
+    find: '{"job_text": harden_untrusted(job_text)},'
+    replace: '{"job_text": job_text},'
+
+  - id: P8-job-system-no-directive
+    property: P8
+    description: >-
+      The job-parsing system message drops the data-boundary directive, so the
+      fences around the posting mean nothing to the model.
+    file: app/chains/job_parser.py
+    find: |
+      """ + DIRECTIVE),
+    replace: |
+      """),
+
+  - id: P8-binder-text-unfenced
+    property: P8
+    description: >-
+      The autofill binder formats labels, options and stored answers into its
+      questions raw again (harden_untrusted unwired at the one place form text
+      enters a prompt).
+    file: app/autofill/jev_binder.py
+    find: 'return harden_untrusted("" if text is None else str(text))'
+    replace: 'return "" if text is None else str(text)'
+
+  - id: P8-binder-choice-unscrubbed
+    property: P8
+    description: >-
+      A model answer's `choice` crosses _decide without scrub_output, so a
+      tripwire marker in model output reaches logs and reasons again.
+    file: app/autofill/jev_binder.py
+    find: "answer.choice = scrub_output(answer.choice)"
+    replace: "answer.choice = str(answer.choice)"
+
+  - id: P8-chain-output-unscrubbed
+    property: P8
+    description: >-
+      parse_jd_text returns the model's JobParsed without scrub_model, so a
+      marker that survived the prompt side is stored and returned.
+    file: app/chains/job_parser.py
+    find: "return scrub_model(invoke_with_retry("
+    replace: "return (invoke_with_retry("
+
+  # ---- P9: hardening defaults (RC-9) -----------------------------------------
+  - id: P9-sha1-without-usedforsecurity
+    property: P9
+    description: >-
+      The taxonomy fingerprint calls hashlib.sha1() without
+      usedforsecurity=False again — the scanner-tripping default the RC-9 pass
+      removed from all four cache/fingerprint sites.
+    file: app/autofill/__init__.py
+    find: "digest = hashlib.sha1(usedforsecurity=False)"
+    replace: "digest = hashlib.sha1()"
