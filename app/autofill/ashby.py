@@ -32,6 +32,7 @@ from collections import OrderedDict
 from typing import Any, Dict, List
 
 from app.autofill.classify import classify
+from app.autofill.greenhouse import MalformedPayload, _as_dict, _as_list
 from app.autofill.schema import FieldKind, FieldOption, FormField, FormSchema
 
 _KIND_BY_CONTROL = {
@@ -49,8 +50,11 @@ _KIND_BY_CONTROL = {
 
 
 def _kind(control: Dict[str, Any]) -> FieldKind:
-    tag = (control.get("tag") or "").lower()
-    control_type = (control.get("type") or "").lower()
+    # str()-coerce: the DOM extract is untrusted, so a control may carry a
+    # non-string tag/type (e.g. {"type": 1}); `.lower()` on an int would be an
+    # undeclared TypeError (HTTP 500) instead of a clean 400.
+    tag = str(control.get("tag") or "").lower()
+    control_type = str(control.get("type") or "").lower()
 
     if tag == "textarea":
         return FieldKind.LONG_TEXT
@@ -82,8 +86,9 @@ def _group_controls(controls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
 
     for control in controls:
-        control_type = (control.get("type") or "").lower()
-        name = control.get("name") or ""
+        control_type = str(control.get("type") or "").lower()
+        # str()-coerce so a non-string name can't become an unhashable dict key.
+        name = str(control.get("name") or "")
 
         if control_type != "radio" or not name:
             output.append(control)
@@ -137,16 +142,29 @@ def parse_ashby_dom(payload: Dict[str, Any]) -> FormSchema:
     """
     fields: List[FormField] = []
 
-    for control in _group_controls(payload.get("controls") or []):
-        label = (control.get("label") or "").strip()
+    # The payload is an untrusted DOM extract posted by the extension. Validate
+    # its shape the way parse_ashby_posting does (audit F11): a malformed extract
+    # must degrade to MalformedPayload (a ValueError -> HTTP 400), not an
+    # undeclared AttributeError/TypeError (HTTP 500).
+    payload = _as_dict(payload, "payload")
+    raw_controls = _as_list(payload.get("controls") or [], "payload.controls")
+    controls = [
+        _as_dict(c, "payload.controls[{}]".format(i))
+        for i, c in enumerate(raw_controls)
+    ]
+
+    for control in _group_controls(controls):
+        # str()-coerce label and key: the DOM extract is untrusted, so these may
+        # arrive as non-strings and would otherwise crash `.strip()` / `classify`.
+        label = str(control.get("label") or "").strip()
         kind = _kind(control)
 
         options = [
             FieldOption(label=str(o.get("label", "")), value=str(o.get("value", "")))
-            for o in control.get("options") or []
+            for o in _as_list(control.get("options") or [], "control.options")
         ]
 
-        key = control.get("name") or control.get("id") or ""
+        key = str(control.get("name") or control.get("id") or "")
 
         fields.append(
             FormField(
