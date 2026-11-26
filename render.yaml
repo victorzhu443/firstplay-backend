@@ -18,7 +18,10 @@ services:
     name: firstplay-backend
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    # requirements.txt pins the private security-agents toolkit from GitHub;
+    # the build clones it with TOOLKIT_TOKEN (a fine-grained PAT with read
+    # access to victorzhu443/security-agents — the same one CI uses).
+    buildCommand: git config --global url."https://x-access-token:${TOOLKIT_TOKEN}@github.com/".insteadOf "https://github.com/" && pip install -r requirements.txt
 
     # Migrations run in the start command rather than a preDeployCommand,
     # which is not available on every instance type. `alembic upgrade head`
@@ -40,6 +43,11 @@ services:
         value: 3.11.9
 
       - key: OPENAI_API_KEY
+        sync: false
+
+      # Read access to the private security-agents repository, used by the
+      # build command above. Without it the build fails at pip install.
+      - key: TOOLKIT_TOKEN
         sync: false
 
       # Set LLM_PROVIDER=cohere and COHERE_API_KEY in the dashboard to serve

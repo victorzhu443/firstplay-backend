@@ -19,8 +19,10 @@ are each their own git repo.
 
 | Asset | Untrusted channel | Risk | State |
 |---|---|---|---|
-| job extraction (`JobParsed`) | scraped posting text → `app/chains/job_parser.py` `{job_text}` prompt | injected instructions steer skills/qualifications extraction (LLM01) | **FIXED** — hardened at the sink, directive in the system message |
-| autofilled answers | field labels / option text / stored answers → `app/autofill/jev_binder.py` questions | hostile form wording coerces an answer the applicant never gave (LLM01) | **FIXED** — fenced where formatted; model choice scrubbed |
+| job extraction (`JobParsed`) | scraped posting text → `app/chains/job_parser.py` `{job_text}` prompt | injected instructions steer skills/qualifications extraction (LLM01) | **FIXED** — hardened at the sink, directive in the system message, output scrubbed |
+| resume extraction (`ResumeParsed`) | uploaded PDF text → `app/chains/resume_parser.py` `{resume_text}` prompt | the same class, on a document the applicant did not necessarily author (LLM01) | **FIXED** — same treatment as `job_parser` |
+| autofilled answers | field labels / option text / stored answers → `app/autofill/jev_binder.py` questions | hostile form wording coerces an answer the applicant never gave (LLM01) | **FIXED** — fenced where formatted; every instruction opens with the directive; model choice scrubbed |
+| improved resume / project plan (second-order) | parser output of the scraped posting (`job_title`, skill lists) → `resume_improver.py`, `project_generator.py` | posting text that survived extraction steers the rewrite or the plan; the models hold no tools and output is schema-validated, so impact is bounded | **FIXED** — fenced at the format site, directive, output scrubbed |
 | internal network / metadata service | caller-chosen URL → `/api/job/url` fetch | server used as a proxy inward (SSRF, incl. a DNS answer that changes between check and connect) | **FIXED** — pinned fetch via `secprim.safe_fetch` |
 | autofill endpoint uptime | scraped DOM extract → `app/autofill/ashby.py` `parse_ashby_dom` | malformed node crashes the worker (500) instead of a clean 400 | **FIXED** (2026-11-25) |
 | bucket matching | stored answer / option label → `app/autofill/buckets.py` parsers | crash/hang on hostile numeric/date text | fuzzed; degrades safely |
@@ -54,18 +56,41 @@ local copy.
   globally; the per-router `except MalformedPayload` blocks stay for their
   context. **Parser registry rule:** `tests/security/test_fuzz_parsers.py` is the
   list of parsers that touch untrusted input — a new one is added there (and
-  must pass `assert_robust`) before it is merged.
+  must pass `assert_robust`) before it is merged. The registry now fuzzes each
+  adapter with a **structural** strategy (nodes of the wrong type, not only
+  hostile strings), with `MalformedPayload` the only allowed exception, and
+  registers `greenhouse.parse_greenhouse_job` (the primary ATS adapter) and
+  `job.extract_job_text` (BeautifulSoup over the fetched page). That run found
+  and closed: an Ashby option node given as a bare string reached `.get`; a
+  non-string `company_name` reached `.strip()`; `data_compliance` and the
+  top-level Greenhouse payload were read without a shape check; and non-string
+  `company`/`title`/`apply_url` scalars in either adapter became pydantic errors
+  (a 500) rather than a 400. `POST /api/job/description/manual` gained a ceiling
+  (`MAX_MANUAL_JD_CHARS`, 200 000) to match its floor.
 - **RC-8 — prompt assembly chokepoint (FIXED; closes the "wire the sink
-  wrapper" item).** `parse_jd_text` passes `harden_untrusted(job_text)` into the
-  unchanged LangChain template, whose system message now ends with
-  `promptinject.assemble.DIRECTIVE`. In `jev_binder.py` every label, option and
-  stored answer goes through one helper (`_untrusted`) at the point it is
-  formatted into a question, and every model answer's `choice` goes through
-  `scrub_output` in `_decide`, the single seam model output crosses. Cache
-  signatures and the labels returned to the caller use the raw text, so nothing
-  else changed. `tests/security/test_prompt_assembly.py` binds the LLM01 corpus
-  to the real template (8/8 resisted; the unhardened template is shown to be
-  subverted, so the pass is the hardening) and to the binder's question builders.
+  wrapper" item).** `parse_jd_text` and `parse_resume_text` pass
+  `harden_untrusted(...)` into their unchanged LangChain templates, whose system
+  messages now end with `promptinject.assemble.DIRECTIVE`. In `jev_binder.py`
+  every label, option and stored answer goes through one helper (`_untrusted`) at
+  the point it is formatted into a question; because the Jev payload has no
+  app-controlled system slot, every `_*_INSTRUCTIONS` constant opens with the
+  directive so the fences mean something to the model; every model answer's
+  `choice` goes through `scrub_output` in `_decide`, the single seam model output
+  crosses. Cache signatures and the labels returned to the caller use the raw
+  text, so nothing else changed. **Second-order sinks:** `resume_improver.py` and
+  `project_generator.py` interpolate strings that descend from the parsed posting
+  (`job_title`, required/preferred/missing skills); these models hold no tools
+  and their output is pydantic-validated, so the exposure is bounded, but the
+  values are fenced where they are bound and the system messages carry the
+  directive anyway. **Output side:** each chain returns its result through
+  `app.security.scrub_model` (every string in the pydantic model, nested lists
+  included), so `JobParsed`, `ResumeParsed`, the improved resume and the project
+  plan are scrubbed before they are stored or returned by any router or pipeline
+  node. `tests/security/test_prompt_assembly.py` binds the LLM01 corpus to the
+  real job and resume templates (8/8 each; the unhardened templates are shown to
+  be subverted, so the pass is the hardening), asserts the directive on all five
+  prompts, the fenced bindings in the improver/generator, the scrubbed chain
+  output, and the binder's question builders.
 - **RC-9 — hardening defaults (FIXED).** The four SHA-1 sites are cache keys and
   fingerprints, not signatures; they now declare `usedforsecurity=False` (digests
   unchanged, so stored cache signatures stay valid) with the registry rule
@@ -75,15 +100,26 @@ local copy.
 - **RC-7 — supply chain (FIXED).** `.github/workflows/security.yml` runs
   `security-tests`, `sast` and `sca` on every push and PR, with every `uses:`
   pinned to a commit SHA; `.github/dependabot.yml` bumps pip and actions weekly.
-  The toolkit is a private repository, so the workflow needs a fine-grained PAT
-  with read access to `security-agents` as the **`GH_PAT`** secret — without it
-  the install step fails, by design. Frontend:
-  `firstplay-frontend/.github/workflows/test.yml` actions pinned to SHAs in
+  Jobs run on Python 3.11, matching `render.yaml`'s `PYTHON_VERSION`. The
+  toolkit is a private repository, so `security-tests` and `sast` need a
+  fine-grained PAT with read access to `security-agents` as the
+  **`TOOLKIT_TOKEN`** secret — without it the install step fails, by design.
+  `sca` installs the public pins only and needs no token. **Render:** the build
+  command rewrites the GitHub URL with the same token, read from a
+  **`TOOLKIT_TOKEN`** environment variable declared in `render.yaml`
+  (`sync: false`); set it in the dashboard before the next deploy or the build
+  fails at `pip install`. Frontend:
+  `firstplay-frontend/.github/workflows/test.yml` actions pinned to SHAs, plus an
+  `npm audit --audit-level=high` job and `.github/dependabot.yml` (npm + actions,
+  weekly), in
   [firstplay-frontend PR #6](https://github.com/victorzhu443/firstplay-frontend/pull/6).
 - **Dependencies.** `requirements.txt` pins
   `security-agents @ git+https://github.com/victorzhu443/security-agents@v0.1.0`
-  (locally: `pip install -e ../../security-agents`) and keeps `httpx` at a
-  version with the `sni_hostname` extension the pinned fetch relies on.
+  (locally: `pip install -e ../../security-agents`), keeps `httpx` at a
+  version with the `sni_hostname` extension the pinned fetch relies on, and moves
+  `python-dotenv` to 1.2.2 (the advisory's fix; requires Python ≥ 3.10) under an
+  environment marker, with 1.2.1 kept for the 3.9 development venv. No
+  `--ignore-vuln` remains in the `sca` job.
 
 ### SAST — Semgrep (`semgrep 1.136.0`, custom rules + registry packs)
 
@@ -136,12 +172,15 @@ address.
 
 - `tests/security/test_prompt_injection.py` — the stand-in sink: undefended,
   7/7 attacks land; through `harden_untrusted` + `scrub_output`, 8/8 pass.
-- `tests/security/test_prompt_assembly.py` — the real sink: the actual
-  `job_parsing_prompt` with `job_text` hardened, 8/8 pass; the same template
-  unhardened is subverted; the system message carries `DIRECTIVE`;
-  `parse_jd_text` demonstrably hands the chain the hardened text; the binder's
-  questions carry labels/answers fenced and option criteria fenced while keys
-  stay bare; a tripwire marker in a model choice is scrubbed.
+- `tests/security/test_prompt_assembly.py` — the real sinks: the actual
+  `job_parsing_prompt` and `resume_parsing_prompt` with their text hardened, 8/8
+  each; the same templates unhardened are subverted; all five system messages
+  carry `DIRECTIVE`; `parse_jd_text` / `parse_resume_text` demonstrably hand the
+  chain the hardened text; the improver and generator bind fenced job-derived
+  values; chain output is scrubbed (`scrub_model`); every binder instruction
+  opens with the directive; the binder's questions carry labels/answers fenced
+  and option criteria fenced while keys stay bare; a tripwire marker in a model
+  choice is scrubbed.
 
 `app/security.py` exports `DIRECTIVE`, `harden_untrusted` and `scrub_output`,
 importing from `promptinject` with a self-contained fallback so the app never
@@ -155,19 +194,23 @@ hard-depends on the toolkit.
 4. ~~SHA-1 on the four cache/fingerprint sites~~ — **DONE** (RC-9).
 5. ~~Pin GitHub Action tags to commit SHAs in the frontend workflow~~ — **DONE**
    (frontend PR #6).
-6. **Set the `GH_PAT` secret** on `firstplay-backend` so the `security` workflow
-   can install the private toolkit; until then its three jobs fail at install.
+6. **Set `TOOLKIT_TOKEN`** — as a repository secret on `firstplay-backend` (the
+   `security-tests` and `sast` jobs install the private toolkit with it) and as
+   an environment variable on the Render service (the build command uses it).
+   Until then those two jobs, and the next production build, fail at install.
 7. **Burp Suite** pass against the local FastAPI app (manual;
    `../security-agents/runbooks/burp-suite.md`) — not automated here.
 8. **Dependency bumps, in their own PR.** `pip-audit` over the installed
    runtime set (2026-11-26) reports known advisories against the pinned
    `fastapi`/`starlette` 0.115/0.41, `python-multipart`, `urllib3`, `langchain-*`
-   and transitive `pillow`/`aiohttp` versions. The `sca` job is therefore **red
-   until a bump PR lands** behind the full suite; that PR is deliberately
-   separate from this one (RC-7 edit plan: bumps are isolated behind the tests).
+   and transitive `pillow`/`aiohttp` versions (`python-dotenv` is now clean). The
+   `sca` job is therefore **red until a bump PR lands** behind the full suite;
+   that PR is deliberately separate from this one (RC-7 edit plan: bumps are
+   isolated behind the tests).
 9. Hardening changes the text the model sees for form labels and options (fence
-   tokens, redacted override phrasing). Watch the autofill coverage measurement
-   (`DECISIONS`) for a shift after deploy; the fence is the accepted cost.
+   tokens, redacted override phrasing, the directive at the head of every
+   question). Watch the autofill coverage measurement (`DECISIONS`) for a shift
+   after deploy; the fence and the per-question directive are the accepted cost.
 
 ## Re-run
 
@@ -190,5 +233,7 @@ PATH="$PWD/.venv/bin:$PATH" semgrep scan --config p/javascript --config p/owasp-
 ./.venv/bin/python -m pip install -q pip-audit
 # Locally the editable toolkit checkout is skipped (not on PyPI; audited in its own
 # CI), which --strict would count as a failure, so --strict is CI-only (sca job).
-./.venv/bin/pip-audit --skip-editable --ignore-vuln GHSA-mf9w-mj56-hr94 --ignore-vuln PYSEC-2026-2270
+# The 3.9 venv still carries python-dotenv 1.2.1 (its two advisories); CI and
+# production run 3.11 with 1.2.2.
+./.venv/bin/pip-audit --skip-editable
 ```

@@ -5,6 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from app.llm_client import get_llm, invoke_with_retry
 from app.schemas import ProjectPlanParsed
+from app.security import DIRECTIVE, harden_untrusted, scrub_model
 
 # Deliberately creative: project ideas benefit from variety. Retries escalate
 # from here rather than from 0.0, so the chain keeps its intended character.
@@ -28,7 +29,9 @@ Create 3-5 project ideas that:
 
 Each project should be practical, portfolio-worthy, and teach real-world development skills.
 
-{format_instructions}"""),
+{format_instructions}
+
+""" + DIRECTIVE),
     ("user", """Based on the following skill gap analysis, generate project ideas:
 
 **Skills the student currently has:**
@@ -86,13 +89,15 @@ def generate_projects(gap_analysis: Dict) -> ProjectPlanParsed:
     missing_required = ", ".join(gap_analysis.get("missing_required_skills", [])) or "None"
     missing_preferred = ", ".join(gap_analysis.get("missing_preferred_skills", [])) or "None"
     
-    return invoke_with_retry(
+    # Skill lists descend from the parsed posting; fenced at the format site
+    # (second-order sink, see resume_improver).
+    return scrub_model(invoke_with_retry(
         create_project_generation_chain,
         {
-            "overlapping_skills": overlapping,
-            "missing_required_skills": missing_required,
-            "missing_preferred_skills": missing_preferred,
+            "overlapping_skills": harden_untrusted(overlapping),
+            "missing_required_skills": harden_untrusted(missing_required),
+            "missing_preferred_skills": harden_untrusted(missing_preferred),
         },
         description="Failed to generate projects",
         base_temperature=GENERATION_TEMPERATURE,
-    )
+    ))

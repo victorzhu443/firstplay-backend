@@ -364,3 +364,13 @@ def test_parse_job_no_extracted_text():
     
     assert response.status_code == 400
     assert "no text to parse" in response.json()["detail"].lower()
+
+def test_manual_jd_over_the_cap_is_rejected():
+    """The pasted description had a floor but no ceiling (and the endpoint is
+    outside the body-size middleware); over MAX_MANUAL_JD_CHARS is a 422."""
+    from app.routers.job import MAX_MANUAL_JD_CHARS
+
+    response = client.post("/api/job/description/manual",
+                           json={"jd_text": "x" * (MAX_MANUAL_JD_CHARS + 1)})
+    assert response.status_code == 422
+    assert any("jd_text" in row["loc"] for row in response.json()["detail"])

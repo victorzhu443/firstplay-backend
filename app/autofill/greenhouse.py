@@ -36,6 +36,11 @@ from app.autofill.themes import country_in_text
 MalformedPayload = MalformedInput
 
 
+def _opt_str(value: Any) -> Optional[str]:
+    """A scalar as a string, None kept as None."""
+    return None if value is None else str(value)
+
+
 def _as_list(value: Any, path: str) -> List[Any]:
     """`value` as a list; None is empty; anything else is malformed."""
     return as_list(value, path, optional=True)
@@ -242,8 +247,8 @@ def _gdpr_fields(payload: Dict[str, Any]) -> List[FormField]:
     consent (privacy for the first, its own bucket for the second).
     """
     fields: List[FormField] = []
-    company = (payload.get("company_name") or "the company").strip()
-    for block in payload.get("data_compliance") or []:
+    company = str(payload.get("company_name") or "the company").strip()
+    for block in _as_list(payload.get("data_compliance"), "form.data_compliance"):
         if not isinstance(block, dict) or block.get("type") != "gdpr":
             continue
         if block.get("requires_processing_consent"):
@@ -349,6 +354,7 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
     """
     fields: List[FormField] = []
 
+    payload = _as_dict(payload, "form")
     for index, question in enumerate(_as_list(payload.get("questions"), "form.questions")):
         fields.extend(_fields_from_question(question, from_compliance_block=False,
                                             path="form.questions[{}]".format(index)))
@@ -378,9 +384,11 @@ def parse_greenhouse_job(payload: Dict[str, Any], *, board: Optional[str] = None
         source="greenhouse_api",
         ats="greenhouse",
         posting_id=str(payload.get("id", "")),
-        company=payload.get("company_name") or board,
-        title=payload.get("title"),
-        apply_url=payload.get("absolute_url"),
+        # str()-coerced: the payload is untrusted, and a non-string scalar
+        # here would be a pydantic error (a 500), not a MalformedPayload.
+        company=_opt_str(payload.get("company_name") or board),
+        title=_opt_str(payload.get("title")),
+        apply_url=_opt_str(payload.get("absolute_url")),
         remote=_is_remote(payload),
         country=country_in_text(_location_text(payload)),
         fields=fields,

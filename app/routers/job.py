@@ -1,7 +1,7 @@
 from app.chains.job_parser import parse_jd_text
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from app.db import get_db
 from app.rate_limit import ingest_limit, llm_limit
 from app.models import JobDescription
@@ -30,6 +30,11 @@ MAX_STORED_HTML_BYTES = 64 * 1024
 # proxy into whatever it can reach: localhost, the private network, and the
 # cloud metadata service on 169.254.169.254 that hands out credentials.
 MAX_REDIRECTS = 5
+
+# A pasted job description has a floor (50 chars) but had no ceiling, and the
+# endpoint is outside the body-size middleware. Twenty times the longest real
+# posting in the corpus is still far below this.
+MAX_MANUAL_JD_CHARS = 200_000
 
 # The two seams the fetch has to the outside world, kept as module attributes
 # so the test suite can run the real fetch path offline: a getaddrinfo-
@@ -264,7 +269,7 @@ async def submit_job_url(
     }
 class ManualJdRequest(BaseModel):
     """Request model for manual job description submission"""
-    jd_text: str
+    jd_text: str = Field(max_length=MAX_MANUAL_JD_CHARS)
     
     @field_validator('jd_text')
     @classmethod

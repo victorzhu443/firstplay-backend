@@ -32,7 +32,7 @@ from collections import OrderedDict
 from typing import Any, Dict, List
 
 from app.autofill.classify import classify
-from app.autofill.greenhouse import MalformedPayload, _as_dict, _as_list
+from app.autofill.greenhouse import MalformedPayload, _as_dict, _as_list, _opt_str
 from app.autofill.schema import FieldKind, FieldOption, FormField, FormSchema
 
 _KIND_BY_CONTROL = {
@@ -161,7 +161,10 @@ def parse_ashby_dom(payload: Dict[str, Any]) -> FormSchema:
 
         options = [
             FieldOption(label=str(o.get("label", "")), value=str(o.get("value", "")))
-            for o in _as_list(control.get("options") or [], "control.options")
+            for o in (
+                _as_dict(raw, "control.options[{}]".format(i))
+                for i, raw in enumerate(_as_list(control.get("options") or [], "control.options"))
+            )
         ]
 
         key = str(control.get("name") or control.get("id") or "")
@@ -181,8 +184,10 @@ def parse_ashby_dom(payload: Dict[str, Any]) -> FormSchema:
         source="ashby_dom",
         ats="ashby",
         posting_id=str(payload.get("posting_id", "")),
-        company=payload.get("company"),
-        title=payload.get("title"),
-        apply_url=payload.get("apply_url"),
+        # str()-coerced like the controls: a non-string scalar here would be
+        # a pydantic error (a 500), not a MalformedPayload.
+        company=_opt_str(payload.get("company")),
+        title=_opt_str(payload.get("title")),
+        apply_url=_opt_str(payload.get("apply_url")),
         fields=fields,
     )

@@ -39,7 +39,7 @@ from app.autofill.themes import THEME_CRITERIA, QuestionTheme
 from app.autofill.schema import FieldKind, FormField
 from app.exceptions import JevServiceError
 from app.jev_client import JevClient, choice, get_jev_client, noul, summarise_error
-from app.security import harden_untrusted, scrub_output
+from app.security import DIRECTIVE, harden_untrusted, scrub_output
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 MAX_QUESTIONS_PER_CALL = 40
 
 _INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "A job application form asks the candidate this question:\n\n"
     "  {label}\n\n"
     "Which of the following best describes what it is asking for?"
@@ -155,6 +156,7 @@ class ThemeCache:
 #: guidance means by state being "everything you would place in front of an
 #: expert before asking them to judge".
 _OPTION_INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "The candidate has already answered this question for themselves. Which of "
     "the listed options expresses that same answer? Choose `none` if no option "
     "expresses it."
@@ -166,6 +168,7 @@ _OPTION_INSTRUCTIONS = (
 #: back near 0.5 — which is exactly what the caller treats as "ask the
 #: applicant".
 _APPLIES_INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "You are filling a job application for the applicant described in state.applicant; "
     "state.form.earlier_answers lists what is already answered on this form. The form asks "
     "a select-all-that-apply question. Judge whether ONE option truthfully applies to this "
@@ -191,6 +194,7 @@ _NONE_OPTION = re.compile(
 )
 
 _COVERED_INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "state.profile lists what the applicant has recorded about themselves, as key: value. "
     "Decide whether that profile contains the specific information this free-text question "
     "asks for. 'Contains' means a value that directly states it — not something from which it "
@@ -198,6 +202,7 @@ _COVERED_INSTRUCTIONS = (
     "stories, references, or anything not stated is NOT covered."
 )
 _KEY_INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "state.profile lists the applicant's recorded facts as key: value. Choose the ONE key whose "
     "stored value, written verbatim into this field, truthfully answers the question. Choose "
     "'none' when no single value does, when the field wants prose, or when the value would be "
@@ -205,12 +210,14 @@ _KEY_INSTRUCTIONS = (
     "address; an email is not a university email unless it says so)."
 )
 _VERIFY_INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "state.profile is the applicant's recorded information. A proposed answer is about to be "
     "written into a free-text field on a job application under the applicant's name. Judge "
     "whether it is a truthful, directly responsive answer to the question as asked."
 )
 
 _STABLE_INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "The applicant corrected or supplied an answer on a job application form. state.profile "
     "lists what the applicant has recorded about themselves. Decide whether the answer is a "
     "stable fact or standing preference about the applicant — something that would be answered "
@@ -220,6 +227,7 @@ _STABLE_INSTRUCTIONS = (
     "role)."
 )
 _WHERE_INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "state.profile lists the applicant's recorded facts as key: value (some empty). Choose the "
     "ONE key this answer is the value of — the same kind of information, so that storing the "
     "answer under that key would answer this question on other forms. Choose 'new' when no "
@@ -227,6 +235,7 @@ _WHERE_INSTRUCTIONS = (
 )
 
 _ANSWER_INSTRUCTIONS = (
+    DIRECTIVE + "\n\n"
     "You are filling a job application for the applicant described in state.applicant. "
     "state.form.earlier_answers lists what has already been answered on this same form. "
     "Choose the option that TRUTHFULLY answers the question for this applicant, using only "

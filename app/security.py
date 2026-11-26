@@ -67,4 +67,27 @@ def scrub_output(text: str) -> str:
     return _scrub(text or "")
 
 
-__all__ = ["DIRECTIVE", "harden_untrusted", "scrub_output"]
+def _scrub_tree(value):
+    if isinstance(value, str):
+        return scrub_output(value)
+    if isinstance(value, list):
+        return [_scrub_tree(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub_tree(v) for k, v in value.items()}
+    return value
+
+
+def scrub_model(model):
+    """`scrub_output` over every string in a pydantic model, nested lists and
+    sub-models included, returning the same type. The chains call it on what
+    the model produced before it is stored or returned, so a marker that made
+    it through the prompt side never reaches a response body or the database.
+    Anything that is not a pydantic model is returned unchanged."""
+    dump = getattr(model, "model_dump", None)
+    validate = getattr(type(model), "model_validate", None)
+    if dump is None or validate is None:
+        return model
+    return validate(_scrub_tree(dump()))
+
+
+__all__ = ["DIRECTIVE", "harden_untrusted", "scrub_model", "scrub_output"]

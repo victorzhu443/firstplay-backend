@@ -5,6 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from app.llm_client import get_llm, invoke_with_retry
 from app.schemas import ResumeParsed
+from app.security import DIRECTIVE, harden_untrusted, scrub_model
 
 # Extraction should be deterministic; retries escalate from here.
 PARSER_TEMPERATURE = 0.0
@@ -18,7 +19,9 @@ resume_parsing_prompt = ChatPromptTemplate.from_messages([
 
 Be thorough and accurate. If information is not present, use empty lists or null values.
 
-{format_instructions}"""),
+{format_instructions}
+
+""" + DIRECTIVE),
     ("user", """Parse the following resume text:
 
 {resume_text}""")
@@ -59,9 +62,11 @@ def parse_resume_text(resume_text: str) -> ResumeParsed:
     Raises:
         LLMError: If parsing fails; see app.exceptions for the subtypes
     """
-    return invoke_with_retry(
+    # The text comes out of an uploaded PDF the app did not write. It is
+    # fenced and neutralized here, the one place it enters the prompt.
+    return scrub_model(invoke_with_retry(
         create_resume_parsing_chain,
-        {"resume_text": resume_text},
+        {"resume_text": harden_untrusted(resume_text)},
         description="Failed to parse resume",
         base_temperature=PARSER_TEMPERATURE,
-    )
+    ))
